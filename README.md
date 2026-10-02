@@ -76,6 +76,17 @@ Levanta **solo** el emulador de Firestore, carga `firestore.rules` y corre
 `tests/rules.test.js` (runner nativo de Node, sin dependencias extra). Cada test
 declara el rol que actúa y si espera ALLOW o DENY. No toca la nube.
 
+### Tests de la reserva
+
+```bash
+npm run test:db      # o: npm test (corre los dos)
+```
+
+`tests/db.test.js` corre el mismo `src/firebase/db.js` que usa la app contra el
+emulador: horario libre, solapamiento exacto y parcial, horarios adyacentes,
+cancelación que libera los bloques y dos reservas simultáneas del mismo slot
+(gana una sola).
+
 ### Build de producción
 
 ```bash
@@ -110,6 +121,9 @@ firestore.indexes.json
 - Al iniciar sesión, el cliente descubre sus academias con una sola consulta
   `collectionGroup('miembros').where('uid','==',uid)`.
 - Las Security Rules validan membresía activa + rol en cada operación.
+- La reserva no se solapa gracias a `academias/{tenantId}/bloques/{bloqueId}`:
+  un documento por bloque de 30 minutos de cancha (y otro del profesor), con ID
+  determinista, escritos en la misma transacción que la clase.
 
 Ver `docs/modelo-datos.md` para el detalle.
 

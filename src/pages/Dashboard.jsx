@@ -1,5 +1,6 @@
 import { useEffect, useState } from 'react'
 import { useAuth } from '../context/AuthContext'
+import { db } from '../firebase/config'
 import { getMisMembresias } from '../firebase/db'
 
 export default function Dashboard() {
@@ -9,7 +10,7 @@ export default function Dashboard() {
 
   useEffect(() => {
     let activo = true
-    getMisMembresias(user.uid)
+    getMisMembresias(db, user.uid)
       .then((resultado) => {
         if (activo) setMembresias(resultado)
       })

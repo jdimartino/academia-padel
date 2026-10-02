@@ -289,8 +289,13 @@ Y en `clases/{claseId}` se agrega:
 
 ### Crear una clase (una sola transacción)
 
-1. Se calcula la lista de bloques: `ceil((horaFin - horaInicio) / 30)` bloques
-   de cancha **y** los mismos de profesor. Una clase de 90 minutos = 3 + 3 = 6.
+1. Se calcula la lista de bloques: la duración debe ser **múltiplo de 30
+   minutos** y la hora de inicio debe caer en la grilla (múltiplo de 30 desde
+   medianoche); si no, la reserva se rechaza. Sin esa alineación una clase de
+   19:15 bloquearía 19:15/19:45 y no chocaría con una que ocupa 18:00-19:30,
+   aunque en la realidad se pisan. Con la grilla, `(horaFin - horaInicio) / 30`
+   bloques de cancha **y** los mismos de profesor. Una clase de 90 minutos =
+   3 + 3 = 6.
 2. `runTransaction`:
    - **Todas las lecturas primero** (Firestore exige que en una transacción no
      se lea después de escribir). Se hace `get()` de los 6 documentos por ID.
@@ -298,10 +303,12 @@ Y en `clases/{claseId}` se agrega:
    - Si no existe ninguno: se escribe la clase y después los 6 bloques.
 3. Dos recepcionistas reservando el mismo horario a la vez: ambos leen "no
    existe", ambos intentan escribir, y el control de concurrencia optimista de
-   Firestore hace que **uno solo** gane. El perdedor reintenta la transacción,
-   ahora ve el bloque existente y aborta con el error de solapamiento. Con
-   `create()` (y no `set()`) el conflicto es un error real, no un sobreescritura
-   silenciosa.
+   Firestore hace que **uno solo** gane: la transacción del perdedor se aborta
+   porque uno de los documentos que leyó cambió, se reintenta, ahora ve el
+   bloque existente y aborta con `SolapamientoError`. Como la escritura usa
+   `set()` (la API transaccional del SDK web no tiene `create()`), la
+   exclusividad no depende del tipo de escritura sino de haber leído los bloques
+   dentro de la misma transacción.
 
 ### Cancelar una clase (una sola transacción)
 

@@ -92,6 +92,15 @@ service cloud.firestore {
           );
       }
 
+      // Ocupación de 30 minutos de cancha o de profesor, con ID determinista
+      // (§4.1 de docs/modelo-datos.md). Solo admin los escribe: los crea y
+      // borra la misma transacción que la clase. Los alumnos y profesores
+      // pueden leerlos para pintar la agenda.
+      match /bloques/{bloqueId} {
+        allow read: if esMiembroActivo(tenantId);
+        allow write: if esAdmin(tenantId);
+      }
+
       match /planes/{planId} {
         allow read: if esMiembroActivo(tenantId);
         allow write: if esAdmin(tenantId);
