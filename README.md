@@ -66,6 +66,16 @@ npm run seed:emu
 
 Levanta los emuladores, corre el seed y los apaga. Útil en CI o para resetear.
 
+### Tests de reglas
+
+```bash
+npm run test:rules
+```
+
+Levanta **solo** el emulador de Firestore, carga `firestore.rules` y corre
+`tests/rules.test.js` (runner nativo de Node, sin dependencias extra). Cada test
+declara el rol que actúa y si espera ALLOW o DENY. No toca la nube.
+
 ### Build de producción
 
 ```bash

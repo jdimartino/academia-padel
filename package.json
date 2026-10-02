@@ -10,7 +10,8 @@
     "preview": "vite preview",
     "emulators": "firebase emulators:start --only auth,firestore,hosting",
     "seed": "node scripts/seed.mjs",
-    "seed:emu": "firebase emulators:exec --only auth,firestore \"npm run seed\""
+    "seed:emu": "firebase emulators:exec --only auth,firestore \"npm run seed\"",
+    "test:rules": "firebase emulators:exec --only firestore \"node --test tests/rules.test.js\""
   },
   "dependencies": {
     "firebase": "^12.19.0",
@@ -19,6 +20,7 @@
     "react-router-dom": "^7.18.4"
   },
   "devDependencies": {
+    "@firebase/rules-unit-testing": "^5.0.2",
     "@types/react": "^19.2.18",
     "@types/react-dom": "^19.2.7",
     "@vitejs/plugin-react": "^6.1.1",
