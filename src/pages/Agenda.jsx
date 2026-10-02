@@ -13,6 +13,7 @@ import { db } from '../firebase/config'
 import { getMiMembresia } from '../firebase/db'
 import useAgenda from '../hooks/useAgenda'
 import useMediaQuery from '../hooks/useMediaQuery'
+import { contarSinCerrar } from '../lib/agenda'
 import { aFecha, aISO, formatearFechaLarga, hoyISO, sumarDias } from '../lib/fechas'
 
 function Aviso({ children }) {
@@ -77,6 +78,9 @@ export default function Agenda() {
     () => (claseSelId ? (clases.find((c) => c.id === claseSelId) ?? null) : null),
     [clases, claseSelId],
   )
+
+  // Clases "reservada" cuyo fin ya pasó en hora local y siguen sin cerrar.
+  const sinCerrar = useMemo(() => contarSinCerrar(clases), [clases])
   const seleccionarClase = useCallback((c) => setClaseSelId(c.id), [])
   const cerrarDetalle = useCallback(() => setClaseSelId(null), [])
 
@@ -207,6 +211,7 @@ export default function Agenda() {
           onCancha={setCanchaId}
           clases={clases}
           totalClases={clases.filter((c) => c.canchaId === canchaSel?.id).length}
+          sinCerrar={sinCerrar}
           onSelectClase={seleccionarClase}
           puedeReservar={esAdmin}
           onNuevaReserva={abrirFormulario}
@@ -216,6 +221,7 @@ export default function Agenda() {
             key={claseSel.id}
             clase={claseSel}
             canchas={canchas}
+            clases={clases}
             sedeNombre={sede?.nombre}
             tenantId={academia}
             rol={rol}
@@ -265,6 +271,7 @@ export default function Agenda() {
               <h1 className="main__fecha">{formatearFechaLarga(fecha)}</h1>
               <p className="main__resumen">
                 {sede?.nombre} · {canchas.length} canchas · {clases.length} clases
+                {sinCerrar ? ` · ${sinCerrar} sin cerrar` : ''}
               </p>
             </div>
             {navDias}
@@ -279,6 +286,7 @@ export default function Agenda() {
               key={claseSel.id}
               clase={claseSel}
               canchas={canchas}
+              clases={clases}
               sedeNombre={sede?.nombre}
               tenantId={academia}
               rol={rol}

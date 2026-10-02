@@ -84,6 +84,29 @@ export function tituloClase(clase) {
   return [modalidadDeClase(clase), etiquetaCategoria(clase.categoria)].filter(Boolean).join(' · ')
 }
 
+/*
+ * "Sin cerrar": una clase que quedó `reservada` y cuya hora de fin YA pasó, es
+ * decir que se dictó (o debía dictarse) y nadie registró la asistencia.
+ * Se compara en calendario/hora LOCAL. Nunca se usa toISOString(): pasaría a
+ * UTC y con Caracas (UTC-4) adelantaría el día. `ahora` es inyectable para
+ * poder probarlo.
+ */
+export function estaSinCerrar(clase, ahora = new Date()) {
+  if (clase?.estado !== 'reservada' || !clase.fecha) return false
+  const fin = aMinutos(clase.horaFin)
+  if (fin === null) return false
+  const [y, m, d] = String(clase.fecha).split('-').map(Number)
+  if (!y || !m || !d) return false
+  const finFecha = new Date(y, m - 1, d, 0, 0, 0, 0)
+  finFecha.setMinutes(fin)
+  return finFecha.getTime() < ahora.getTime()
+}
+
+/** Cantidad de clases "sin cerrar" en una lista. */
+export function contarSinCerrar(clases, ahora = new Date()) {
+  return (clases ?? []).filter((clase) => estaSinCerrar(clase, ahora)).length
+}
+
 /** "Pablo Profesor" → "PP" (máximo 2 iniciales). */
 export function iniciales(nombre) {
   const partes = String(nombre ?? '')

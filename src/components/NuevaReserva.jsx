@@ -12,6 +12,7 @@ import {
 } from '../lib/agenda'
 import { formatearFechaLarga } from '../lib/fechas'
 import { CloseIcon } from './Icons'
+import SelectorAlumnos from './SelectorAlumnos'
 
 const DURACIONES = [60, 90]
 const MODALIDADES = ['Grupal', 'Individual']
@@ -54,6 +55,11 @@ export default function NuevaReserva({
   const [categoria, setCategoria] = useState(clase?.categoria ?? '')
   const [profesorId, setProfesorId] = useState(clase?.profesorId ?? null)
   const [profesores, setProfesores] = useState(null)
+  const [alumnosSel, setAlumnosSel] = useState(() => {
+    const ids = clase?.alumnos ?? []
+    const nombres = clase?.alumnoNombres ?? []
+    return ids.map((id, i) => ({ id, nombre: nombres[i] ?? id }))
+  })
   const [error, setError] = useState('')
   const [enviando, setEnviando] = useState(false)
 
@@ -77,7 +83,15 @@ export default function NuevaReserva({
 
   const inicio = aMinutos(horaInicio) ?? 0
   const fin = inicio + duracion
+  const cupo = modalidad === 'Individual' ? 1 : 4
   const profesor = profesores?.find((p) => p.id === profesorId) ?? null
+
+  // Al cambiar de modalidad la selección no puede quedar por encima del cupo.
+  function elegirModalidad(opcion) {
+    const nuevoCupo = opcion === 'Individual' ? 1 : 4
+    setModalidad(opcion)
+    setAlumnosSel((prev) => (prev.length > nuevoCupo ? prev.slice(0, nuevoCupo) : prev))
+  }
   // Al reprogramar, la propia clase no cuenta como conflicto consigo misma.
   const otrasClases = esEdicion ? clases.filter((c) => c.id !== clase.id) : clases
 
@@ -134,8 +148,9 @@ export default function NuevaReserva({
         fecha,
         horaInicio,
         horaFin: aHoraHHmm(fin),
-        cupo: modalidad === 'Individual' ? 1 : 4,
+        cupo,
         categoria: categoria || null,
+        alumnos: alumnosSel.map((alumno) => alumno.id),
       }
       let claseId
       if (esEdicion) {
@@ -148,12 +163,7 @@ export default function NuevaReserva({
         )
         claseId = resultado.claseId
       } else {
-        const resultado = await crearClase(
-          db,
-          tenantId,
-          { ...datos, alumnos: [], alumnoNombres: [] },
-          { uid: user?.uid ?? null },
-        )
+        const resultado = await crearClase(db, tenantId, datos, { uid: user?.uid ?? null })
         claseId = resultado.claseId
       }
       onCreated(claseId)
@@ -251,7 +261,7 @@ export default function NuevaReserva({
                 key={opcion}
                 className={`chip-cancha${opcion === modalidad ? ' is-sel' : ''}`}
                 aria-pressed={opcion === modalidad}
-                onClick={() => setModalidad(opcion)}
+                onClick={() => elegirModalidad(opcion)}
               >
                 {opcion}
               </button>
@@ -300,6 +310,17 @@ export default function NuevaReserva({
             </div>
           )}
         </div>
+
+        <SelectorAlumnos
+          tenantId={tenantId}
+          cupo={cupo}
+          seleccionados={alumnosSel}
+          onChange={setAlumnosSel}
+          clases={clases}
+          claseId={clase?.id ?? null}
+          horaInicio={horaInicio}
+          horaFin={aHoraHHmm(fin)}
+        />
 
         <div className="sheet__slots">
           <h3 className="sheet__subtitulo">Bloques de 30 min</h3>

@@ -6,7 +6,13 @@
 
 import assert from 'node:assert/strict'
 import { describe, it } from 'node:test'
-import { etiquetaCategoria, modalidadDeClase, tituloClase } from '../src/lib/agenda.js'
+import {
+  contarSinCerrar,
+  estaSinCerrar,
+  etiquetaCategoria,
+  modalidadDeClase,
+  tituloClase,
+} from '../src/lib/agenda.js'
 import { aISO, hoyISO } from '../src/lib/fechas.js'
 
 describe('fechas locales', () => {
@@ -40,5 +46,30 @@ describe('título de clase', () => {
   it('título = "Modalidad · Categoría" y solo modalidad sin categoría', () => {
     assert.equal(tituloClase({ cupo: 4, categoria: '6a' }), 'Grupal · 6ª')
     assert.equal(tituloClase({ cupo: 1, categoria: null }), 'Individual')
+  })
+})
+
+describe('sin cerrar', () => {
+  const base = { estado: 'reservada', fecha: '2026-10-03', horaInicio: '18:00', horaFin: '19:00' }
+
+  it('reservada con fin ya pasado (hora local) → true', () => {
+    assert.equal(estaSinCerrar(base, new Date(2026, 9, 3, 20, 0, 0)), true)
+  })
+
+  it('reservada que todavía no terminó → false', () => {
+    assert.equal(estaSinCerrar(base, new Date(2026, 9, 3, 18, 30, 0)), false)
+    assert.equal(estaSinCerrar(base, new Date(2026, 9, 3, 8, 0, 0)), false)
+  })
+
+  it('otro día, estado cerrado o sin fecha → false', () => {
+    assert.equal(estaSinCerrar(base, new Date(2026, 9, 2, 8, 0, 0)), false)
+    assert.equal(estaSinCerrar({ ...base, estado: 'pendiente_cobro' }, new Date(2026, 9, 3, 20, 0, 0)), false)
+    assert.equal(estaSinCerrar({ ...base, fecha: null }, new Date(2026, 9, 3, 20, 0, 0)), false)
+  })
+
+  it('contarSinCerrar cuenta solo las vencidas', () => {
+    const ahora = new Date(2026, 9, 3, 20, 0, 0)
+    const clases = [base, { ...base, horaFin: '21:00' }, { ...base, estado: 'cobrada' }]
+    assert.equal(contarSinCerrar(clases, ahora), 1)
   })
 })

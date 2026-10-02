@@ -1,12 +1,19 @@
 import { useState } from 'react'
 import { useAuth } from '../context/AuthContext'
 import { db } from '../firebase/config'
-import { cancelarClase, registrarAsistencia } from '../firebase/db'
+import { asignarAlumnos, cancelarClase, registrarAsistencia } from '../firebase/db'
 import { CloseIcon } from './Icons'
 import { aHoraHHmm, estadoDe, rangoClase, tituloClase } from '../lib/agenda'
 import { formatearFechaLarga } from '../lib/fechas'
+import SelectorAlumnos from './SelectorAlumnos'
 
 const ESTADOS_CERRADOS = ['pendiente_cobro', 'cobrada', 'cancelada']
+
+const OPCIONES_ASISTENCIA = [
+  { valor: 'presente', label: 'Presente' },
+  { valor: 'ausente_avisada', label: 'Ausente avisada' },
+  { valor: 'ausente_sin_aviso', label: 'Ausente sin aviso' },
+]
 
 function slotsDeClase(clase) {
   const rango = rangoClase(clase)
@@ -26,6 +33,7 @@ function alumnosDeClase(clase) {
 export default function DetailSheet({
   clase,
   canchas,
+  clases = [],
   sedeNombre,
   tenantId,
   rol,
@@ -45,6 +53,8 @@ export default function DetailSheet({
   const puedeAsistir = esAdmin && !ESTADOS_CERRADOS.includes(clase.estado)
   const puedeCancelar = esAdmin && !ESTADOS_CERRADOS.includes(clase.estado)
   const puedeReprogramar = esAdmin && clase.estado === 'reservada'
+  // La asignación de alumnos solo se permite en una clase `reservada`.
+  const puedeAsignar = esAdmin && clase.estado === 'reservada'
 
   const [asistencias, setAsistencias] = useState(() =>
     Object.fromEntries(
@@ -54,12 +64,31 @@ export default function DetailSheet({
       }),
     ),
   )
+  // La selección se deriva de la clase (fuente de verdad): tras asignar, el
+  // refresh del día trae la lista nueva y no hay copia local que se desincronice.
+  const seleccion = alumnosDeClase(clase)
   const [error, setError] = useState('')
   const [ocupado, setOcupado] = useState(false)
   const [confirmando, setConfirmando] = useState(false)
+  const [guardandoAlumnos, setGuardandoAlumnos] = useState(false)
 
   function cambiarAsistencia(alumnoId, cambios) {
     setAsistencias((prev) => ({ ...prev, [alumnoId]: { ...prev[alumnoId], ...cambios } }))
+  }
+
+  async function cambiarAlumnos(nueva) {
+    setError('')
+    setGuardandoAlumnos(true)
+    try {
+      await asignarAlumnos(db, tenantId, clase.id, nueva.map((alumno) => alumno.id), {
+        uid: user?.uid ?? null,
+      })
+      onChanged?.()
+    } catch (err) {
+      setError(err.message)
+    } finally {
+      setGuardandoAlumnos(false)
+    }
   }
 
   async function guardarAsistencia() {
@@ -150,6 +179,34 @@ export default function DetailSheet({
         </ul>
       </div>
 
+      {puedeAsignar ? (
+        <div className="sheet__slots">
+          <h3 className="sheet__subtitulo">Alumnos</h3>
+          <SelectorAlumnos
+            tenantId={tenantId}
+            cupo={cupo}
+            seleccionados={seleccion}
+            onChange={cambiarAlumnos}
+            clases={clases}
+            claseId={clase.id}
+            horaInicio={clase.horaInicio}
+            horaFin={clase.horaFin}
+          />
+          {guardandoAlumnos ? <p className="aviso">Guardando alumnos…</p> : null}
+        </div>
+      ) : alumnos.length ? (
+        <div className="sheet__slots">
+          <h3 className="sheet__subtitulo">Alumnos</h3>
+          <ul className="chips-sel">
+            {alumnos.map((alumno) => (
+              <li key={alumno.id}>
+                <span className="chip-sel--fijo">{alumno.nombre}</span>
+              </li>
+            ))}
+          </ul>
+        </div>
+      ) : null}
+
       {error ? (
         <p className="alert alert--error" role="alert">
           {error}
@@ -162,28 +219,24 @@ export default function DetailSheet({
           <ul className="asistencia-lista">
             {alumnos.map((alumno) => {
               const registro = asistencias[alumno.id] ?? { estado: 'presente', motivo: '' }
+              const esAusencia = registro.estado !== 'presente'
               return (
                 <li key={alumno.id} className="asistencia-fila">
                   <span className="asistencia-nombre">{alumno.nombre}</span>
-                  <div className="chips-row">
-                    <button
-                      type="button"
-                      className={`chip-cancha${registro.estado === 'presente' ? ' is-sel' : ''}`}
-                      aria-pressed={registro.estado === 'presente'}
-                      onClick={() => cambiarAsistencia(alumno.id, { estado: 'presente' })}
-                    >
-                      Presente
-                    </button>
-                    <button
-                      type="button"
-                      className={`chip-cancha${registro.estado === 'ausente_sin_aviso' ? ' is-sel' : ''}`}
-                      aria-pressed={registro.estado === 'ausente_sin_aviso'}
-                      onClick={() => cambiarAsistencia(alumno.id, { estado: 'ausente_sin_aviso' })}
-                    >
-                      Ausente
-                    </button>
+                  <div className="seg" role="group" aria-label={`Asistencia de ${alumno.nombre}`}>
+                    {OPCIONES_ASISTENCIA.map((opcion) => (
+                      <button
+                        key={opcion.valor}
+                        type="button"
+                        className={`seg__op${registro.estado === opcion.valor ? ' is-sel' : ''}`}
+                        aria-pressed={registro.estado === opcion.valor}
+                        onClick={() => cambiarAsistencia(alumno.id, { estado: opcion.valor })}
+                      >
+                        {opcion.label}
+                      </button>
+                    ))}
                   </div>
-                  {registro.estado === 'ausente_sin_aviso' ? (
+                  {esAusencia ? (
                     <input
                       className="form__input"
                       type="text"

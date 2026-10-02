@@ -1,4 +1,4 @@
-import { MIN_INICIO, estadoDe, iniciales, rangoClase, tituloClase } from '../lib/agenda'
+import { MIN_INICIO, estadoDe, estaSinCerrar, iniciales, rangoClase, tituloClase } from '../lib/agenda'
 
 export default function ClassBlock({ clase, escala, onSelect }) {
   const rango = rangoClase(clase)
@@ -6,17 +6,26 @@ export default function ClassBlock({ clase, escala, onSelect }) {
 
   const estado = estadoDe(clase.estado)
   const alumnos = clase.alumnoNombres ?? []
+  const sinCerrar = estaSinCerrar(clase)
   const top = (rango.inicio - MIN_INICIO) * escala
   const alto = (rango.fin - rango.inicio) * escala
 
   return (
     <button
       type="button"
-      className={`bloque bloque--${estado.tono}`}
+      className={`bloque bloque--${estado.tono}${sinCerrar ? ' bloque--sin-cerrar' : ''}`}
       style={{ top: `${top}px`, height: `${alto}px` }}
       onClick={() => onSelect(clase)}
-      aria-label={`${tituloClase(clase)}, ${clase.horaInicio} a ${clase.horaFin}, ${estado.label}`}
+      aria-label={`${tituloClase(clase)}, ${clase.horaInicio} a ${clase.horaFin}, ${estado.label}${sinCerrar ? ', sin cerrar' : ''}`}
     >
+      {sinCerrar ? (
+        <span
+          className="bloque__sin-cerrar"
+          role="img"
+          aria-label="Sin cerrar"
+          title="Sin cerrar"
+        />
+      ) : null}
       <span className="bloque__hora">
         {clase.horaInicio}–{clase.horaFin}
       </span>
