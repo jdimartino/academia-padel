@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useState } from 'react'
 import { useAuth } from '../context/AuthContext'
 import { db } from '../firebase/config'
-import { crearClase, getProfesores } from '../firebase/db'
+import { crearClase, getProfesores, reprogramarClase } from '../firebase/db'
 import {
   CATEGORIAS,
   HORA_MAX,
@@ -27,19 +27,32 @@ function opcionesDeHora() {
 const HORAS = opcionesDeHora()
 
 /*
- * Formulario de "Nueva reserva". Mismo sheet de vidrio que el detalle:
- * bottom sheet en mobile (12px de margen) y panel de 360px en desktop.
+ * Formulario de reserva. Con `clase` hace de reprogramación (prefill + update
+ * transaccional); sin `clase` crea una reserva nueva. Mismo sheet de vidrio
+ * que el detalle: bottom sheet en mobile y panel de 360px en desktop.
  * La validación de choques se hace ANTES de enviar contra las clases ya
- * cargadas del día; la transacción de crearClase vuelve a validar igual.
+ * cargadas del día; la transacción de db.js vuelve a validar igual.
  */
-export default function NuevaReserva({ tenantId, sede, canchas, fecha, clases, onClose, onCreated }) {
+export default function NuevaReserva({
+  tenantId,
+  sede,
+  canchas,
+  fecha,
+  clases,
+  clase = null,
+  onClose,
+  onCreated,
+}) {
   const { user } = useAuth()
-  const [canchaId, setCanchaId] = useState(canchas[0]?.id ?? null)
-  const [horaInicio, setHoraInicio] = useState('18:00')
-  const [duracion, setDuracion] = useState(60)
-  const [modalidad, setModalidad] = useState('Grupal')
-  const [categoria, setCategoria] = useState('')
-  const [profesorId, setProfesorId] = useState(null)
+  const esEdicion = Boolean(clase)
+  const [canchaId, setCanchaId] = useState(clase?.canchaId ?? canchas[0]?.id ?? null)
+  const [horaInicio, setHoraInicio] = useState(clase?.horaInicio ?? '18:00')
+  const [duracion, setDuracion] = useState(
+    clase ? (aMinutos(clase.horaFin) ?? 0) - (aMinutos(clase.horaInicio) ?? 0) : 60,
+  )
+  const [modalidad, setModalidad] = useState((clase?.cupo ?? 4) <= 1 ? 'Individual' : 'Grupal')
+  const [categoria, setCategoria] = useState(clase?.categoria ?? '')
+  const [profesorId, setProfesorId] = useState(clase?.profesorId ?? null)
   const [profesores, setProfesores] = useState(null)
   const [error, setError] = useState('')
   const [enviando, setEnviando] = useState(false)
@@ -65,6 +78,8 @@ export default function NuevaReserva({ tenantId, sede, canchas, fecha, clases, o
   const inicio = aMinutos(horaInicio) ?? 0
   const fin = inicio + duracion
   const profesor = profesores?.find((p) => p.id === profesorId) ?? null
+  // Al reprogramar, la propia clase no cuenta como conflicto consigo misma.
+  const otrasClases = esEdicion ? clases.filter((c) => c.id !== clase.id) : clases
 
   const slots = useMemo(() => {
     const lista = []
@@ -76,12 +91,12 @@ export default function NuevaReserva({ tenantId, sede, canchas, fecha, clases, o
     const lista = []
     if (fin > HORA_MAX * 60) lista.push('La clase no puede terminar después de las 21:00.')
 
-    const solapan = (clase) => {
-      const ci = aMinutos(clase.horaInicio)
-      const cf = aMinutos(clase.horaFin)
+    const solapan = (otra) => {
+      const ci = aMinutos(otra.horaInicio)
+      const cf = aMinutos(otra.horaFin)
       return ci !== null && cf !== null && ci < fin && inicio < cf
     }
-    const canchaOcupada = clases.find(
+    const canchaOcupada = otrasClases.find(
       (c) => c.canchaId === canchaId && c.estado !== 'cancelada' && solapan(c),
     )
     if (canchaOcupada) {
@@ -90,7 +105,7 @@ export default function NuevaReserva({ tenantId, sede, canchas, fecha, clases, o
       )
     }
     if (profesorId) {
-      const profeOcupado = clases.find(
+      const profeOcupado = otrasClases.find(
         (c) => c.profesorId === profesorId && c.estado !== 'cancelada' && solapan(c),
       )
       if (profeOcupado) {
@@ -100,7 +115,7 @@ export default function NuevaReserva({ tenantId, sede, canchas, fecha, clases, o
       }
     }
     return lista
-  }, [canchaId, clases, fin, inicio, profesor, profesorId])
+  }, [canchaId, fin, inicio, otrasClases, profesor, profesorId])
 
   const puedeEnviar = Boolean(canchaId && profesorId) && problemas.length === 0 && !enviando
 
@@ -110,25 +125,28 @@ export default function NuevaReserva({ tenantId, sede, canchas, fecha, clases, o
     setError('')
     setEnviando(true)
     try {
-      await crearClase(
-        db,
-        tenantId,
-        {
-          sedeId: sede.id,
-          sedeNombre: sede.nombre,
-          canchaId,
-          profesorId,
-          profesorNombre: profesor?.nombre ?? null,
-          fecha,
-          horaInicio,
-          horaFin: aHoraHHmm(fin),
-          cupo: modalidad === 'Individual' ? 1 : 4,
-          categoria: categoria || null,
-          alumnos: [],
-          alumnoNombres: [],
-        },
-        { uid: user?.uid ?? null },
-      )
+      const datos = {
+        sedeId: sede.id,
+        sedeNombre: sede.nombre,
+        canchaId,
+        profesorId,
+        profesorNombre: profesor?.nombre ?? null,
+        fecha,
+        horaInicio,
+        horaFin: aHoraHHmm(fin),
+        cupo: modalidad === 'Individual' ? 1 : 4,
+        categoria: categoria || null,
+      }
+      if (esEdicion) {
+        await reprogramarClase(db, tenantId, clase.id, datos, { uid: user?.uid ?? null })
+      } else {
+        await crearClase(
+          db,
+          tenantId,
+          { ...datos, alumnos: [], alumnoNombres: [] },
+          { uid: user?.uid ?? null },
+        )
+      }
       onCreated()
     } catch (err) {
       setError(err.message)
@@ -141,7 +159,7 @@ export default function NuevaReserva({ tenantId, sede, canchas, fecha, clases, o
     <aside className="sheet glass-strong" role="dialog" aria-label="Nueva reserva">
       <header className="sheet__head">
         <div>
-          <h2 className="sheet__titulo">Nueva reserva</h2>
+          <h2 className="sheet__titulo">{esEdicion ? 'Reprogramar clase' : 'Nueva reserva'}</h2>
           <p className="sheet__subtitulo">
             {sede?.nombre} · {formatearFechaLarga(fecha)}
           </p>
@@ -286,7 +304,7 @@ export default function NuevaReserva({ tenantId, sede, canchas, fecha, clases, o
         </div>
 
         <button className="btn" type="submit" disabled={!puedeEnviar}>
-          {enviando ? 'Reservando…' : 'Reservar clase'}
+          {enviando ? 'Guardando…' : esEdicion ? 'Guardar cambios' : 'Reservar clase'}
         </button>
         <button type="button" className="btn btn--secondary" onClick={onClose}>
           Cancelar

@@ -479,8 +479,16 @@ export async function registrarAsistencia(db, tenantId, claseId, asistencias, op
   return { claseId, estado: 'pendiente_cobro' }
 }
 
-/** Lee una clase. 1 lectura. */
-export async function getClase(db, tenantId, claseId) {
+/**
+ * Membresía del usuario actual en un tenant. 1 lectura. Sirve para decidir qué
+ * acciones mostrar en la UI (la autorización real la hacen las Security Rules).
+ */
+export async function getMiMembresia(db, tenantId, uid) {
+  const snap = await getDoc(doc(db, 'academias', tenantId, 'miembros', uid))
+  return snap.exists() ? { id: snap.id, ...snap.data() } : null
+}
+
+/** Lee una clase. 1 lectura. */export async function getClase(db, tenantId, claseId) {
   const snap = await getDoc(refClase(db, tenantId, claseId))
   if (!snap.exists()) return null
   return { id: snap.id, ...snap.data() }

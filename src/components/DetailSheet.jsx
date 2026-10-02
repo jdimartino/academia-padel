@@ -1,6 +1,12 @@
+import { useState } from 'react'
+import { useAuth } from '../context/AuthContext'
+import { db } from '../firebase/config'
+import { cancelarClase, registrarAsistencia } from '../firebase/db'
 import { CloseIcon } from './Icons'
 import { aHoraHHmm, estadoDe, rangoClase, tituloClase } from '../lib/agenda'
 import { formatearFechaLarga } from '../lib/fechas'
+
+const ESTADOS_CERRADOS = ['pendiente_cobro', 'cobrada', 'cancelada']
 
 function slotsDeClase(clase) {
   const rango = rangoClase(clase)
@@ -10,11 +16,82 @@ function slotsDeClase(clase) {
   return slots
 }
 
-export default function DetailSheet({ clase, canchas, sedeNombre, onClose }) {
+/** Empareja IDs de alumnos con sus nombres denormalizados. */
+function alumnosDeClase(clase) {
+  const ids = clase.alumnos ?? []
+  const nombres = clase.alumnoNombres ?? []
+  return ids.map((id, i) => ({ id, nombre: nombres[i] ?? id }))
+}
+
+export default function DetailSheet({
+  clase,
+  canchas,
+  sedeNombre,
+  tenantId,
+  rol,
+  onClose,
+  onChanged,
+  onReprogramar,
+}) {
+  const { user } = useAuth()
   const estado = estadoDe(clase.estado)
   const cancha = canchas.find((c) => c.id === clase.canchaId)
-  const alumnos = clase.alumnoNombres ?? []
   const cupo = clase.cupo ?? 0
+  const alumnos = alumnosDeClase(clase)
+
+  const esAdmin = rol === 'administrador'
+  const puedeAsistir = (esAdmin || rol === 'profesor') && !ESTADOS_CERRADOS.includes(clase.estado)
+  const puedeCancelar = esAdmin && !ESTADOS_CERRADOS.includes(clase.estado)
+  const puedeReprogramar = esAdmin && clase.estado === 'reservada'
+
+  const [asistencias, setAsistencias] = useState(() =>
+    Object.fromEntries(
+      alumnos.map((alumno) => {
+        const previa = (clase.asistencias ?? []).find((a) => a.alumnoId === alumno.id)
+        return [alumno.id, { estado: previa?.estado ?? 'presente', motivo: previa?.motivo ?? '' }]
+      }),
+    ),
+  )
+  const [error, setError] = useState('')
+  const [ocupado, setOcupado] = useState(false)
+
+  function cambiarAsistencia(alumnoId, cambios) {
+    setAsistencias((prev) => ({ ...prev, [alumnoId]: { ...prev[alumnoId], ...cambios } }))
+  }
+
+  async function guardarAsistencia() {
+    setError('')
+    setOcupado(true)
+    try {
+      const registros = alumnos.map((alumno) => ({
+        alumnoId: alumno.id,
+        estado: asistencias[alumno.id]?.estado ?? 'presente',
+        motivo: asistencias[alumno.id]?.motivo || null,
+      }))
+      await registrarAsistencia(db, tenantId, clase.id, registros, { uid: user?.uid ?? null })
+      onChanged?.()
+      onClose()
+    } catch (err) {
+      setError(err.message)
+    } finally {
+      setOcupado(false)
+    }
+  }
+
+  async function cancelar() {
+    if (!window.confirm('¿Cancelar esta clase? Se libera el horario.')) return
+    setError('')
+    setOcupado(true)
+    try {
+      await cancelarClase(db, tenantId, clase.id, { uid: user?.uid ?? null })
+      onChanged?.()
+      onClose()
+    } catch (err) {
+      setError(err.message)
+    } finally {
+      setOcupado(false)
+    }
+  }
 
   return (
     <aside className="sheet glass-strong" role="dialog" aria-label="Detalle de la clase">
@@ -68,6 +145,69 @@ export default function DetailSheet({ clase, canchas, sedeNombre, onClose }) {
           ))}
         </ul>
       </div>
+
+      {error ? (
+        <p className="alert alert--error" role="alert">
+          {error}
+        </p>
+      ) : null}
+
+      {puedeAsistir && alumnos.length ? (
+        <div className="sheet__slots">
+          <h3 className="sheet__subtitulo">Asistencia</h3>
+          <ul className="asistencia-lista">
+            {alumnos.map((alumno) => {
+              const registro = asistencias[alumno.id] ?? { estado: 'presente', motivo: '' }
+              return (
+                <li key={alumno.id} className="asistencia-fila">
+                  <span className="asistencia-nombre">{alumno.nombre}</span>
+                  <div className="chips-row">
+                    <button
+                      type="button"
+                      className={`chip-cancha${registro.estado === 'presente' ? ' is-sel' : ''}`}
+                      aria-pressed={registro.estado === 'presente'}
+                      onClick={() => cambiarAsistencia(alumno.id, { estado: 'presente' })}
+                    >
+                      Presente
+                    </button>
+                    <button
+                      type="button"
+                      className={`chip-cancha${registro.estado === 'ausente' ? ' is-sel' : ''}`}
+                      aria-pressed={registro.estado === 'ausente'}
+                      onClick={() => cambiarAsistencia(alumno.id, { estado: 'ausente' })}
+                    >
+                      Ausente
+                    </button>
+                  </div>
+                  {registro.estado === 'ausente' ? (
+                    <input
+                      className="form__input"
+                      type="text"
+                      placeholder="Motivo (opcional)"
+                      value={registro.motivo}
+                      onChange={(e) => cambiarAsistencia(alumno.id, { motivo: e.target.value })}
+                    />
+                  ) : null}
+                </li>
+              )
+            })}
+          </ul>
+          <button type="button" className="btn" disabled={ocupado} onClick={guardarAsistencia}>
+            {ocupado ? 'Guardando…' : 'Guardar asistencia'}
+          </button>
+        </div>
+      ) : null}
+
+      {puedeReprogramar ? (
+        <button type="button" className="btn btn--secondary" onClick={() => onReprogramar?.(clase)}>
+          Reprogramar
+        </button>
+      ) : null}
+      {puedeCancelar ? (
+        <button type="button" className="btn btn--secondary" disabled={ocupado} onClick={cancelar}>
+          Cancelar clase
+        </button>
+      ) : null}
     </aside>
   )
 }

@@ -351,6 +351,28 @@
   font-weight: 600;
 }
 
+/* Asistencia dentro del detalle de la clase */
+
+.asistencia-lista {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+}
+
+.asistencia-fila {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.asistencia-nombre {
+  font-size: 14px;
+  font-weight: 600;
+}
+
 /* ============================================================
    Mensajes de estado
    ============================================================ */

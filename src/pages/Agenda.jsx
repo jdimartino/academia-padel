@@ -1,4 +1,4 @@
-import { useMemo, useState } from 'react'
+import { useEffect, useMemo, useState } from 'react'
 import { useParams } from 'react-router-dom'
 import AgendaMobile from '../components/AgendaMobile'
 import Background from '../components/Background'
@@ -8,6 +8,9 @@ import NuevaReserva from '../components/NuevaReserva'
 import Sidebar from '../components/Sidebar'
 import TimeGrid from '../components/TimeGrid'
 import { ChevronLeft, ChevronRight } from '../components/Icons'
+import { useAuth } from '../context/AuthContext'
+import { db } from '../firebase/config'
+import { getMiMembresia } from '../firebase/db'
 import useAgenda from '../hooks/useAgenda'
 import useMediaQuery from '../hooks/useMediaQuery'
 import { aFecha, aISO, formatearFechaLarga, hoyISO, sumarDias } from '../lib/fechas'
@@ -22,6 +25,7 @@ function Aviso({ children }) {
 
 export default function Agenda() {
   const { academia } = useParams()
+  const { user } = useAuth()
   const esDesktop = useMediaQuery('(min-width: 1024px)')
   const hoy = hoyISO()
 
@@ -32,6 +36,22 @@ export default function Agenda() {
   const [canchaId, setCanchaId] = useState(null)
   const [claseSel, setClaseSel] = useState(null)
   const [mostrarForm, setMostrarForm] = useState(false)
+  const [claseEdit, setClaseEdit] = useState(null)
+  const [rol, setRol] = useState(null)
+
+  useEffect(() => {
+    let activo = true
+    getMiMembresia(db, academia, user.uid)
+      .then((membresia) => {
+        if (activo) setRol(membresia?.rol ?? null)
+      })
+      .catch(() => {
+        if (activo) setRol(null)
+      })
+    return () => {
+      activo = false
+    }
+  }, [academia, user.uid])
 
   const sede = useMemo(
     () => sedes?.find((s) => s.id === sedeId) ?? sedes?.[0] ?? null,
@@ -72,11 +92,24 @@ export default function Agenda() {
 
   function abrirFormulario() {
     setClaseSel(null)
+    setClaseEdit(null)
     setMostrarForm(true)
+  }
+
+  function abrirReprogramar(clase) {
+    setClaseSel(null)
+    setClaseEdit(clase)
+    setMostrarForm(true)
+  }
+
+  function cerrarFormulario() {
+    setMostrarForm(false)
+    setClaseEdit(null)
   }
 
   function alCrear() {
     setMostrarForm(false)
+    setClaseEdit(null)
     recargar()
   }
 
@@ -140,20 +173,27 @@ export default function Agenda() {
         />
         {claseSel ? (
           <DetailSheet
+            key={claseSel.id}
             clase={claseSel}
             canchas={canchas}
             sedeNombre={sede?.nombre}
+            tenantId={academia}
+            rol={rol}
             onClose={cerrar}
+            onChanged={recargar}
+            onReprogramar={abrirReprogramar}
           />
         ) : null}
         {mostrarForm ? (
           <NuevaReserva
+            key={claseEdit?.id ?? "nueva"}
             tenantId={academia}
             sede={sede}
             canchas={canchas}
             fecha={fecha}
             clases={clases}
-            onClose={() => setMostrarForm(false)}
+            clase={claseEdit}
+            onClose={cerrarFormulario}
             onCreated={alCrear}
           />
         ) : null}
@@ -195,21 +235,28 @@ export default function Agenda() {
 
           {claseSel ? (
             <DetailSheet
+              key={claseSel.id}
               clase={claseSel}
               canchas={canchas}
               sedeNombre={sede?.nombre}
+              tenantId={academia}
+              rol={rol}
               onClose={cerrar}
+              onChanged={recargar}
+              onReprogramar={abrirReprogramar}
             />
           ) : null}
 
           {mostrarForm ? (
             <NuevaReserva
+              key={claseEdit?.id ?? "nueva"}
               tenantId={academia}
               sede={sede}
               canchas={canchas}
               fecha={fecha}
               clases={clases}
-              onClose={() => setMostrarForm(false)}
+              clase={claseEdit}
+              onClose={cerrarFormulario}
               onCreated={alCrear}
             />
           ) : null}
