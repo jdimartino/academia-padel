@@ -1,0 +1,43 @@
+/*
+ * Capa de fondo: detrás de todo, sin capturar eventos.
+ * El gradiente vive en <body>; los blobs de color son los que el vidrio
+ * necesita para "samplear" color al aplicar backdrop-filter.
+ */
+
+.bg-layer {
+  position: fixed;
+  inset: 0;
+  z-index: -1;
+  overflow: hidden;
+  pointer-events: none;
+}
+
+.bg-blob {
+  position: absolute;
+  border-radius: 50%;
+  opacity: 1;
+}
+
+.bg-blob--lime {
+  width: 640px;
+  height: 640px;
+  top: -180px;
+  right: -160px;
+  background: radial-gradient(circle, rgba(205, 235, 58, 0.34) 0%, rgba(205, 235, 58, 0) 68%);
+}
+
+.bg-blob--blue {
+  width: 760px;
+  height: 760px;
+  bottom: -260px;
+  left: -220px;
+  background: radial-gradient(circle, rgba(60, 120, 255, 0.4) 0%, rgba(60, 120, 255, 0) 68%);
+}
+
+.bg-blob--teal {
+  width: 520px;
+  height: 520px;
+  top: 42%;
+  left: -140px;
+  background: radial-gradient(circle, rgba(30, 200, 160, 0.3) 0%, rgba(30, 200, 160, 0) 68%);
+}

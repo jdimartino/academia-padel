@@ -1,0 +1,28 @@
+/* Superficies de vidrio. */
+
+.glass {
+  background: var(--glass-bg);
+  -webkit-backdrop-filter: var(--glass-blur);
+  backdrop-filter: var(--glass-blur);
+  border: var(--glass-border);
+  box-shadow: var(--glass-shadow);
+}
+
+.glass-strong {
+  background: var(--glass-strong-bg);
+  -webkit-backdrop-filter: var(--glass-strong-blur);
+  backdrop-filter: var(--glass-strong-blur);
+  border: var(--glass-strong-border);
+  box-shadow: var(--glass-strong-shadow);
+}
+
+/* Fallback opaco cuando no hay backdrop-filter (legibilidad garantizada). */
+@supports not ((-webkit-backdrop-filter: blur(1px)) or (backdrop-filter: blur(1px))) {
+  .glass {
+    background: rgba(20, 34, 54, 0.92);
+  }
+
+  .glass-strong {
+    background: rgba(14, 26, 44, 0.97);
+  }
+}

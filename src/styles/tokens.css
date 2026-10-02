@@ -1,0 +1,63 @@
+/*
+ * Design tokens — "liquid glass" (iOS 26 style).
+ * Mobile-first: los valores base son los del diseño mobile (390px);
+ * a partir de 1024px se ajustan los que cambian en desktop.
+ */
+
+:root {
+  /* Texto */
+  --texto: #f4f7fb;
+  --texto-muted: rgba(226, 234, 246, 0.76);
+  --accent: #cdeb3a;
+  --accent-texto: #0a1626;
+
+  /* Fondo de página */
+  --bg-1: #060e1c;
+  --bg-2: #0a2234;
+  --bg-3: #0b3a35;
+  --bg-gradient: linear-gradient(160deg, var(--bg-1) 0%, var(--bg-2) 50%, var(--bg-3) 100%);
+
+  /* Radios */
+  --radio-panel: 28px;
+  --radio-pill: 999px;
+  --radio-bloque: 14px;
+
+  /* Glass */
+  --glass-bg: rgba(255, 255, 255, 0.09);
+  --glass-blur: blur(26px) saturate(170%);
+  --glass-border: 1px solid rgba(255, 255, 255, 0.2);
+  --glass-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.3), 0 14px 40px rgba(0, 0, 0, 0.32);
+
+  --glass-strong-bg: rgba(14, 26, 44, 0.6);
+  --glass-strong-blur: blur(34px) saturate(180%);
+  --glass-strong-border: 1px solid rgba(255, 255, 255, 0.22);
+  --glass-strong-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.28),
+    0 24px 60px rgba(0, 0, 0, 0.45);
+
+  /* Estados de clase (bloques sólidos) */
+  --estado-reservada-bg: #9cc3ff;
+  --estado-reservada-texto: #08162b;
+  --estado-ejecutada-bg: #34c79a;
+  --estado-ejecutada-texto: #04231a;
+  --estado-pendiente-bg: #ffbe70;
+  --estado-pendiente-texto: #3a1e00;
+  --estado-cancelada-bg: rgba(255, 255, 255, 0.06);
+  --estado-cancelada-texto: rgba(238, 243, 251, 0.82);
+  --estado-cancelada-border: 1px dashed rgba(255, 255, 255, 0.45);
+  --bloque-sombra: inset 0 1px 0 rgba(255, 255, 255, 0.55), 0 6px 16px rgba(0, 0, 0, 0.28);
+
+  /* Layout */
+  --sidebar-w: 264px;
+  --radio-avatar: 999px;
+  --timeline-inicio: 7;
+  --timeline-fin: 21;
+
+  --fuente: 'Plus Jakarta Sans', system-ui, -apple-system, 'Segoe UI', Roboto, sans-serif;
+}
+
+@media (min-width: 1024px) {
+  :root {
+    --bg-gradient: linear-gradient(135deg, var(--bg-1) 0%, var(--bg-2) 46%, var(--bg-3) 100%);
+    --radio-bloque: 10px;
+  }
+}
