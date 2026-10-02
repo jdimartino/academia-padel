@@ -13,8 +13,18 @@ dist
 dist-ssr
 functions/lib/
 
-# Firebase
+# Firebase / Emulator Suite
 .firebase/
+.firestore/
+*.debug.log
+firestore-debug.log
+ui-debug.log
+firebase-debug.log
+
+# Datos exportados del emulador
+.emulator-data/
+emulator-export/
+firestore-export/
 
 # Variables de entorno (nunca commitear)
 .env
