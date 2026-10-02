@@ -25,6 +25,27 @@ Convenciones:
 
 ---
 
+## 0. Decisiones tomadas (2026-10-02)
+
+Estas decisiones quedaron cerradas. No se re-debaten sin evidencia nueva.
+
+| # | Decisión | Consecuencia en el modelo / en la infraestructura |
+| --- | --- | --- |
+| 1 | **Las sedes son live por tenant**: `academias/{tenantId}/sedes/{sedeId}`. | Cada academia define las suyas. No hay catálogo global de sedes. Las canchas siguen siendo subcolección de la sede. |
+| 2 | **Una sola app React multi-tenant**, con el tenant resuelto por ruta (`/{academia}/...`). | El slug del documento del tenant es la clave de ruta. Un solo bundle, un solo `index.html`. |
+| 3 | **Un solo sitio de Hosting** para todos los tenants. | El tenant se distingue por ruta, no por subdominio. Un solo certificado y una sola cuota de Hosting. |
+| 4 | **Blaze se habilita más adelante**, cuando hagan falta Functions/Brevo, y con alerta de presupuesto. **Hoy no está habilitado.** | Todo lo de Fase 1 corre en el plan sin costo. Blaze es un trámite futuro, con su alerta de presupuesto como requisito. |
+| 5 | **Comprobantes de pago en el MVP**: se guarda `referencia`, `montoCentavos`, `fecha` y `estado: "en_revision"`. Sin imagen. | Sin Cloud Storage no hay dónde subir el archivo. El campo `comprobante` queda `null`; el flujo de carga de imagen se activa cuando se habilite Storage. |
+| 6 | **"Recepción" no es un rol nuevo**: es un administrador con permisos reducidos. | El enum de roles **no** crece: sigue siendo `administrador` \| `profesor` \| `alumno_adulto` \| `alumno_menor`. **El reparto exacto de permisos entre administración y recepción queda SIN DEFINIR.** |
+| 7 | **Las reglas se quedan con `get()`** contra el documento de membresía. | Cada operación paga ~1 lectura adicional por la regla. Se acepta. Migrar a custom claims se pospone hasta que existan Functions/Admin SDK. |
+| 8 | **`@firebase/rules-unit-testing` como devDependency.** | Los permisos por tenant y por rol se prueban de verdad contra el emulador, no a ojo. |
+| 9 | **El aprovisionamiento de usuarios en producción queda SIN DEFINIR.** | El primer administrador de cada academia se crea a mano. Cómo crear el resto de cuentas (alumnos, profesores) sin Functions, también sin definir. |
+
+Además, en esta sesión se decidió el mecanismo de **reserva sin solapamientos**
+(IDs deterministas + transacción). Ver §4.1.
+
+---
+
 ## 1. Colecciones raíz
 
 ### `academias/{tenantId}` (documento)
@@ -49,7 +70,7 @@ todo el sistema** (las reglas lo leen).
 | Campo | Tipo | Nota |
 | --- | --- | --- |
 | `uid` | string | Igual a `request.auth.uid` (para el collection group) |
-| `rol` | string | `administrador` \| `profesor` \| `alumno_adulto` \| `alumno_menor` |
+| `rol` | string | `administrador` \| `profesor` \| `alumno_adulto` \| `alumno_menor`. **Decisión 6: no se agrega un rol "recepción"** — recepción es un `administrador` con permisos reducidos (*reparto exacto sin definir*). |
 | `activo` | bool | |
 | `nombre` | string | Denormalizado, para mostrar sin leer el perfil |
 | `profesorId` | string \| null | Si `rol == profesor` |
@@ -73,6 +94,10 @@ como campo justamente para poder hacer ese collection group.
 ## 2. Estructura organizativa
 
 ### `academias/{tenantId}/sedes/{sedeId}`
+
+**Decisión 1: las sedes son live por tenant.** No existe un catálogo global de
+sedes: cada academia define las suyas. Un tenant nuevo arranca sin sedes y las
+carga por su cuenta.
 
 | Campo | Tipo | Nota |
 | --- | --- | --- |
@@ -159,6 +184,7 @@ sin solapamientos.
 | `sedeNombre` | string | Denormalizado |
 | `profesorNombre` | string | Denormalizado |
 | `alumnoNombres` | string[] | Denormalizado (solo UI) |
+| `bloques` | string[] | IDs de los bloques de 30 min que ocupa (§4.1). Los escribe y borra `db.js` en la misma transacción que la clase. |
 | `creadoPor` | string | uid |
 | `creadoEn` | Timestamp | |
 
@@ -169,13 +195,10 @@ al 1 MiB (pocos alumnos por clase). *Si en el futuro se necesitan consultas de
 "asistencia por alumno" a través de clases, habría que evaluar una colección
 aparte o un collection group; queda marcado.*
 
-**No solapamiento:** es una regla de **negocio** que hay que validar en la capa
-de escritura (`db.js`) porque Firestore no tiene constraints únicos por rango.
-Estrategia propuesta (a definir en fase 1): antes de crear la clase, consultar
-`clases` de la sede+cancha+profesor en esa fecha con `where`/`limit` y comparar
-rangos horarios. Para las series fijas, validar la serie completa. **Sin
-definir** si el chequeo será transaccional ni cómo manejar carreras (dos
-recepcionistas a la vez).
+**No solapamiento:** es una regla de **negocio** y se valida en la capa de
+escritura (`src/firebase/db.js`), porque Firestore no tiene constraints únicos
+ni condiciones de rango. El mecanismo elegido es la colección `bloques` con IDs
+deterministas dentro de una transacción. Ver §4.1.
 
 ### Estados de la clase
 
@@ -190,6 +213,123 @@ reservada ──(asistencia)──▶ ejecutada ──▶ pendiente_cobro ──
 - `pendiente_cobro`: se generó el cargo (automático o manual).
 - `cobrada`: el pago asociado fue aprobado.
 - `cancelada`: no se dictó. *Sin definir si una cancelada genera cargo o no.*
+
+---
+
+## 4.1 Reserva sin solapamientos (`bloques`)
+
+Firestore no tiene índices únicos ni condiciones de rango: no se puede pedir
+"guardar esto solo si no choca con otra clase". La forma barata y determinista de
+conseguir exclusividad es **materializar la ocupación como documentos con ID
+predecible**: si el documento existe, el horario está ocupado.
+
+### Ruta propuesta
+
+```
+academias/{tenantId}/bloques/{bloqueId}
+```
+
+**Justificación frente al modelo existente:**
+
+- Se podría colgar de `sedes/{sedeId}` (las canchas ya son subcolección de la
+  sede), pero **los bloques de profesor no cuelgan de ninguna sede**: un
+  profesor trabaja en varias. Anidar bajo la sede obligaría a duplicar su
+  bloqueo en cada sede donde trabaja, y a decidir cuál de las copias manda.
+  Un solo namespace de IDs por tenant evita ese problema.
+- Tampoco cuelga de `canchas/{canchaId}`: el bloque es de una fecha y hora, no
+  de la cancha.
+- Sí cuelga de `academias/{tenantId}`, igual que todo lo demás: las reglas siguen
+  siendo por subárbol y ninguna consulta necesita `where('tenantId','==',...)`.
+- Es una colección **derivada**: la fuente de verdad es `clases`. Si se pierde,
+  se regenera desde las clases (cada clase guarda los IDs de sus bloques).
+- No hace falta ningún índice compuesto: los bloques se leen **por ID**, con
+  `doc()`/`getDoc()`. Lo único que se consulta por campo es la agenda, que ya
+  usa `clases`.
+
+### ID determinista
+
+La granularidad es de **30 minutos** (la mitad del bloque de pádel más corto
+que se vende).
+
+- **Cancha:** `{sedeId}_{canchaId}_{YYYY-MM-DD}_{HHmm}`
+  (p. ej. `traki_c1_2026-10-03_1800`).
+- **Profesor:** `prof_{profesorId}_{YYYY-MM-DD}_{HHmm}`
+  (p. ej. `prof_p1_2026-10-03_1800`).
+
+`YYYY-MM-DD` y `HHmm` siempre con ceros a la izquierda (`1800`, no `800`), para
+que el orden lexicográfico del ID coincida con el orden horario y los IDs de dos
+clases contiguas no se confundan.
+
+El prefijo `prof_` no es decorativo: garantiza que el namespace del profesor
+sea disjunto del de las canchas, aunque existieran ids de sede/cancha que
+empiezan por `prof`. El ID **no se parsea nunca** — todos los campos van
+duplicados en el documento para poder consultar —, así que un `_` dentro de un
+id de sede o cancha no rompe nada.
+
+### Documento `bloques/{bloqueId}`
+
+| Campo | Tipo | Nota |
+| --- | --- | --- |
+| `tipo` | string | `cancha` \| `profesor` |
+| `sedeId` | string \| null | `null` si `tipo == profesor` |
+| `canchaId` | string \| null | `null` si `tipo == profesor` |
+| `profesorId` | string \| null | `null` si `tipo == cancha` |
+| `fecha` | string | `"YYYY-MM-DD"` |
+| `horaInicio` | string | `"HH:mm"` del bloque |
+| `minutoInicio` | number | Minutos desde medianoche. Permite comparar rangos en memoria y ordenar sin parsear `"HH:mm"`. |
+| `claseId` | string | Clase que ocupa el bloque |
+| `creadoPor` | string | uid |
+| `creadoEn` | Timestamp | |
+
+Y en `clases/{claseId}` se agrega:
+
+| Campo | Tipo | Nota |
+| --- | --- | --- |
+| `bloques` | string[] | IDs de los bloques que ocupa la clase (cancha + profesor). Permite cancelar sin recalcular ni volver a consultar `clases`. |
+
+### Crear una clase (una sola transacción)
+
+1. Se calcula la lista de bloques: `ceil((horaFin - horaInicio) / 30)` bloques
+   de cancha **y** los mismos de profesor. Una clase de 90 minutos = 3 + 3 = 6.
+2. `runTransaction`:
+   - **Todas las lecturas primero** (Firestore exige que en una transacción no
+     se lea después de escribir). Se hace `get()` de los 6 documentos por ID.
+   - Si **existe cualquiera**, se aborta y se devuelve el bloque en conflicto.
+   - Si no existe ninguno: se escribe la clase y después los 6 bloques.
+3. Dos recepcionistas reservando el mismo horario a la vez: ambos leen "no
+   existe", ambos intentan escribir, y el control de concurrencia optimista de
+   Firestore hace que **uno solo** gane. El perdedor reintenta la transacción,
+   ahora ve el bloque existente y aborta con el error de solapamiento. Con
+   `create()` (y no `set()`) el conflicto es un error real, no un sobreescritura
+   silenciosa.
+
+### Cancelar una clase (una sola transacción)
+
+Se lee la clase, se pone `estado: "cancelada"` y se borran todos sus bloques en
+la misma transacción. Los IDs se toman del campo `clases.bloques`, así que no
+hay que recalcularlos (una clase editada no puede quedar con bloques viejos).
+
+### Costo dentro del free tier
+
+Cuota sin costo: **20.000 escrituras/día**, **20.000 borrados/día**,
+**50.000 lecturas/día**.
+
+| Operación | Escrituras | Borrados | Lecturas de dato |
+| --- | --- | --- | --- |
+| Crear clase de 90 min | 1 (clase) + 6 (bloques) = **7** | 0 | 0 en el caso normal (los bloques no existen: no hay documento que leer); 6 en el peor caso |
+| Cancelar clase de 90 min | 1 (clase) | **6** (bloques) | 1 (la clase) |
+
+- **~2.800 clases de 90 minutos creadas por día** agotarían las escrituras
+  gratuitas. Un tenant real de academias está muy por debajo de eso.
+- Los bloques no se consultan por campo, así que **no agregan índices** ni
+  lecturas a las pantallas de agenda.
+- **Cuidado con las lecturas de las reglas (decisión 7):** cada escritura de
+  bloque vuelve a ejecutar `esAdmin()`, que hace un `get()` de la membresía. Una
+  reserva de 90 minutos son ~7 lecturas de reglas. Con 50.000 lecturas/día
+  alcanza para miles de reservas diarias, y sigue siendo el argumento a favor
+  de custom claims cuando exista Admin SDK.
+- Almacenamiento: ~150 bytes por bloque. 1 GiB de cuota alcanzan para del orden
+  de un millón de bloques.
 
 ---
 
@@ -230,9 +370,10 @@ reservada ──(asistencia)──▶ ejecutada ──▶ pendiente_cobro ──
 | `cargoIds` | string[] | Cargos cubiertos |
 | `montoCentavos` | number | |
 | `metodo` | string | *sin definir catálogo* |
-| `referencia` | string | |
-| `comprobante` | map \| null | **Sin definir**: sin Storage no hay dónde subir el archivo |
-| `estado` | string | `en_revision` \| `aprobado` \| `rechazado` |
+| `referencia` | string | Referencia de la transferencia / pago |
+| `fechaPago` | Timestamp | Fecha declarada por quien paga |
+| `comprobante` | map \| null | **Decisión 5**: sin Storage no hay dónde subir el archivo. En el MVP queda siempre `null` y no se captura imagen. |
+| `estado` | string | `en_revision` \| `aprobado` \| `rechazado`. El alta siempre arranca en `en_revision`. |
 | `motivoRechazo` | string \| null | |
 | `revisadoPor` | string \| null | uid |
 | `creadoEn` / `revisadoEn` | Timestamp | |
@@ -288,18 +429,27 @@ Declarados en `firestore.indexes.json`. Mínimos para las consultas previstas:
 Cada consulta nueva que se agregue a `db.js` debe traer su índice antes de
 publicarse.
 
+`bloques` **no** necesita ningún índice: se accede siempre por ID.
+
 ---
 
 ## 7. Lo que queda "sin definir"
 
 - Multimoneda por academia.
 - Catálogo de métodos de pago, niveles de alumno y tipos de cancha.
-- Validación de solapamiento (transaccionalidad y carreras).
+- **Reparto exacto de permisos entre `administrador` y "recepción"** (decisión 6:
+  recepción es un admin reducido, pero *qué* quita todavía no está escrito).
 - Generación y cobro de una clase cancelada.
-- Cómo subir comprobantes sin Cloud Storage.
+- Cuándo y cómo se habilita Cloud Storage para subir comprobantes (decisión 5:
+  el MVP no los sube).
 - Liquidación de profesores (cálculo) y su periodicidad.
 - Saldo cacheado vs calculado.
-- Roles: ¿`administrador` y `recepción` separados?
-- Provisioning de usuarios y asignación de roles sin Cloud Functions.
+- Aprovisionamiento de usuarios y asignación de roles sin Cloud Functions
+  (decisión 9: el primer admin se crea a mano).
 - Reglas de negocio de las series fijas (¿cuántas hacia adelante se generan?,
-  ¿qué pasa al editar una serie?).
+  ¿qué pasa al editar una serie?, ¿cómo se reservan los bloques de toda la
+  serie?). Las clases `fija` con `serieId` existen en el modelo pero **no se
+  implementan** el bloqueo por bloques.
+- Cuándo se migra de `get()` en las reglas a custom claims (decisión 7:
+  pospuesto hasta que exista Admin SDK).
+- Cuándo se habilita Blaze y con qué alerta de presupuesto (decisión 4).
