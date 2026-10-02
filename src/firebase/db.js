@@ -25,6 +25,8 @@ import {
   doc,
   getDoc,
   getDocs,
+  limit,
+  orderBy,
   query,
   runTransaction,
   where,
@@ -153,6 +155,55 @@ export async function getMisMembresias(db, uid) {
     tenantId: doc.ref.parent.parent?.id ?? null,
     ...doc.data(),
   }))
+}
+
+/*
+ * Sedes activas/inactivas de una academia. Acotado por tenant + limit.
+ * Se ordena en el cliente por `orden` (evita depender de un índice compuesto
+ * y de que el campo exista en todos los documentos).
+ */
+export async function getSedes(db, tenantId) {
+  const q = query(collection(db, 'academias', tenantId, 'sedes'), limit(50))
+  const snap = await getDocs(q)
+  return snap.docs
+    .map((d) => ({ id: d.id, ...d.data() }))
+    .filter((sede) => sede.activa !== false)
+    .sort(
+      (a, b) =>
+        (a.orden ?? 0) - (b.orden ?? 0) ||
+        String(a.nombre ?? '').localeCompare(String(b.nombre ?? '')),
+    )
+}
+
+/** Canchas de una sede. Acotado por sede + limit. Orden client-side por `numero`. */
+export async function getCanchas(db, tenantId, sedeId) {
+  const q = query(collection(db, 'academias', tenantId, 'sedes', sedeId, 'canchas'), limit(20))
+  const snap = await getDocs(q)
+  return snap.docs
+    .map((d) => ({ id: d.id, ...d.data() }))
+    .filter((cancha) => cancha.activa !== false)
+    .sort(
+      (a, b) =>
+        (a.numero ?? 0) - (b.numero ?? 0) ||
+        String(a.nombre ?? '').localeCompare(String(b.nombre ?? '')),
+    )
+}
+
+/**
+ * Clases de una sede en UNA fecha, ordenadas por hora. Acotado por
+ * tenant + sede + fecha (+ limit). Usa el índice compuesto
+ * `clases: sedeId + fecha + horaInicio` de firestore.indexes.json.
+ */
+export async function getClasesDeSedePorFecha(db, tenantId, sedeId, fecha) {
+  const q = query(
+    collection(db, 'academias', tenantId, 'clases'),
+    where('sedeId', '==', sedeId),
+    where('fecha', '==', fecha),
+    orderBy('horaInicio'),
+    limit(200),
+  )
+  const snap = await getDocs(q)
+  return snap.docs.map((d) => ({ id: d.id, ...d.data() }))
 }
 
 /* --------------------------------------------------------------------- */

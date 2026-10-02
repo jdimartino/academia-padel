@@ -352,6 +352,43 @@
 }
 
 /* ============================================================
+   Mensajes de estado
+   ============================================================ */
+
+.estado-wrap {
+  min-height: 100dvh;
+  display: grid;
+  place-items: center;
+  padding: 24px;
+}
+
+.estado {
+  max-width: 420px;
+  padding: 20px 24px;
+  border-radius: var(--radio-panel);
+  text-align: center;
+}
+
+.estado__titulo {
+  font-size: 16px;
+  font-weight: 700;
+}
+
+.estado__detalle {
+  margin-top: 6px;
+  font-size: 13px;
+  color: var(--texto-muted);
+  word-break: break-word;
+}
+
+.aviso {
+  padding: 10px 16px;
+  border-radius: var(--radio-pill);
+  font-size: 13px;
+  color: var(--texto-muted);
+}
+
+/* ============================================================
    MOBILE
    ============================================================ */
 

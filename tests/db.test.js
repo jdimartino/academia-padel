@@ -19,7 +19,10 @@ import {
   bloquesDeClase,
   cancelarClase,
   crearClase,
+  getCanchas,
   getClase,
+  getClasesDeSedePorFecha,
+  getSedes,
 } from '../src/firebase/db.js'
 
 const PROJECT_ID = 'academia-padel-jdm'
@@ -190,6 +193,33 @@ describe('crearClase', () => {
   it('alumno_adulto intenta reservar → DENY por las reglas y no queda nada escrito', async () => {
     await assert.rejects(() => crearClase(alumnoDb, T1, clase(), { uid: ALUMNO }))
     assert.equal((await bloque(`traki_c1_${FECHA}_1800`)).exists(), false)
+  })
+})
+
+describe('lecturas de agenda', () => {
+  it('getSedes devuelve las sedes del tenant', async () => {
+    const sedes = await getSedes(adminDb, T1)
+    assert.equal(sedes.length, 1)
+    assert.equal(sedes[0].id, 'traki')
+  })
+
+  it('getCanchas devuelve las canchas de la sede', async () => {
+    const canchas = await getCanchas(adminDb, T1, 'traki')
+    assert.deepEqual(
+      canchas.map((c) => c.id),
+      ['c1'],
+    )
+  })
+
+  it('getClasesDeSedePorFecha acota por sede + fecha', async () => {
+    await reservar() // traki / c1 / 18:00, FECHA
+
+    const delDia = await getClasesDeSedePorFecha(adminDb, T1, 'traki', FECHA)
+    assert.equal(delDia.length, 1)
+    assert.equal(delDia[0].horaInicio, '18:00')
+
+    assert.equal((await getClasesDeSedePorFecha(adminDb, T1, 'traki', '2026-10-06')).length, 0)
+    assert.equal((await getClasesDeSedePorFecha(adminDb, T1, 'boleita', FECHA)).length, 0)
   })
 })
 
