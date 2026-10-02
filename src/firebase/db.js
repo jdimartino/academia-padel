@@ -29,6 +29,8 @@ import {
   orderBy,
   query,
   runTransaction,
+  setDoc,
+  updateDoc,
   where,
 } from 'firebase/firestore'
 import { CATEGORIAS } from '../lib/agenda.js'
@@ -53,6 +55,19 @@ function validarCategoria(categoria) {
   }
 }
 
+/**
+ * Normaliza un nombre para buscarlo por prefijo: sin tildes, minúsculas y sin
+ * espacios sobrantes. El valor se guarda en `nombreBusqueda` y se consulta con
+ * el mismo normalizador (ver `buscarAlumnos`).
+ */
+export function normalizarBusqueda(texto) {
+  return String(texto ?? '')
+    .normalize('NFD')
+    .replace(/[\u0300-\u036f]/g, '')
+    .toLowerCase()
+    .trim()
+}
+
 const RE_HHMM = /^([01]\d|2[0-3]):([0-5]\d)$/
 const RE_FECHA = /^\d{4}-\d{2}-\d{2}$/
 
@@ -70,6 +85,14 @@ export class ClaseInvalidaError extends Error {
   constructor(mensaje) {
     super(mensaje)
     this.name = 'ClaseInvalidaError'
+  }
+}
+
+/** Error de negocio: la ficha de alumno o profesor tiene datos inválidos. */
+export class FichaInvalidaError extends Error {
+  constructor(mensaje) {
+    super(mensaje)
+    this.name = 'FichaInvalidaError'
   }
 }
 
@@ -156,6 +179,9 @@ export function bloquesDeClase({ sedeId, canchaId, profesorId, fecha, horaInicio
 
 const refClase = (db, tenantId, claseId) => doc(db, 'academias', tenantId, 'clases', claseId)
 const refBloque = (db, tenantId, bloqueId) => doc(db, 'academias', tenantId, 'bloques', bloqueId)
+const refAlumno = (db, tenantId, alumnoId) => doc(db, 'academias', tenantId, 'alumnos', alumnoId)
+const refProfesor = (db, tenantId, profesorId) =>
+  doc(db, 'academias', tenantId, 'profesores', profesorId)
 
 /* --------------------------------------------------------------------- */
 /* Lecturas                                                               */
@@ -218,6 +244,172 @@ export async function getProfesores(db, tenantId) {
     .map((d) => ({ id: d.id, ...d.data() }))
     .filter((profesor) => profesor.activo !== false)
     .sort((a, b) => String(a.nombre ?? '').localeCompare(String(b.nombre ?? '')))
+}
+
+/* --------------------------------------------------------------------- */
+/* Fichas: alumnos y profesores                                            */
+/* --------------------------------------------------------------------- */
+
+/*
+ * Los alumnos y profesores son FICHAS (records), no cuentas: no inician sesión.
+ * Los datos de contacto son solo del administrador (ver firestore.rules).
+ * Los alumnos no se borran nunca físicamente: se marca `activo: false`.
+ */
+
+function validarNivel(nivel) {
+  if (nivel != null && !CATEGORIAS.includes(nivel)) {
+    throw new FichaInvalidaError(`Nivel inválido "${nivel}". Permitidos: ${CATEGORIAS.join(', ')}`)
+  }
+}
+
+function validarTipoAlumno(tipo) {
+  if (!TIPOS_ALUMNO.includes(tipo)) {
+    throw new FichaInvalidaError(
+      `Tipo de alumno inválido "${tipo}". Permitidos: ${TIPOS_ALUMNO.join(', ')}`,
+    )
+  }
+}
+
+/**
+ * Crea una ficha de alumno. Campos según docs/modelo-datos.md §3. Para
+ * `tipo: "menor"` exige un tutor con nombre (los avisos van al tutor).
+ * `avisosActivos` arranca en `true`; el canal de avisos todavía no existe.
+ */
+export async function crearAlumno(db, tenantId, datos = {}, opciones = {}) {
+  const { uid = null, now = new Date(), alumnoId = null } = opciones
+  const tipo = datos.tipo ?? 'adulto'
+  validarTipoAlumno(tipo)
+  validarNivel(datos.nivel)
+  const nombre = String(datos.nombre ?? '').trim()
+  if (!nombre) throw new FichaInvalidaError('El alumno necesita nombre')
+
+  let tutor = null
+  if (tipo === 'menor') {
+    const t = datos.tutor ?? {}
+    const tutorNombre = String(t.nombre ?? '').trim()
+    if (!tutorNombre) throw new FichaInvalidaError('Un alumno menor necesita un tutor con nombre')
+    tutor = {
+      nombre: tutorNombre,
+      email: t.email ?? null,
+      telefono: t.telefono ?? null,
+      documento: t.documento ?? null,
+      parentesco: t.parentesco ?? null,
+    }
+  }
+
+  const alumno = {
+    tipo,
+    nombre,
+    nombreBusqueda: normalizarBusqueda(nombre),
+    nivel: datos.nivel ?? null,
+    email: datos.email ?? null,
+    telefono: datos.telefono ?? null,
+    documento: datos.documento ?? null,
+    tutor,
+    sedes: datos.sedes ?? [],
+    avisosActivos: datos.avisosActivos ?? true,
+    activo: datos.activo ?? true,
+    notas: datos.notas ?? '',
+    creadoPor: uid,
+    creadoEn: Timestamp.fromDate(now),
+  }
+
+  const ref = alumnoId
+    ? refAlumno(db, tenantId, alumnoId)
+    : doc(collection(db, 'academias', tenantId, 'alumnos'))
+  await setDoc(ref, alumno)
+  return { alumnoId: ref.id }
+}
+
+/**
+ * Actualiza una ficha de alumno (merge). Soft delete: `{ activo: false }`.
+ * Recalcula `nombreBusqueda` si cambia el nombre.
+ */
+export async function actualizarAlumno(db, tenantId, alumnoId, cambios = {}, opciones = {}) {
+  const { uid = null, now = new Date() } = opciones
+  if (cambios.tipo !== undefined) validarTipoAlumno(cambios.tipo)
+  if (cambios.nivel !== undefined) validarNivel(cambios.nivel)
+
+  const update = { ...cambios }
+  if (cambios.nombre !== undefined) {
+    const nombre = String(cambios.nombre ?? '').trim()
+    if (!nombre) throw new FichaInvalidaError('El alumno necesita nombre')
+    update.nombre = nombre
+    update.nombreBusqueda = normalizarBusqueda(nombre)
+  }
+  update.actualizadoPor = uid
+  update.actualizadoEn = Timestamp.fromDate(now)
+
+  await updateDoc(refAlumno(db, tenantId, alumnoId), update)
+  return { alumnoId }
+}
+
+/** Lee una ficha de alumno. 1 lectura. */
+export async function getAlumno(db, tenantId, alumnoId) {
+  const snap = await getDoc(refAlumno(db, tenantId, alumnoId))
+  return snap.exists() ? { id: snap.id, ...snap.data() } : null
+}
+
+/**
+ * Busca alumnos ACTIVOS por prefijo de nombre, sin tildes ni mayúsculas
+ * (campo `nombreBusqueda`). Acotado por tenant + limit (10 por defecto): el
+ * picker nunca carga toda la colección. Usa el índice `alumnos: activo +
+ * nombreBusqueda` de firestore.indexes.json.
+ */
+export async function buscarAlumnos(db, tenantId, texto, opciones = {}) {
+  const { limite = 10 } = opciones
+  const prefijo = normalizarBusqueda(texto)
+  if (!prefijo) return []
+
+  const q = query(
+    collection(db, 'academias', tenantId, 'alumnos'),
+    where('activo', '==', true),
+    where('nombreBusqueda', '>=', prefijo),
+    where('nombreBusqueda', '<=', `${prefijo}\uf8ff`),
+    orderBy('nombreBusqueda'),
+    limit(limite),
+  )
+  const snap = await getDocs(q)
+  return snap.docs.map((d) => ({ id: d.id, ...d.data() }))
+}
+
+/**
+ * Crea una ficha de profesor. La tarifa por hora queda SIN DEFINIR: no se
+ * escribe ningún campo de tarifa (tampoco `tarifaHoraCentavos`).
+ */
+export async function crearProfesor(db, tenantId, datos = {}, opciones = {}) {
+  const { uid = null, now = new Date(), profesorId = null } = opciones
+  const nombre = String(datos.nombre ?? '').trim()
+  if (!nombre) throw new FichaInvalidaError('El profesor necesita nombre')
+
+  const profesor = {
+    nombre,
+    telefono: datos.telefono ?? null,
+    email: datos.email ?? null,
+    sedes: datos.sedes ?? [],
+    activo: datos.activo ?? true,
+    creadoPor: uid,
+    creadoEn: Timestamp.fromDate(now),
+  }
+
+  const ref = profesorId
+    ? refProfesor(db, tenantId, profesorId)
+    : doc(collection(db, 'academias', tenantId, 'profesores'))
+  await setDoc(ref, profesor)
+  return { profesorId: ref.id }
+}
+
+/**
+ * Actualiza una ficha de profesor (merge). Soft delete: `{ activo: false }`.
+ */
+export async function actualizarProfesor(db, tenantId, profesorId, cambios = {}, opciones = {}) {
+  const { uid = null, now = new Date() } = opciones
+  await updateDoc(refProfesor(db, tenantId, profesorId), {
+    ...cambios,
+    actualizadoPor: uid,
+    actualizadoEn: Timestamp.fromDate(now),
+  })
+  return { profesorId }
 }
 
 /**

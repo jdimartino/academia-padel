@@ -68,7 +68,7 @@
       "queryScope": "COLLECTION",
       "fields": [
         { "fieldPath": "activo", "order": "ASCENDING" },
-        { "fieldPath": "nombre", "order": "ASCENDING" }
+        { "fieldPath": "nombreBusqueda", "order": "ASCENDING" }
       ]
     }
   ],
