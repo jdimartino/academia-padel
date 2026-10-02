@@ -167,10 +167,13 @@ y porque una cancha puede necesitar más campos (tarifas, tipo, estado).
 | --- | --- | --- |
 | `nombre` | string | |
 | `email` | string | Dato de contacto (futuro canal de avisos, §8), no credencial |
-| `telefono` | string | |
-| `tarifaHoraCentavos` | number | Pago por hora |
+| `telefono` | string | Opcional |
+| `tarifaHoraCentavos` | number | **SIN DEFINIR / sin implementar.** La tarifa por hora es de facturación; `crearProfesor` no la escribe y el seed tampoco. |
 | `sedes` | string[] | IDs de sedes donde trabaja |
 | `activo` | bool | |
+
+Fichas creadas por `crearProfesor` / `actualizarProfesor` (soft delete con
+`activo:false`). `getProfesores` devuelve solo los activos.
 
 > **Campo eliminado (login obsoleto):** el antiguo `uid` (usuario de Auth del
 > profesor) se quitó. El profesor es una ficha, no una cuenta.
@@ -181,20 +184,33 @@ y porque una cancha puede necesitar más campos (tarifas, tipo, estado).
 | --- | --- | --- |
 | `tipo` | string | `adulto` \| `menor` |
 | `nombre` | string | |
-| `documento` | string | *sin definir tipo/validación* |
-| `email` | string | |
-| `telefono` | string | |
-| `tutor` | map \| null | Solo `menor`: `{nombre, documento, telefono, email, parentesco}` |
+| `nombreBusqueda` | string | `nombre` en minúsculas y sin tildes. Lo escribe `db.js` al crear/editar. Es el campo del buscador por prefijo (`buscarAlumnos`, §6). |
+| `documento` | string \| null | *sin definir tipo/validación* |
+| `email` | string \| null | Dato de contacto (admin-only) |
+| `telefono` | string \| null | Dato de contacto (admin-only) |
+| `tutor` | map \| null | Solo `menor`: `{nombre, email?, telefono?}` (+ `documento`, `parentesco` opcionales). Los avisos van al tutor. |
 | `sedes` | string[] | Sedes donde toma clases |
-| `nivel` | string | *sin definir catálogo* |
-| `activo` | bool | |
+| `nivel` | string \| null | Opcional. Mismos 8 valores que `clase.categoria` (`principiante`, `7a`…`1a`), validado en `crearAlumno`/`actualizarAlumno`. |
+| `avisosActivos` | bool | Opt-in a recibir reportes. Default `true` al crear. |
+| `activo` | bool | Soft delete: **nunca se borra físicamente**, se marca `false`. |
 | `notas` | string | |
+| `creadoPor` / `creadoEn` / `actualizadoEn` | | |
+
+Los datos de contacto son **solo del administrador**: `firestore.rules` niega
+lectura y escritura de `alumnos` a todo el que no sea administrador activo del
+tenant.
+
+**Ventana de aviso de ausencias: SIN DEFINIR.** Es un parámetro por academia y
+no se hardcodea en el código.
 
 **Alumno Menor:** se modela como un documento `alumnos` (no una cuenta de Auth)
 más un `tutor`. **El tutor tampoco inicia sesión por ahora**: es el contacto del
 menor (ver §8), enlazado al `alumno` por el mapa `tutor`. *Si en el futuro se le
 diera acceso, sería un `miembro` con rol `alumno_menor`; hoy está sin acceso.*
 *Sin definir si el tutor gestiona varios menores.*
+
+Fichas creadas/actualizadas por `crearAlumno` / `actualizarAlumno`; `getAlumno`
+lee una y `buscarAlumnos` busca activos por prefijo (limit 10).
 
 ---
 
@@ -217,8 +233,8 @@ sin solapamientos.
 | `serieId` | string \| null | Une las clases fijas generadas de una serie |
 | `categoria` | string \| null | Opcional. Una de `principiante`, `7a`, `6a`, `5a`, `4a`, `3a`, `2a`, `1a`. Se muestra como "Principiante", "7ª" … "1ª". Validado en `crearClase`/`reprogramarClase`; `null` si no se definió. |
 | `cupo` | number | |
-| `alumnos` | string[] | IDs de alumnos |
-| `asistencias` | map[] | `[{alumnoId, estado, motivo, registradoPor, registradoEn}]` |
+| `alumnos` | string[] | IDs de alumnos asignados. `crearClase`, `reprogramarClase` y `asignarAlumnos` los validan (existen, activos, sin duplicados, dentro del `cupo`). |
+| `asistencias` | map[] | `[{alumnoId, estado, motivo, registradoPor, registradoEn}]`. `estado` ∈ `presente` \| `ausente_avisada` \| `ausente_sin_aviso`; `motivo` opcional. |
 | `estado` | string | `reservada` → `pendiente_cobro` → `cobrada`; también `cancelada`. `ejecutada` sigue existiendo en el enum pero el cierre por asistencia va directo a `pendiente_cobro`. |
 | `sedeNombre` | string | Denormalizado |
 | `profesorNombre` | string | Denormalizado |
@@ -235,16 +251,31 @@ al 1 MiB (pocos alumnos por clase). *Si en el futuro se necesitan consultas de
 aparte o un collection group; queda marcado.*
 
 **Modalidad derivada del cupo:** no se guarda un campo `modalidad`. Una clase
-con `cupo <= 1` se muestra como **Individual** y con `cupo >= 2` como
-**Grupal**. El título del bloque es `Modalidad · Categoría` (solo modalidad si
-`categoria` es `null`). No confundir con `tipo` (`fija` | `variable`).
+con `cupo <= 1` se muestra como **Individual** (máximo 1 alumno) y con
+`cupo >= 2` como **Grupal** (el cupo es el campo `cupo` de la clase; el valor por
+defecto al crear, si no se especifica, es **4**). El título del bloque es
+`Modalidad · Categoría` (solo modalidad si `categoria` es `null`). No confundir
+con `tipo` (`fija` | `variable`).
+
+**Asignación de alumnos:** la lista se guarda en `alumnos` y los nombres en
+`alumnoNombres` (denormalizado). Se valida en la misma transacción: todos los IDs
+existen, están `activo:true`, no hay duplicados y la cantidad no supera el
+`cupo`. `asignarAlumnos` reemplaza la lista completa y solo se permite mientras
+la clase está `reservada` (no en una clase ya cerrada). Los `bloques` son solo de
+cancha y profesor: **no hay bloqueo por alumno**. Que un alumno quede en dos
+clases a la misma hora **no se bloquea** y no se crean bloques de alumno; queda
+como **nota de diseño**, sin resolver.
 
 **Cierre por asistencia:** `registrarAsistencia` escribe `asistencias` y pasa la
-clase a `pendiente_cobro` en una sola transacción. **La generación del `cargo` del
-alumno y de la liquidación del profesor NO forma parte de ese cierre** (ver §5
-"Sin definir"), así que no se ejecuta todavía. La regla de negocio de la ausencia
-justificada (clase de recuperación vs nota de crédito) también está **sin
-definir**: `asistencias` solo guarda `presente`/`ausente` y un `motivo` opcional.
+clase a `pendiente_cobro` en una sola transacción. Requiere exactamente **una
+entrada por alumno asignado** y solo acepta tres estados: `presente`,
+`ausente_avisada` y `ausente_sin_aviso`, más un `motivo` opcional. El sistema no
+recibe avisos: **el administrador decide** si la ausencia fue avisada. **La
+ventana de aviso (horas) es un parámetro por academia y está SIN DEFINIR** (no se
+hardcodea). **La generación del `cargo` del alumno y de la liquidación del
+profesor NO forma parte de ese cierre** (ver §5 "Sin definir"), así que no se
+ejecuta todavía. La regla de negocio de la ausencia justificada (clase de
+recuperación vs nota de crédito) también está **sin definir**.
 
 **Cobrar (o no) a los alumnos ausentes está SIN DEFINIR.** El código no crea
 `cargos` ni toca el saldo de nadie al registrar la asistencia: la clase queda en
@@ -500,7 +531,7 @@ Declarados en `firestore.indexes.json`. Mínimos para las consultas previstas:
 - `cargos`: `alumnoId` + `periodo` desc.
 - `cargos`: `estado` + `periodo`.
 - `pagos`: `estado` + `creadoEn` desc.
-- `alumnos`: `activo` + `nombre`.
+- `alumnos`: `activo` + `nombreBusqueda` (buscador por prefijo de `buscarAlumnos`).
 
 Cada consulta nueva que se agregue a `db.js` debe traer su índice antes de
 publicarse.
@@ -515,11 +546,17 @@ publicarse.
 - Catálogo de métodos de pago, niveles de alumno y tipos de cancha.
 - **Reparto exacto de permisos entre `administrador` y "recepción"** (decisión 6:
   recepción es un admin reducido, pero *qué* quita todavía no está escrito).
-- Generación y cobro de una clase cancelada.
-- **Cobro de alumnos ausentes** tras registrar la asistencia: si el ausente
-  genera cargo, si el presente lo salta, o si la ausencia justificada habilita
-  recuperación/nota de crédito. `registrarAsistencia` solo deja la clase en
-  `pendiente_cobro`; no crea cargos ni toca saldos.
+- **Facturación / cobros (todo sin definir):** tarifa por hora del profesor
+  (`tarifaHoraCentavos` no se escribe), generación del `cargo` al cerrar la
+  clase y a la liquidación del profesor, cobro o no de la clase cancelada y de
+  los alumnos ausentes. `registrarAsistencia` solo deja la clase en
+  `pendiente_cobro`; no crea cargos, notas de crédito, recuperaciones ni toca
+  saldos.
+- **Ventana de aviso (horas) de una ausencia:** parámetro por academia, hoy sin
+  definir y sin hardcodear. El administrador decide si una ausencia fue
+  "avisada"; no se implementan notificaciones.
+- **Doble reserva de un alumno a la misma hora:** no se bloquea en la
+  transacción ni se crean bloques de alumno. Queda como nota de diseño.
 - Cuándo y cómo se habilita Cloud Storage para subir comprobantes (decisión 5:
   el MVP no los sube).
 - Liquidación de profesores (cálculo) y su periodicidad.
