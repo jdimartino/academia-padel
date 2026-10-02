@@ -9,6 +9,8 @@
  * Uso:  npm run seed        (o  node scripts/seed.mjs)
  */
 
+import { bloquesDeClase } from '../src/firebase/db.js'
+
 const PROJECT_ID = process.env.FIREBASE_PROJECT_ID ?? 'academia-padel-jdm'
 const EMULATOR_HOST = process.env.EMULATOR_HOST ?? '127.0.0.1'
 const FIRESTORE_PORT = process.env.FIRESTORE_EMULATOR_PORT ?? '8080'
@@ -17,6 +19,7 @@ const AUTH_PORT = process.env.AUTH_EMULATOR_PORT ?? '9099'
 const FIRESTORE = `http://${EMULATOR_HOST}:${FIRESTORE_PORT}/v1/projects/${PROJECT_ID}/databases/(default)/documents`
 const AUTH = `http://${EMULATOR_HOST}:${AUTH_PORT}`
 const TENANT = 'ensayo'
+const TENANT_DOC = `academias/${TENANT}`
 const OWNER_HEADERS = { Authorization: 'Bearer owner' }
 
 function toValue(value) {
@@ -83,10 +86,56 @@ async function limpiar() {
   })
 }
 
+/** "YYYY-MM-DD" relativo a hoy, con partes LOCALES (no toISOString: Caracas es UTC-4). */
 function diaRelativo(dias) {
   const d = new Date()
   d.setDate(d.getDate() + dias)
-  return d.toISOString().slice(0, 10)
+  const y = d.getFullYear()
+  const m = String(d.getMonth() + 1).padStart(2, '0')
+  const day = String(d.getDate()).padStart(2, '0')
+  return `${y}-${m}-${day}`
+}
+
+/**
+ * Crea una clase con sus bloques de 30 min, reutilizando el mismo cálculo puro
+ * que usa `crearClase` en src/firebase/db.js. El seed escribe por REST con
+ * token "owner" (único lugar autorizado a saltear reglas), así que no puede
+ * llamar la transacción del SDK; reusa `bloquesDeClase` para que la clase sea
+ * dueña de sus bloques igual que en la app.
+ */
+async function crearClaseEnSeed(datos) {
+  const bloques = bloquesDeClase(datos)
+  const creadoEn = new Date()
+  const clase = {
+    tipo: 'variable',
+    serieId: null,
+    estado: datos.estado ?? 'reservada',
+    categoria: datos.categoria ?? null,
+    asistencias: datos.asistencias ?? [],
+    alumnos: datos.alumnos ?? [],
+    alumnoNombres: datos.alumnoNombres ?? [],
+    cupo: datos.cupo ?? 4,
+    sedeId: datos.sedeId,
+    sedeNombre: datos.sedeNombre ?? null,
+    canchaId: datos.canchaId,
+    profesorId: datos.profesorId,
+    profesorNombre: datos.profesorNombre ?? null,
+    fecha: datos.fecha,
+    horaInicio: datos.horaInicio,
+    horaFin: datos.horaFin,
+    bloques: bloques.map((b) => b.id),
+    creadoPor: 'seed',
+    creadoEn,
+  }
+  await setDoc(`${TENANT_DOC}/clases/${datos.id}`, clase)
+  for (const bloque of bloques) {
+    await setDoc(`${TENANT_DOC}/bloques/${bloque.id}`, {
+      ...bloque.data,
+      claseId: datos.id,
+      creadoPor: 'seed',
+      creadoEn,
+    })
+  }
 }
 
 const USUARIOS = [
@@ -194,7 +243,8 @@ async function main() {
     notas: '',
   })
 
-  await setDoc(`${tenant}/clases/c1`, {
+  await crearClaseEnSeed({
+    id: 'c1',
     sedeId: 'traki',
     sedeNombre: 'Traki',
     canchaId: 'c1',
@@ -203,18 +253,17 @@ async function main() {
     fecha: diaRelativo(1),
     horaInicio: '18:00',
     horaFin: '19:00',
-    tipo: 'variable',
-    serieId: null,
     cupo: 4,
+    categoria: '6a',
     alumnos: ['a1'],
     alumnoNombres: ['Aldo Adulto'],
-    asistencias: [],
     estado: 'reservada',
-    creadoPor: 'seed',
-    creadoEn: new Date(),
   })
 
-  await setDoc(`${tenant}/clases/c2`, {
+  // Antes era "fija" (serieId): las series recurrentes están fuera de alcance,
+  // así que pasa a ser una clase "variable" más, creada con sus bloques.
+  await crearClaseEnSeed({
+    id: 'c2',
     sedeId: 'traki',
     sedeNombre: 'Traki',
     canchaId: 'c1',
@@ -223,21 +272,18 @@ async function main() {
     fecha: diaRelativo(-1),
     horaInicio: '18:00',
     horaFin: '19:00',
-    tipo: 'fija',
-    serieId: 'serie-1',
     cupo: 4,
+    categoria: '7a',
     alumnos: ['a1', 'a2'],
     alumnoNombres: ['Aldo Adulto', 'Marta Menor'],
     asistencias: [
-      { alumnoId: 'a1', estado: 'presente', motivo: null, registradoPor: 'profe@ensayo.test', registradoEn: new Date() },
-      { alumnoId: 'a2', estado: 'ausente', motivo: 'enfermedad', registradoPor: 'profe@ensayo.test', registradoEn: new Date() },
+      { alumnoId: 'a1', estado: 'presente', motivo: null, registradoPor: 'uid-profe', registradoEn: new Date() },
+      { alumnoId: 'a2', estado: 'ausente', motivo: 'enfermedad', registradoPor: 'uid-profe', registradoEn: new Date() },
     ],
-    estado: 'ejecutada',
-    creadoPor: 'seed',
-    creadoEn: new Date(),
+    estado: 'pendiente_cobro',
   })
 
-  const periodo = new Date().toISOString().slice(0, 7)
+  const periodo = diaRelativo(0).slice(0, 7)
   await setDoc(`${tenant}/cargos/cg1`, {
     alumnoId: 'a1',
     alumnoNombre: 'Aldo Adulto',

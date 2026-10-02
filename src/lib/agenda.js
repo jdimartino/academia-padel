@@ -59,13 +59,29 @@ export function capitalizar(texto) {
 }
 
 /*
- * Título del bloque. El diseño pide "Tipo · Categoría", pero el modelo de
- * datos NO tiene un campo `categoria`: solo `tipo` (`fija` | `variable`).
- * Se arma con lo que existe y, si algún día se agrega `categoria`, se anexa
- * sin inventar el campo aquí. Ver reporte / open question.
+ * Categoría de la clase (opcional). Se guarda con el código sin tilde
+ * ("7a", "principiante") y se muestra con su etiqueta ("7ª", "Principiante").
+ * Ver docs/modelo-datos.md §4.
  */
+export const CATEGORIAS = ['principiante', '7a', '6a', '5a', '4a', '3a', '2a', '1a']
+
+export function etiquetaCategoria(categoria) {
+  if (!categoria) return null
+  if (categoria === 'principiante') return 'Principiante'
+  return `${categoria.slice(0, -1)}ª`
+}
+
+/*
+ * Modalidad derivada del cupo (no es un campo aparte): una clase de una sola
+ * plaza es Individual; con dos o más, Grupal.
+ */
+export function modalidadDeClase(clase) {
+  return (clase.cupo ?? 0) <= 1 ? 'Individual' : 'Grupal'
+}
+
+/** Título del bloque: "Modalidad · Categoría" (solo modalidad si no hay categoría). */
 export function tituloClase(clase) {
-  return [capitalizar(clase.tipo), clase.categoria].filter(Boolean).join(' · ')
+  return [modalidadDeClase(clase), etiquetaCategoria(clase.categoria)].filter(Boolean).join(' · ')
 }
 
 /** "Pablo Profesor" → "PP" (máximo 2 iniciales). */

@@ -13,7 +13,8 @@
     "seed:emu": "firebase emulators:exec --only auth,firestore \"npm run seed\"",
     "test:rules": "firebase emulators:exec --only firestore \"node --test tests/rules.test.js\"",
     "test:db": "firebase emulators:exec --only firestore \"node --test tests/db.test.js\"",
-    "test": "npm run test:rules && npm run test:db"
+    "test:lib": "node --test tests/lib.test.js",
+    "test": "npm run test:lib && npm run test:rules && npm run test:db"
   },
   "dependencies": {
     "firebase": "^12.19.0",

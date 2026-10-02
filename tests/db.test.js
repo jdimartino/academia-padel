@@ -23,6 +23,8 @@ import {
   getClase,
   getClasesDeSedePorFecha,
   getSedes,
+  registrarAsistencia,
+  reprogramarClase,
 } from '../src/firebase/db.js'
 
 const PROJECT_ID = 'academia-padel-jdm'
@@ -167,6 +169,42 @@ describe('crearClase', () => {
     )
   })
 
+  it('mismo profesor en DOS canchas al MISMO horario → DENY por el bloque de profesor', async () => {
+    await reservar() // p1 en c1, 18:00-19:30
+    await assert.rejects(
+      () => reservar({ canchaId: 'c2' }),
+      (error) => {
+        assert.ok(error instanceof SolapamientoError)
+        assert.equal(error.bloque.data.tipo, 'profesor')
+        assert.equal(error.bloque.data.profesorId, 'p1')
+        return true
+      },
+    )
+    // La cancha c2 sigue libre: no quedó nada escrito.
+    assert.equal((await bloque(`traki_c2_${FECHA}_1800`)).exists(), false)
+  })
+
+  it('mismo profesor en bloques ADYACENTES y otra cancha → ALLOW', async () => {
+    await reservar() // p1, 18:00-19:30
+    const segunda = await reservar({ canchaId: 'c2', horaInicio: '19:30', horaFin: '21:00' })
+    assert.ok(segunda.claseId)
+  })
+
+  it('categoria inválida → DENY antes de escribir nada', async () => {
+    await assert.rejects(() => reservar({ categoria: '8a' }), /Categoría inválida/)
+    assert.equal((await bloque(`traki_c1_${FECHA}_1800`)).exists(), false)
+  })
+
+  it('categoria válida se guarda en la clase', async () => {
+    const { claseId } = await reservar({ categoria: '3a' })
+    assert.equal((await getClase(adminDb, T1, claseId)).categoria, '3a')
+  })
+
+  it('sin categoria, la clase queda con categoria null', async () => {
+    const { claseId } = await reservar()
+    assert.equal((await getClase(adminDb, T1, claseId)).categoria, null)
+  })
+
   it('horario ADYACENTE (empieza justo al terminar) → ALLOW', async () => {
     await reservar()
     const segunda = await reservar({ horaInicio: '19:30', horaFin: '21:00' })
@@ -238,6 +276,20 @@ describe('cancelarClase', () => {
     assert.ok((await reservar()).claseId)
   })
 
+  it('cancelar libera también los bloques del profesor', async () => {
+    const { claseId, bloques } = await reservar()
+    const deProfesor = bloques.filter((id) => id.startsWith('prof_'))
+    assert.equal(deProfesor.length, 3)
+
+    await cancelarClase(adminDb, T1, claseId, { uid: ADMIN })
+
+    for (const bloqueId of deProfesor) {
+      assert.equal((await bloque(bloqueId)).exists(), false, `debería liberarse ${bloqueId}`)
+    }
+    // El profesor vuelve a estar disponible en la otra cancha.
+    assert.ok((await reservar({ canchaId: 'c2' })).claseId)
+  })
+
   it('cancelar dos veces no falla (idempotente)', async () => {
     const { claseId } = await reservar()
     await cancelarClase(adminDb, T1, claseId, { uid: ADMIN })
@@ -247,6 +299,114 @@ describe('cancelarClase', () => {
 
   it('cancelar una clase inexistente → DENY', async () => {
     await assert.rejects(() => cancelarClase(adminDb, T1, 'no-existe', { uid: ADMIN }), /no existe/)
+  })
+})
+
+describe('reprogramarClase', () => {
+  it('mueve la clase, libera los bloques viejos y ocupa los nuevos', async () => {
+    const { claseId, bloques } = await reservar() // c1 / p1 / 18:00-19:30
+
+    await reprogramarClase(
+      adminDb,
+      T1,
+      claseId,
+      { canchaId: 'c2', fecha: '2026-10-06' },
+      { uid: ADMIN },
+    )
+
+    const movida = await getClase(adminDb, T1, claseId)
+    assert.equal(movida.canchaId, 'c2')
+    assert.equal(movida.fecha, '2026-10-06')
+
+    for (const bloqueId of bloques) {
+      assert.equal((await bloque(bloqueId)).exists(), false, `bloque viejo ${bloqueId}`)
+    }
+    for (const bloqueId of movida.bloques) {
+      assert.ok((await bloque(bloqueId)).exists(), `bloque nuevo ${bloqueId}`)
+    }
+    assert.equal((await bloque('traki_c2_2026-10-06_1800')).exists(), true)
+  })
+
+  it('si se superpone con otra clase, falla y deja la original intacta', async () => {
+    const { claseId, bloques } = await reservar() // c1 / p1
+    await reservar({ canchaId: 'c2', profesorId: 'p2' }) // misma franja en c2
+
+    await assert.rejects(
+      () => reprogramarClase(adminDb, T1, claseId, { canchaId: 'c2' }, { uid: ADMIN }),
+      SolapamientoError,
+    )
+
+    const original = await getClase(adminDb, T1, claseId)
+    assert.equal(original.canchaId, 'c1')
+    assert.deepEqual(original.bloques, bloques)
+    for (const bloqueId of bloques) {
+      assert.ok((await bloque(bloqueId)).exists())
+    }
+  })
+
+  it('mover una clase sobre sus propios bloques → ALLOW (no se choca consigo misma)', async () => {
+    const { claseId } = await reservar() // c1 / p1 / 18:00-19:30
+
+    // Cambia solo el profesor: los bloques de cancha siguen siendo de la clase.
+    await reprogramarClase(adminDb, T1, claseId, { profesorId: 'p2' }, { uid: ADMIN })
+
+    const movida = await getClase(adminDb, T1, claseId)
+    assert.equal(movida.profesorId, 'p2')
+    assert.equal((await bloque(`traki_c1_${FECHA}_1800`)).exists(), true)
+    assert.equal((await bloque(`prof_p2_${FECHA}_1800`)).exists(), true)
+    assert.equal((await bloque(`prof_p1_${FECHA}_1800`)).exists(), false)
+  })
+
+  it('reprogramar una clase inexistente → DENY', async () => {
+    await assert.rejects(
+      () => reprogramarClase(adminDb, T1, 'no-existe', { canchaId: 'c2' }, { uid: ADMIN }),
+      /no existe/,
+    )
+  })
+})
+
+describe('registrarAsistencia', () => {
+  it('guarda la asistencia embebida y pasa la clase a pendiente_cobro', async () => {
+    const { claseId } = await reservar()
+
+    await registrarAsistencia(
+      adminDb,
+      T1,
+      claseId,
+      [
+        { alumnoId: 'a1', estado: 'presente' },
+        { alumnoId: 'a2', estado: 'ausente', motivo: 'enfermedad' },
+      ],
+      { uid: ADMIN },
+    )
+
+    const clase = await getClase(adminDb, T1, claseId)
+    assert.equal(clase.estado, 'pendiente_cobro')
+    assert.equal(clase.asistencias.length, 2)
+    assert.equal(clase.asistencias[0].estado, 'presente')
+    assert.equal(clase.asistencias[0].registradoPor, ADMIN)
+    assert.ok(clase.asistencias[0].registradoEn)
+    assert.equal(clase.asistencias[1].motivo, 'enfermedad')
+  })
+
+  it('un estado de asistencia inválido → DENY', async () => {
+    const { claseId } = await reservar()
+    await assert.rejects(
+      () => registrarAsistencia(adminDb, T1, claseId, [{ alumnoId: 'a1', estado: 'tarde' }], { uid: ADMIN }),
+      /Estado de asistencia inválido/,
+    )
+    assert.equal((await getClase(adminDb, T1, claseId)).estado, 'reservada')
+  })
+
+  it('una clase ya cerrada no se puede cerrar dos veces', async () => {
+    const { claseId } = await reservar()
+    await registrarAsistencia(adminDb, T1, claseId, [{ alumnoId: 'a1', estado: 'presente' }], {
+      uid: ADMIN,
+    })
+    await assert.rejects(
+      () => registrarAsistencia(adminDb, T1, claseId, [{ alumnoId: 'a1', estado: 'presente' }], { uid: ADMIN }),
+      /ya está cerrada/,
+    )
   })
 })
 

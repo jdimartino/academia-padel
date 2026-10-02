@@ -177,6 +177,7 @@ sin solapamientos.
 | `horaFin` | string | `"HH:mm"` |
 | `tipo` | string | `fija` (recurrente) \| `variable` |
 | `serieId` | string \| null | Une las clases fijas generadas de una serie |
+| `categoria` | string \| null | Opcional. Una de `principiante`, `7a`, `6a`, `5a`, `4a`, `3a`, `2a`, `1a`. Se muestra como "Principiante", "7ª" … "1ª". Validado en `crearClase`/`reprogramarClase`; `null` si no se definió. |
 | `cupo` | number | |
 | `alumnos` | string[] | IDs de alumnos |
 | `asistencias` | map[] | `[{alumnoId, estado, motivo, registradoPor, registradoEn}]` |
@@ -194,6 +195,19 @@ habría que leer N documentos de asistencia por clase. El documento no se acerca
 al 1 MiB (pocos alumnos por clase). *Si en el futuro se necesitan consultas de
 "asistencia por alumno" a través de clases, habría que evaluar una colección
 aparte o un collection group; queda marcado.*
+
+**Modalidad derivada del cupo:** no se guarda un campo `modalidad`. Una clase
+con `cupo <= 1` se muestra como **Individual** y con `cupo >= 2` como
+**Grupal**. El título del bloque es `Modalidad · Categoría` (solo modalidad si
+`categoria` es `null`). No confundir con `tipo` (`fija` | `variable`).
+
+**Cierre por asistencia:** `registrarAsistencia` escribe `asistencias` y pasa la
+clase a `pendiente_cobro` en una sola transacción. La generación del `cargo`
+del alumno y de la liquidación del profesor **no** está documentada como parte
+de ese cierre (ver §5 "Sin definir"), así que no se ejecuta todavía. La regla de
+negocio de la ausencia justificada (clase de recuperación vs nota de crédito)
+también está **sin definir**: `asistencias` solo guarda `presente`/`ausente` y
+un `motivo` opcional.
 
 **No solapamiento:** es una regla de **negocio** y se valida en la capa de
 escritura (`src/firebase/db.js`), porque Firestore no tiene constraints únicos
@@ -315,6 +329,14 @@ Y en `clases/{claseId}` se agrega:
 Se lee la clase, se pone `estado: "cancelada"` y se borran todos sus bloques en
 la misma transacción. Los IDs se toman del campo `clases.bloques`, así que no
 hay que recalcularlos (una clase editada no puede quedar con bloques viejos).
+
+### Reprogramar una clase (una sola transacción)
+
+`reprogramarClase` recalcula los bloques con los datos nuevos, lee los bloques
+nuevos, aborta si alguno lo ocupa **otra** clase, borra los viejos que ya no se
+usan, escribe los nuevos y actualiza la clase. Un bloque nuevo que ya pertenece
+a esta misma clase no es conflicto: mover una clase sobre sus propios huecos es
+válido (si no, se chocaría consigo misma).
 
 ### Costo dentro del free tier
 

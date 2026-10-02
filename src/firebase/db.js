@@ -31,9 +31,27 @@ import {
   runTransaction,
   where,
 } from 'firebase/firestore'
+import { CATEGORIAS } from '../lib/agenda.js'
 
 /** Granularidad de la ocupación: 30 minutos. Ver docs/modelo-datos.md §4.1. */
 export const MINUTOS_BLOQUE = 30
+
+/** Categorías válidas de una clase. Ver docs/modelo-datos.md §4. */
+export { CATEGORIAS }
+
+/** Estados en los que la clase ya está cerrada y no admite más asistencia. */
+const ESTADOS_CERRADOS = ['pendiente_cobro', 'cobrada', 'cancelada']
+
+/** Estados de asistencia admitidos (la regla de ausencia justificada queda sin definir). */
+const ESTADOS_ASISTENCIA = ['presente', 'ausente']
+
+function validarCategoria(categoria) {
+  if (categoria != null && !CATEGORIAS.includes(categoria)) {
+    throw new ClaseInvalidaError(
+      `Categoría inválida "${categoria}". Permitidas: ${CATEGORIAS.join(', ')}`,
+    )
+  }
+}
 
 const RE_HHMM = /^([01]\d|2[0-3]):([0-5]\d)$/
 const RE_FECHA = /^\d{4}-\d{2}-\d{2}$/
@@ -190,6 +208,19 @@ export async function getCanchas(db, tenantId, sedeId) {
 }
 
 /**
+ * Profesores activos de una academia. Acotado por tenant + limit. Orden
+ * client-side por nombre (evita un índice compuesto).
+ */
+export async function getProfesores(db, tenantId) {
+  const q = query(collection(db, 'academias', tenantId, 'profesores'), limit(50))
+  const snap = await getDocs(q)
+  return snap.docs
+    .map((d) => ({ id: d.id, ...d.data() }))
+    .filter((profesor) => profesor.activo !== false)
+    .sort((a, b) => String(a.nombre ?? '').localeCompare(String(b.nombre ?? '')))
+}
+
+/**
  * Clases de una sede en UNA fecha, ordenadas por hora. Acotado por
  * tenant + sede + fecha (+ limit). Usa el índice compuesto
  * `clases: sedeId + fecha + horaInicio` de firestore.indexes.json.
@@ -226,6 +257,7 @@ export async function crearClase(db, tenantId, datos, opciones = {}) {
       `Solo se admiten clases "variable"; las series fijas (tipo "${datos.tipo}") están sin definir`,
     )
   }
+  validarCategoria(datos.categoria)
 
   const bloques = bloquesDeClase(datos)
   const claseRef = claseId
@@ -236,6 +268,7 @@ export async function crearClase(db, tenantId, datos, opciones = {}) {
     tipo: 'variable',
     serieId: null,
     estado: 'reservada',
+    categoria: datos.categoria ?? null,
     asistencias: [],
     alumnos: datos.alumnos ?? [],
     alumnoNombres: datos.alumnoNombres ?? [],
@@ -302,6 +335,148 @@ export async function cancelarClase(db, tenantId, claseId, opciones = {}) {
   })
 
   return { claseId, estado: 'cancelada' }
+}
+
+/**
+ * Reprograma una clase en UNA transacción: libera los bloques viejos y ocupa
+ * los nuevos, abortando si algún bloque nuevo ya lo ocupa OTRA clase. Los
+ * bloques que ya son de la propia clase no cuentan como conflicto (mover una
+ * clase sobre sus propios huecos es válido).
+ *
+ * `nuevoCambio` trae solo los campos a cambiar (fecha, horaInicio, horaFin,
+ * canchaId, sedeId, profesorId, …). Los que no vengan se conservan.
+ */
+export async function reprogramarClase(db, tenantId, claseId, nuevoCambio = {}, opciones = {}) {
+  const { uid = null, now = new Date() } = opciones
+  const claseRef = refClase(db, tenantId, claseId)
+
+  if (nuevoCambio.tipo && nuevoCambio.tipo !== 'variable') {
+    throw new ClaseInvalidaError(
+      `Solo se admiten clases "variable"; las series fijas (tipo "${nuevoCambio.tipo}") están sin definir`,
+    )
+  }
+  validarCategoria(nuevoCambio.categoria)
+
+  await runTransaction(db, async (tx) => {
+    const snap = await tx.get(claseRef)
+    if (!snap.exists()) throw new ClaseInvalidaError(`La clase ${claseId} no existe`)
+    const datos = snap.data()
+
+    const campo = (clave, fallback) =>
+      nuevoCambio[clave] !== undefined ? nuevoCambio[clave] : (datos[clave] ?? fallback)
+
+    const futura = {
+      sedeId: campo('sedeId'),
+      canchaId: campo('canchaId'),
+      profesorId: campo('profesorId'),
+      fecha: campo('fecha'),
+      horaInicio: campo('horaInicio'),
+      horaFin: campo('horaFin'),
+    }
+    const bloquesNuevos = bloquesDeClase(futura)
+    const bloquesViejos = datos.bloques ?? []
+
+    // Todas las lecturas antes de cualquier escritura.
+    const snaps = await Promise.all(
+      bloquesNuevos.map((b) => tx.get(refBloque(db, tenantId, b.id))),
+    )
+    const ocupado = bloquesNuevos.find(
+      (b, i) => snaps[i].exists() && snaps[i].data().claseId !== claseId,
+    )
+    if (ocupado) throw new SolapamientoError(ocupado)
+
+    const idsNuevos = new Set(bloquesNuevos.map((b) => b.id))
+    for (const bloqueId of bloquesViejos) {
+      if (!idsNuevos.has(bloqueId)) tx.delete(refBloque(db, tenantId, bloqueId))
+    }
+    for (const [indice, bloque] of bloquesNuevos.entries()) {
+      // Si ya existe y es de esta misma clase, no hace falta reescribirlo.
+      if (!snaps[indice].exists()) {
+        tx.set(refBloque(db, tenantId, bloque.id), {
+          ...bloque.data,
+          claseId,
+          creadoPor: uid,
+          creadoEn: Timestamp.fromDate(now),
+        })
+      }
+    }
+
+    const cambios = {
+      bloques: bloquesNuevos.map((b) => b.id),
+      actualizadoPor: uid,
+      actualizadoEn: Timestamp.fromDate(now),
+    }
+    for (const clave of [
+      'sedeId',
+      'sedeNombre',
+      'canchaId',
+      'profesorId',
+      'profesorNombre',
+      'fecha',
+      'horaInicio',
+      'horaFin',
+      'cupo',
+      'alumnos',
+      'alumnoNombres',
+      'categoria',
+    ]) {
+      if (nuevoCambio[clave] !== undefined) cambios[clave] = nuevoCambio[clave]
+    }
+    tx.update(claseRef, cambios)
+  })
+
+  return { claseId }
+}
+
+/**
+ * Registra la asistencia de una clase (embebida en el documento, §4) y la deja
+ * en "pendiente de cobro" en la misma escritura.
+ *
+ * La regla de negocio de la ausencia justificada (clase de recuperación vs
+ * nota de crédito) está SIN DEFINIR: acá solo se guarda Presente/Ausente y un
+ * motivo opcional. Tampoco se generan cargos ni liquidación al profesor,
+ * porque el modelo no documenta ese cierre (ver reporte).
+ */
+export async function registrarAsistencia(db, tenantId, claseId, asistencias, opciones = {}) {
+  const { uid = null, now = new Date() } = opciones
+  if (!Array.isArray(asistencias)) {
+    throw new ClaseInvalidaError('asistencias debe ser un arreglo')
+  }
+  const normalizadas = asistencias.map((registro) => {
+    if (!registro?.alumnoId) throw new ClaseInvalidaError('Cada asistencia necesita alumnoId')
+    if (!ESTADOS_ASISTENCIA.includes(registro.estado)) {
+      throw new ClaseInvalidaError(
+        `Estado de asistencia inválido "${registro.estado}". Permitidos: ${ESTADOS_ASISTENCIA.join(', ')}`,
+      )
+    }
+    return {
+      alumnoId: registro.alumnoId,
+      estado: registro.estado,
+      motivo: registro.motivo ?? null,
+      registradoPor: uid,
+      registradoEn: Timestamp.fromDate(now),
+    }
+  })
+
+  const claseRef = refClase(db, tenantId, claseId)
+  await runTransaction(db, async (tx) => {
+    const snap = await tx.get(claseRef)
+    if (!snap.exists()) throw new ClaseInvalidaError(`La clase ${claseId} no existe`)
+    if (ESTADOS_CERRADOS.includes(snap.data().estado)) {
+      throw new ClaseInvalidaError(
+        `La clase ${claseId} ya está cerrada (estado "${snap.data().estado}")`,
+      )
+    }
+
+    tx.update(claseRef, {
+      asistencias: normalizadas,
+      estado: 'pendiente_cobro',
+      actualizadoPor: uid,
+      actualizadoEn: Timestamp.fromDate(now),
+    })
+  })
+
+  return { claseId, estado: 'pendiente_cobro' }
 }
 
 /** Lee una clase. 1 lectura. */
