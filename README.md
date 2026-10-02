@@ -106,7 +106,7 @@ definir las variables en el entorno de deploy).
 src/
   firebase/     config.js (init + emuladores) y db.js (ÚNICA capa de datos)
   context/      AuthContext.jsx
-  pages/        Login, Dashboard
+  pages/        Login, Home, Agenda
   components/   ProtectedRoute
 scripts/
   seed.mjs      tenant de ensayo por REST contra el emulador

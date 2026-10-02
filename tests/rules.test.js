@@ -51,6 +51,8 @@ const UID = {
   inactivoT1: 'uid-inactivo-t1',
   dual: 'uid-dual',
   adminT2: 'uid-admin-t2',
+  // Autenticado, pero sin documento de membresía en ningún tenant.
+  sinMembresia: 'uid-sin-membresia',
 }
 
 const FECHA = '2026-10-05'
@@ -397,6 +399,89 @@ describe('6. Admin conserva lectura y escritura de fichas y facturación', () =>
         tipo: 'cancha',
         sedeId: 'traki',
         canchaId: 'c1',
+      }),
+    )
+  })
+})
+
+describe('7. Membresías: quién puede escribirlas y para quién', () => {
+  const miembro = (uid, rol) => ({ uid, rol, activo: true, nombre: uid, creadoEn: null })
+
+  it('usuario autenticado SIN membresía CREA su propia membresía en t1 → DENY', async () => {
+    await assertFails(
+      setDoc(
+        doc(as(UID.sinMembresia), 'academias', T1, 'miembros', UID.sinMembresia),
+        miembro(UID.sinMembresia, 'administrador'),
+      ),
+    )
+  })
+
+  it('profesor de t1 ACTUALIZA su propio rol a administrador → DENY', async () => {
+    await assertFails(
+      updateDoc(doc(as(UID.profT1), 'academias', T1, 'miembros', UID.profT1), {
+        rol: 'administrador',
+      }),
+    )
+  })
+
+  it('alumno_adulto de t1 ACTUALIZA su propia membresía (activo) → DENY', async () => {
+    await assertFails(
+      updateDoc(doc(as(UID.alumnoT1), 'academias', T1, 'miembros', UID.alumnoT1), {
+        activo: false,
+      }),
+    )
+  })
+
+  it('profesor de t1 CREA la membresía de OTRO usuario → DENY', async () => {
+    await assertFails(
+      setDoc(
+        doc(as(UID.profT1), 'academias', T1, 'miembros', 'uid-ajeno-creado'),
+        miembro('uid-ajeno-creado', 'administrador'),
+      ),
+    )
+  })
+
+  it('profesor de t1 ACTUALIZA la membresía de OTRO usuario → DENY', async () => {
+    await assertFails(
+      updateDoc(doc(as(UID.profT1), 'academias', T1, 'miembros', UID.alumnoT1), {
+        activo: false,
+      }),
+    )
+  })
+
+  it('profesor de t1 LISTA por collectionGroup las membresías de OTRO (where uid == otro) → DENY', async () => {
+    const q = query(collectionGroup(as(UID.profT1), 'miembros'), where('uid', '==', UID.adminT1))
+    await assertFails(getDocs(q))
+  })
+
+  it('profesor de t1 LISTA por collectionGroup SÓLO su propia membresía (where uid == su uid) → ALLOW', async () => {
+    const q = query(collectionGroup(as(UID.profT1), 'miembros'), where('uid', '==', UID.profT1))
+    const snap = await assertSucceeds(getDocs(q))
+    assert.equal(snap.docs.length, 1)
+  })
+
+  it('administrador de t1 CREA una membresía en t1 → ALLOW', async () => {
+    await assertSucceeds(
+      setDoc(
+        doc(as(UID.adminT1), 'academias', T1, 'miembros', 'uid-nuevo-t1'),
+        miembro('uid-nuevo-t1', 'profesor'),
+      ),
+    )
+  })
+
+  it('administrador de t1 CREA una membresía en t2 → DENY (otro tenant)', async () => {
+    await assertFails(
+      setDoc(
+        doc(as(UID.adminT1), 'academias', T2, 'miembros', 'uid-nuevo-t2'),
+        miembro('uid-nuevo-t2', 'administrador'),
+      ),
+    )
+  })
+
+  it('administrador de t1 ACTUALIZA una membresía de t1 → ALLOW', async () => {
+    await assertSucceeds(
+      updateDoc(doc(as(UID.adminT1), 'academias', T1, 'miembros', UID.alumnoT1), {
+        activo: false,
       }),
     )
   })
