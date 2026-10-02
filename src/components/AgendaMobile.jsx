@@ -15,6 +15,7 @@ export default function AgendaMobile({
   clases,
   totalClases,
   onSelectClase,
+  puedeReservar,
   onNuevaReserva,
 }) {
   const semana = diasDeSemana(fecha)
@@ -58,7 +59,8 @@ export default function AgendaMobile({
               type="button"
               key={iso}
               className={clasesBoton}
-              aria-label={iso}
+              aria-label={formatearFechaLarga(iso)}
+              aria-current={iso === hoy ? 'date' : undefined}
               aria-pressed={iso === fecha}
               onClick={() => onSeleccionarFecha(iso)}
             >
@@ -106,9 +108,11 @@ export default function AgendaMobile({
             {canchaSel?.nombre ?? ''} · {sede?.nombre ?? ''}
           </span>
         </div>
-        <button type="button" className="btn-cta" onClick={onNuevaReserva}>
-          Nueva reserva
-        </button>
+        {puedeReservar ? (
+          <button type="button" className="btn-cta" onClick={onNuevaReserva}>
+            Nueva reserva
+          </button>
+        ) : null}
       </div>
     </>
   )

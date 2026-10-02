@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from 'react'
+import { useCallback, useEffect, useMemo, useState } from 'react'
 import { useParams } from 'react-router-dom'
 import AgendaMobile from '../components/AgendaMobile'
 import Background from '../components/Background'
@@ -34,7 +34,7 @@ export default function Agenda() {
 
   const [mes, setMes] = useState(hoy)
   const [canchaId, setCanchaId] = useState(null)
-  const [claseSel, setClaseSel] = useState(null)
+  const [claseSelId, setClaseSelId] = useState(null)
   const [mostrarForm, setMostrarForm] = useState(false)
   const [claseEdit, setClaseEdit] = useState(null)
   const [rol, setRol] = useState(null)
@@ -53,6 +53,22 @@ export default function Agenda() {
     }
   }, [academia, user.uid])
 
+  const esAdmin = rol === 'administrador'
+
+  /*
+   * El detalle se DERIVA de la lectura del día (igual que hace useAgenda con
+   * `cargando`), no se guarda una copia del objeto. Así, tras cualquier
+   * refresh —crear, reprogramar, cancelar, asistencia— la hoja abierta refleja
+   * el estado nuevo sin cerrarse, y una clase recién reservada se abre sola
+   * en cuanto la lectura del día la trae.
+   */
+  const claseSel = useMemo(
+    () => (claseSelId ? (clases.find((c) => c.id === claseSelId) ?? null) : null),
+    [clases, claseSelId],
+  )
+  const seleccionarClase = useCallback((c) => setClaseSelId(c.id), [])
+  const cerrarDetalle = useCallback(() => setClaseSelId(null), [])
+
   const sede = useMemo(
     () => sedes?.find((s) => s.id === sedeId) ?? sedes?.[0] ?? null,
     [sedes, sedeId],
@@ -64,7 +80,7 @@ export default function Agenda() {
     setSedeId(id)
     const nueva = sedes?.find((s) => s.id === id)
     setCanchaId(nueva?.canchas?.[0]?.id ?? null)
-    setClaseSel(null)
+    setClaseSelId(null)
     setMostrarForm(false)
   }
 
@@ -72,32 +88,34 @@ export default function Agenda() {
     const destino = sumarDias(fecha, delta)
     setFecha(destino)
     setMes(destino)
-    setClaseSel(null)
+    setClaseSelId(null)
     setMostrarForm(false)
   }
 
   function irHoy() {
     setFecha(hoy)
     setMes(hoy)
-    setClaseSel(null)
+    setClaseSelId(null)
     setMostrarForm(false)
   }
 
   function elegirFecha(iso) {
     setFecha(iso)
     setMes(iso)
-    setClaseSel(null)
+    setClaseSelId(null)
     setMostrarForm(false)
   }
 
   function abrirFormulario() {
-    setClaseSel(null)
+    if (!esAdmin) return
+    setClaseSelId(null)
     setClaseEdit(null)
     setMostrarForm(true)
   }
 
   function abrirReprogramar(clase) {
-    setClaseSel(null)
+    if (!esAdmin) return
+    setClaseSelId(null)
     setClaseEdit(clase)
     setMostrarForm(true)
   }
@@ -107,9 +125,11 @@ export default function Agenda() {
     setClaseEdit(null)
   }
 
-  function alCrear() {
+  function alCrear(claseId) {
     setMostrarForm(false)
     setClaseEdit(null)
+    // La hoja de detalle se abre sola sobre la clase recién reservada.
+    if (claseId) setClaseSelId(claseId)
     recargar()
   }
 
@@ -149,7 +169,6 @@ export default function Agenda() {
       : clases.length === 0
         ? 'Sin clases para este día.'
         : null
-  const cerrar = () => setClaseSel(null)
 
   if (!esDesktop) {
     return (
@@ -168,7 +187,8 @@ export default function Agenda() {
           onCancha={setCanchaId}
           clases={clases}
           totalClases={clases.filter((c) => c.canchaId === canchaSel?.id).length}
-          onSelectClase={setClaseSel}
+          onSelectClase={seleccionarClase}
+          puedeReservar={esAdmin}
           onNuevaReserva={abrirFormulario}
         />
         {claseSel ? (
@@ -179,12 +199,12 @@ export default function Agenda() {
             sedeNombre={sede?.nombre}
             tenantId={academia}
             rol={rol}
-            onClose={cerrar}
+            onClose={cerrarDetalle}
             onChanged={recargar}
             onReprogramar={abrirReprogramar}
           />
         ) : null}
-        {mostrarForm ? (
+        {mostrarForm && esAdmin ? (
           <NuevaReserva
             key={claseEdit?.id ?? "nueva"}
             tenantId={academia}
@@ -214,6 +234,7 @@ export default function Agenda() {
           hoy={hoy}
           onSeleccionarFecha={elegirFecha}
           onCambiarMes={cambiarMes}
+          puedeReservar={esAdmin}
           onNuevaReserva={abrirFormulario}
         />
 
@@ -231,7 +252,7 @@ export default function Agenda() {
 
           {aviso ? <Aviso>{aviso}</Aviso> : null}
 
-          <TimeGrid canchas={canchas} clases={clases} escala={1} onSelect={setClaseSel} />
+          <TimeGrid canchas={canchas} clases={clases} escala={1} onSelect={seleccionarClase} />
 
           {claseSel ? (
             <DetailSheet
@@ -241,13 +262,13 @@ export default function Agenda() {
               sedeNombre={sede?.nombre}
               tenantId={academia}
               rol={rol}
-              onClose={cerrar}
+              onClose={cerrarDetalle}
               onChanged={recargar}
               onReprogramar={abrirReprogramar}
             />
           ) : null}
 
-          {mostrarForm ? (
+          {mostrarForm && esAdmin ? (
             <NuevaReserva
               key={claseEdit?.id ?? "nueva"}
               tenantId={academia}

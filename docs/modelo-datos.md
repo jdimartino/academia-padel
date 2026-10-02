@@ -181,7 +181,7 @@ sin solapamientos.
 | `cupo` | number | |
 | `alumnos` | string[] | IDs de alumnos |
 | `asistencias` | map[] | `[{alumnoId, estado, motivo, registradoPor, registradoEn}]` |
-| `estado` | string | `reservada` → `ejecutada` → `pendiente_cobro` → `cobrada`; también `cancelada` |
+| `estado` | string | `reservada` → `pendiente_cobro` → `cobrada`; también `cancelada`. `ejecutada` sigue existiendo en el enum pero el cierre por asistencia va directo a `pendiente_cobro`. |
 | `sedeNombre` | string | Denormalizado |
 | `profesorNombre` | string | Denormalizado |
 | `alumnoNombres` | string[] | Denormalizado (solo UI) |
@@ -202,12 +202,15 @@ con `cupo <= 1` se muestra como **Individual** y con `cupo >= 2` como
 `categoria` es `null`). No confundir con `tipo` (`fija` | `variable`).
 
 **Cierre por asistencia:** `registrarAsistencia` escribe `asistencias` y pasa la
-clase a `pendiente_cobro` en una sola transacción. La generación del `cargo`
-del alumno y de la liquidación del profesor **no** está documentada como parte
-de ese cierre (ver §5 "Sin definir"), así que no se ejecuta todavía. La regla de
-negocio de la ausencia justificada (clase de recuperación vs nota de crédito)
-también está **sin definir**: `asistencias` solo guarda `presente`/`ausente` y
-un `motivo` opcional.
+clase a `pendiente_cobro` en una sola transacción. **La generación del `cargo` del
+alumno y de la liquidación del profesor NO forma parte de ese cierre** (ver §5
+"Sin definir"), así que no se ejecuta todavía. La regla de negocio de la ausencia
+justificada (clase de recuperación vs nota de crédito) también está **sin
+definir**: `asistencias` solo guarda `presente`/`ausente` y un `motivo` opcional.
+
+**Cobrar (o no) a los alumnos ausentes está SIN DEFINIR.** El código no crea
+`cargos` ni toca el saldo de nadie al registrar la asistencia: la clase queda en
+`pendiente_cobro` y el cobro es un paso posterior, manual, por definir.
 
 **No solapamiento:** es una regla de **negocio** y se valida en la capa de
 escritura (`src/firebase/db.js`), porque Firestore no tiene constraints únicos
@@ -217,16 +220,22 @@ deterministas dentro de una transacción. Ver §4.1.
 ### Estados de la clase
 
 ```
-reservada ──(asistencia)──▶ ejecutada ──▶ pendiente_cobro ──▶ cobrada
+reservada ──(asistencia)──▶ pendiente_cobro ──▶ cobrada
     │
     └──▶ cancelada
 ```
 
-- `reservada`: creada, todavía no pasó.
-- `ejecutada`: se registró asistencia (Presente/Ausente con motivo).
-- `pendiente_cobro`: se generó el cargo (automático o manual).
-- `cobrada`: el pago asociado fue aprobado.
+- `reservada`: creada, todavía no pasó. *Único estado en el que se puede
+  reprogramar o cancelar.*
+- `pendiente_cobro`: **la asistencia ya quedó registrada** y la clase está
+  cerrada para edición. `registrarAsistencia` salta directo aquí (no pasa por
+  `ejecutada`). El `cargo` del alumno **no** se genera en este paso: queda sin
+  definir (ver arriba y §5).
+- `cobrada`: el pago asociado fue aprobado. *Sin definir.*
 - `cancelada`: no se dictó. *Sin definir si una cancelada genera cargo o no.*
+
+`ejecutada` permanece en el enum de `src/lib/agenda.js` por compatibilidad, pero
+hoy ningún flujo la escribe.
 
 ---
 
@@ -469,6 +478,10 @@ publicarse.
 - **Reparto exacto de permisos entre `administrador` y "recepción"** (decisión 6:
   recepción es un admin reducido, pero *qué* quita todavía no está escrito).
 - Generación y cobro de una clase cancelada.
+- **Cobro de alumnos ausentes** tras registrar la asistencia: si el ausente
+  genera cargo, si el presente lo salta, o si la ausencia justificada habilita
+  recuperación/nota de crédito. `registrarAsistencia` solo deja la clase en
+  `pendiente_cobro`; no crea cargos ni toca saldos.
 - Cuándo y cómo se habilita Cloud Storage para subir comprobantes (decisión 5:
   el MVP no los sube).
 - Liquidación de profesores (cálculo) y su periodicidad.

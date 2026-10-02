@@ -17,6 +17,7 @@ export default function Sidebar({
   hoy,
   onSeleccionarFecha,
   onCambiarMes,
+  puedeReservar,
   onNuevaReserva,
 }) {
   return (
@@ -26,9 +27,11 @@ export default function Sidebar({
         <span className="sidebar__titulo">Academia Pádel</span>
       </div>
 
-      <button type="button" className="btn-cta" onClick={onNuevaReserva}>
-        Nueva reserva
-      </button>
+      {puedeReservar ? (
+        <button type="button" className="btn-cta" onClick={onNuevaReserva}>
+          Nueva reserva
+        </button>
+      ) : null}
 
       <MiniCalendar
         mes={mes}

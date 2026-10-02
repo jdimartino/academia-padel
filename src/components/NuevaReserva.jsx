@@ -137,17 +137,26 @@ export default function NuevaReserva({
         cupo: modalidad === 'Individual' ? 1 : 4,
         categoria: categoria || null,
       }
+      let claseId
       if (esEdicion) {
-        await reprogramarClase(db, tenantId, clase.id, datos, { uid: user?.uid ?? null })
+        const resultado = await reprogramarClase(
+          db,
+          tenantId,
+          clase.id,
+          datos,
+          { uid: user?.uid ?? null },
+        )
+        claseId = resultado.claseId
       } else {
-        await crearClase(
+        const resultado = await crearClase(
           db,
           tenantId,
           { ...datos, alumnos: [], alumnoNombres: [] },
           { uid: user?.uid ?? null },
         )
+        claseId = resultado.claseId
       }
-      onCreated()
+      onCreated(claseId)
     } catch (err) {
       setError(err.message)
     } finally {

@@ -1,5 +1,5 @@
 import { ChevronLeft, ChevronRight } from './Icons'
-import { DIAS_CORTOS, nombreMes, semanasDelMes } from '../lib/fechas'
+import { DIAS_CORTOS, formatearFechaLarga, nombreMes, semanasDelMes } from '../lib/fechas'
 
 export default function MiniCalendar({ mes, fecha, hoy, onSeleccionar, onCambiarMes }) {
   const dias = semanasDelMes(mes)
@@ -51,7 +51,8 @@ export default function MiniCalendar({ mes, fecha, hoy, onSeleccionar, onCambiar
               type="button"
               key={iso}
               className={clases}
-              aria-label={iso}
+              aria-label={formatearFechaLarga(iso)}
+              aria-current={iso === hoy ? 'date' : undefined}
               aria-pressed={iso === fecha}
               onClick={() => onSeleccionar(iso)}
             >

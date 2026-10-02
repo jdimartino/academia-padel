@@ -54,6 +54,7 @@ export default function DetailSheet({
   )
   const [error, setError] = useState('')
   const [ocupado, setOcupado] = useState(false)
+  const [confirmando, setConfirmando] = useState(false)
 
   function cambiarAsistencia(alumnoId, cambios) {
     setAsistencias((prev) => ({ ...prev, [alumnoId]: { ...prev[alumnoId], ...cambios } }))
@@ -69,8 +70,9 @@ export default function DetailSheet({
         motivo: asistencias[alumno.id]?.motivo || null,
       }))
       await registrarAsistencia(db, tenantId, clase.id, registros, { uid: user?.uid ?? null })
+      // La hoja queda abierta: el refresh trae el estado nuevo y la propia
+      // clase ya no ofrece asistencia (quedó en pendiente_cobro).
       onChanged?.()
-      onClose()
     } catch (err) {
       setError(err.message)
     } finally {
@@ -79,7 +81,6 @@ export default function DetailSheet({
   }
 
   async function cancelar() {
-    if (!window.confirm('¿Cancelar esta clase? Se libera el horario.')) return
     setError('')
     setOcupado(true)
     try {
@@ -88,6 +89,7 @@ export default function DetailSheet({
       onClose()
     } catch (err) {
       setError(err.message)
+      setConfirmando(false)
     } finally {
       setOcupado(false)
     }
@@ -204,9 +206,33 @@ export default function DetailSheet({
         </button>
       ) : null}
       {puedeCancelar ? (
-        <button type="button" className="btn btn--secondary" disabled={ocupado} onClick={cancelar}>
-          Cancelar clase
-        </button>
+        confirmando ? (
+          <div className="confirm-box">
+            <p className="confirm-box__texto">
+              ¿Cancelar esta clase? Se libera el horario y el profesor queda disponible.
+            </p>
+            <button type="button" className="btn" disabled={ocupado} onClick={cancelar}>
+              {ocupado ? 'Cancelando…' : 'Sí, cancelar la clase'}
+            </button>
+            <button
+              type="button"
+              className="btn btn--secondary"
+              disabled={ocupado}
+              onClick={() => setConfirmando(false)}
+            >
+              No, volver
+            </button>
+          </div>
+        ) : (
+          <button
+            type="button"
+            className="btn btn--secondary"
+            disabled={ocupado}
+            onClick={() => setConfirmando(true)}
+          >
+            Cancelar clase
+          </button>
+        )
       ) : null}
     </aside>
   )
