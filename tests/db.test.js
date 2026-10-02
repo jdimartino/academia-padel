@@ -12,7 +12,7 @@ import assert from 'node:assert/strict'
 import { readFileSync } from 'node:fs'
 import { after, before, beforeEach, describe, it } from 'node:test'
 import { initializeTestEnvironment } from '@firebase/rules-unit-testing'
-import { doc, getDoc } from 'firebase/firestore'
+import { doc, getDoc, setDoc } from 'firebase/firestore'
 import {
   MINUTOS_BLOQUE,
   SolapamientoError,
@@ -22,6 +22,7 @@ import {
   getCanchas,
   getClase,
   getClasesDeSedePorFecha,
+  getProfesores,
   getSedes,
   registrarAsistencia,
   reprogramarClase,
@@ -246,6 +247,18 @@ describe('lecturas de agenda', () => {
     assert.deepEqual(
       canchas.map((c) => c.id),
       ['c1'],
+    )
+  })
+
+  it('getProfesores devuelve solo los profesores activos', async () => {
+    await setDoc(doc(adminDb, 'academias', T1, 'profesores', 'p2'), {
+      nombre: 'Inactivo',
+      activo: false,
+    })
+    const profesores = await getProfesores(adminDb, T1)
+    assert.deepEqual(
+      profesores.map((p) => p.id),
+      ['p1'],
     )
   })
 

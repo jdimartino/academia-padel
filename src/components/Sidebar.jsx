@@ -17,6 +17,7 @@ export default function Sidebar({
   hoy,
   onSeleccionarFecha,
   onCambiarMes,
+  onNuevaReserva,
 }) {
   return (
     <aside className="sidebar glass">
@@ -25,7 +26,7 @@ export default function Sidebar({
         <span className="sidebar__titulo">Academia Pádel</span>
       </div>
 
-      <button type="button" className="btn-cta" disabled title="Disponible próximamente">
+      <button type="button" className="btn-cta" onClick={onNuevaReserva}>
         Nueva reserva
       </button>
 

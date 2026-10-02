@@ -15,6 +15,7 @@ export default function AgendaMobile({
   clases,
   totalClases,
   onSelectClase,
+  onNuevaReserva,
 }) {
   const semana = diasDeSemana(fecha)
   const canchaSel = canchas.find((c) => c.id === canchaId) ?? canchas[0]
@@ -105,7 +106,7 @@ export default function AgendaMobile({
             {canchaSel?.nombre ?? ''} · {sede?.nombre ?? ''}
           </span>
         </div>
-        <button type="button" className="btn-cta" disabled title="Disponible próximamente">
+        <button type="button" className="btn-cta" onClick={onNuevaReserva}>
           Nueva reserva
         </button>
       </div>

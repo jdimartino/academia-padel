@@ -4,6 +4,7 @@ import AgendaMobile from '../components/AgendaMobile'
 import Background from '../components/Background'
 import DetailSheet from '../components/DetailSheet'
 import EstadoMensaje from '../components/EstadoMensaje'
+import NuevaReserva from '../components/NuevaReserva'
 import Sidebar from '../components/Sidebar'
 import TimeGrid from '../components/TimeGrid'
 import { ChevronLeft, ChevronRight } from '../components/Icons'
@@ -24,11 +25,13 @@ export default function Agenda() {
   const esDesktop = useMediaQuery('(min-width: 1024px)')
   const hoy = hoyISO()
 
-  const { sedes, sedeId, setSedeId, fecha, setFecha, clases, cargando, error } = useAgenda(academia)
+  const { sedes, sedeId, setSedeId, fecha, setFecha, clases, cargando, error, recargar } =
+    useAgenda(academia)
 
   const [mes, setMes] = useState(hoy)
   const [canchaId, setCanchaId] = useState(null)
   const [claseSel, setClaseSel] = useState(null)
+  const [mostrarForm, setMostrarForm] = useState(false)
 
   const sede = useMemo(
     () => sedes?.find((s) => s.id === sedeId) ?? sedes?.[0] ?? null,
@@ -42,6 +45,7 @@ export default function Agenda() {
     const nueva = sedes?.find((s) => s.id === id)
     setCanchaId(nueva?.canchas?.[0]?.id ?? null)
     setClaseSel(null)
+    setMostrarForm(false)
   }
 
   function irA(delta) {
@@ -49,18 +53,31 @@ export default function Agenda() {
     setFecha(destino)
     setMes(destino)
     setClaseSel(null)
+    setMostrarForm(false)
   }
 
   function irHoy() {
     setFecha(hoy)
     setMes(hoy)
     setClaseSel(null)
+    setMostrarForm(false)
   }
 
   function elegirFecha(iso) {
     setFecha(iso)
     setMes(iso)
     setClaseSel(null)
+    setMostrarForm(false)
+  }
+
+  function abrirFormulario() {
+    setClaseSel(null)
+    setMostrarForm(true)
+  }
+
+  function alCrear() {
+    setMostrarForm(false)
+    recargar()
   }
 
   function cambiarMes(delta) {
@@ -119,6 +136,7 @@ export default function Agenda() {
           clases={clases}
           totalClases={clases.filter((c) => c.canchaId === canchaSel?.id).length}
           onSelectClase={setClaseSel}
+          onNuevaReserva={abrirFormulario}
         />
         {claseSel ? (
           <DetailSheet
@@ -126,6 +144,17 @@ export default function Agenda() {
             canchas={canchas}
             sedeNombre={sede?.nombre}
             onClose={cerrar}
+          />
+        ) : null}
+        {mostrarForm ? (
+          <NuevaReserva
+            tenantId={academia}
+            sede={sede}
+            canchas={canchas}
+            fecha={fecha}
+            clases={clases}
+            onClose={() => setMostrarForm(false)}
+            onCreated={alCrear}
           />
         ) : null}
       </div>
@@ -145,6 +174,7 @@ export default function Agenda() {
           hoy={hoy}
           onSeleccionarFecha={elegirFecha}
           onCambiarMes={cambiarMes}
+          onNuevaReserva={abrirFormulario}
         />
 
         <main className="main">
@@ -169,6 +199,18 @@ export default function Agenda() {
               canchas={canchas}
               sedeNombre={sede?.nombre}
               onClose={cerrar}
+            />
+          ) : null}
+
+          {mostrarForm ? (
+            <NuevaReserva
+              tenantId={academia}
+              sede={sede}
+              canchas={canchas}
+              fecha={fecha}
+              clases={clases}
+              onClose={() => setMostrarForm(false)}
+              onCreated={alCrear}
             />
           ) : null}
         </main>

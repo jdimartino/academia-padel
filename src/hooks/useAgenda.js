@@ -16,6 +16,7 @@ export default function useAgenda(tenantId) {
   const [sedes, setSedes] = useState(null)
   const [clasesPorClave, setClasesPorClave] = useState({ clave: null, lista: [] })
   const [error, setError] = useState('')
+  const [version, setVersion] = useState(0)
 
   useEffect(() => {
     let activo = true
@@ -59,7 +60,7 @@ export default function useAgenda(tenantId) {
     return () => {
       activo = false
     }
-  }, [tenantId, sedeId, fecha, clave])
+  }, [tenantId, sedeId, fecha, clave, version])
 
   const clases = clasesPorClave.clave === clave ? clasesPorClave.lista : []
   const cargandoClases = clave !== null && clasesPorClave.clave !== clave && !error
@@ -73,5 +74,6 @@ export default function useAgenda(tenantId) {
     clases,
     cargando: sedes === null || cargandoClases,
     error,
+    recargar: () => setVersion((v) => v + 1),
   }
 }
