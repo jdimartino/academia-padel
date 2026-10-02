@@ -9,7 +9,7 @@
  * Uso:  npm run seed        (o  node scripts/seed.mjs)
  */
 
-import { bloquesDeClase } from '../src/firebase/db.js'
+import { bloquesDeClase, normalizarBusqueda, resolverAsignacion } from '../src/firebase/db.js'
 
 const PROJECT_ID = process.env.FIREBASE_PROJECT_ID ?? 'academia-padel-jdm'
 const EMULATOR_HOST = process.env.EMULATOR_HOST ?? '127.0.0.1'
@@ -106,15 +106,24 @@ function diaRelativo(dias) {
 async function crearClaseEnSeed(datos) {
   const bloques = bloquesDeClase(datos)
   const creadoEn = new Date()
+  const cupo = datos.cupo ?? 4
+  // Mismo camino de validación/denormalización que `asignarAlumnos` en la app:
+  // el seed no puede correr la transacción (escribe por REST con token owner),
+  // pero reusa `resolverAsignacion` con las fichas que acaba de escribir.
+  const { alumnos, alumnoNombres } = resolverAsignacion(
+    datos.alumnosIds ?? [],
+    ALUMNOS_POR_ID,
+    cupo,
+  )
   const clase = {
     tipo: 'variable',
     serieId: null,
     estado: datos.estado ?? 'reservada',
     categoria: datos.categoria ?? null,
     asistencias: datos.asistencias ?? [],
-    alumnos: datos.alumnos ?? [],
-    alumnoNombres: datos.alumnoNombres ?? [],
-    cupo: datos.cupo ?? 4,
+    alumnos,
+    alumnoNombres,
+    cupo,
     sedeId: datos.sedeId,
     sedeNombre: datos.sedeNombre ?? null,
     canchaId: datos.canchaId,
@@ -159,6 +168,64 @@ const SEDES = [
   { id: 'capital', nombre: 'Capital', canchas: 2 },
 ]
 
+/*
+ * Fichas de alumno de ensayo: un adulto, un menor con tutor y una inactiva
+ * (que el seed NUNCA asigna: `resolverAsignacion` la rechaza). Los datos de
+ * contacto son solo del administrador (ver firestore.rules).
+ */
+const ALUMNOS = [
+  {
+    id: 'a1',
+    tipo: 'adulto',
+    nombre: 'Aldo Adulto',
+    documento: 'V-10000001',
+    email: 'alumno@ensayo.test',
+    telefono: '+58 414 000 0001',
+    tutor: null,
+    sedes: ['traki'],
+    nivel: 'intermedio',
+    avisosActivos: true,
+    activo: true,
+    notas: '',
+  },
+  {
+    id: 'a2',
+    tipo: 'menor',
+    nombre: 'Marta Menor',
+    documento: 'V-20000002',
+    email: 'tutor@ensayo.test',
+    telefono: '+58 414 000 0002',
+    tutor: {
+      nombre: 'Teresa Tutora',
+      documento: 'V-30000003',
+      telefono: '+58 414 000 0003',
+      email: 'tutor@ensayo.test',
+      parentesco: 'madre',
+    },
+    sedes: ['traki', 'boleita'],
+    nivel: 'principiante',
+    avisosActivos: true,
+    activo: true,
+    notas: '',
+  },
+  {
+    id: 'a3',
+    tipo: 'adulto',
+    nombre: 'Nadia Inactiva',
+    documento: 'V-40000004',
+    email: null,
+    telefono: null,
+    tutor: null,
+    sedes: [],
+    nivel: null,
+    avisosActivos: false,
+    activo: false,
+    notas: 'Ficha de ensayo inactiva (no se asigna)',
+  },
+]
+
+const ALUMNOS_POR_ID = Object.fromEntries(ALUMNOS.map((alumno) => [alumno.id, alumno]))
+
 async function main() {
   console.log(`Seed del tenant "${TENANT}" en ${EMULATOR_HOST} (proyecto ${PROJECT_ID})…`)
 
@@ -200,11 +267,11 @@ async function main() {
   }
   console.log(`· ${SEDES.length} sedes y sus canchas`)
 
+  // La tarifa por hora queda SIN DEFINIR: no se escribe ningún campo de tarifa.
   await setDoc(`${tenant}/profesores/p1`, {
     nombre: 'Pablo Profesor',
     email: 'profe@ensayo.test',
     telefono: '+58 412 000 0001',
-    tarifaHoraCentavos: 1500,
     sedes: ['traki', 'boleita'],
     activo: true,
   })
@@ -212,41 +279,17 @@ async function main() {
     nombre: 'Paola Profesora',
     email: 'paola@ensayo.test',
     telefono: '+58 412 000 0002',
-    tarifaHoraCentavos: 1500,
     sedes: ['santa-rosa', 'capital'],
     activo: true,
   })
 
-  await setDoc(`${tenant}/alumnos/a1`, {
-    tipo: 'adulto',
-    nombre: 'Aldo Adulto',
-    documento: 'V-10000001',
-    email: 'alumno@ensayo.test',
-    telefono: '+58 414 000 0001',
-    tutor: null,
-    sedes: ['traki'],
-    nivel: 'intermedio',
-    activo: true,
-    notas: '',
-  })
-  await setDoc(`${tenant}/alumnos/a2`, {
-    tipo: 'menor',
-    nombre: 'Marta Menor',
-    documento: 'V-20000002',
-    email: 'tutor@ensayo.test',
-    telefono: '+58 414 000 0002',
-    tutor: {
-      nombre: 'Teresa Tutora',
-      documento: 'V-30000003',
-      telefono: '+58 414 000 0003',
-      email: 'tutor@ensayo.test',
-      parentesco: 'madre',
-    },
-    sedes: ['traki', 'boleita'],
-    nivel: 'principiante',
-    activo: true,
-    notas: '',
-  })
+  for (const alumno of ALUMNOS) {
+    const { id, ...ficha } = alumno
+    await setDoc(`${tenant}/alumnos/${id}`, {
+      ...ficha,
+      nombreBusqueda: normalizarBusqueda(ficha.nombre),
+    })
+  }
 
   await crearClaseEnSeed({
     id: 'c1',
@@ -260,8 +303,7 @@ async function main() {
     horaFin: '19:00',
     cupo: 4,
     categoria: '6a',
-    alumnos: ['a1'],
-    alumnoNombres: ['Aldo Adulto'],
+    alumnosIds: ['a1'],
     estado: 'reservada',
   })
 
@@ -279,11 +321,10 @@ async function main() {
     horaFin: '19:00',
     cupo: 4,
     categoria: '7a',
-    alumnos: ['a1', 'a2'],
-    alumnoNombres: ['Aldo Adulto', 'Marta Menor'],
+    alumnosIds: ['a1', 'a2'],
     asistencias: [
       { alumnoId: 'a1', estado: 'presente', motivo: null, registradoPor: 'seed', registradoEn: new Date() },
-      { alumnoId: 'a2', estado: 'ausente', motivo: 'enfermedad', registradoPor: 'seed', registradoEn: new Date() },
+      { alumnoId: 'a2', estado: 'ausente_sin_aviso', motivo: 'enfermedad', registradoPor: 'seed', registradoEn: new Date() },
     ],
     estado: 'pendiente_cobro',
   })

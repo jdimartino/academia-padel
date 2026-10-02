@@ -176,14 +176,14 @@ export default function DetailSheet({
                     </button>
                     <button
                       type="button"
-                      className={`chip-cancha${registro.estado === 'ausente' ? ' is-sel' : ''}`}
-                      aria-pressed={registro.estado === 'ausente'}
-                      onClick={() => cambiarAsistencia(alumno.id, { estado: 'ausente' })}
+                      className={`chip-cancha${registro.estado === 'ausente_sin_aviso' ? ' is-sel' : ''}`}
+                      aria-pressed={registro.estado === 'ausente_sin_aviso'}
+                      onClick={() => cambiarAsistencia(alumno.id, { estado: 'ausente_sin_aviso' })}
                     >
                       Ausente
                     </button>
                   </div>
-                  {registro.estado === 'ausente' ? (
+                  {registro.estado === 'ausente_sin_aviso' ? (
                     <input
                       className="form__input"
                       type="text"

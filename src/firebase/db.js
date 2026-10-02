@@ -44,8 +44,16 @@ export { CATEGORIAS }
 /** Estados en los que la clase ya está cerrada y no admite más asistencia. */
 const ESTADOS_CERRADOS = ['pendiente_cobro', 'cobrada', 'cancelada']
 
-/** Estados de asistencia admitidos (la regla de ausencia justificada queda sin definir). */
-const ESTADOS_ASISTENCIA = ['presente', 'ausente']
+/**
+ * Estados de asistencia admitidos. Los tres distinguen si la ausencia fue
+ * avisada: el sistema no recibe avisos, así que lo decide el administrador. La
+ * ventana de aviso (horas) es un parámetro por academia SIN DEFINIR: no se
+ * hardcodea. Ver docs/modelo-datos.md §4.
+ */
+export const ESTADOS_ASISTENCIA = ['presente', 'ausente_avisada', 'ausente_sin_aviso']
+
+/** Tipos de ficha de alumno. */
+export const TIPOS_ALUMNO = ['adulto', 'menor']
 
 function validarCategoria(categoria) {
   if (categoria != null && !CATEGORIAS.includes(categoria)) {
@@ -171,6 +179,42 @@ export function bloquesDeClase({ sedeId, canchaId, profesorId, fecha, horaInicio
     })
   }
   return bloques
+}
+
+/**
+ * Valida una lista de IDs de alumnos contra el cupo y las fichas ya leídas, y
+ * devuelve la asignación normalizada (`alumnos` + `alumnoNombres` denormalizado).
+ *
+ * Función PURA (sin Firestore): la usan la transacción de `crearClase`,
+ * `reprogramarClase` y `asignarAlumnos` con las fichas leídas dentro de la
+ * transacción, y el seed con las fichas que acaba de escribir. Así el seed
+ * asigna por el mismo camino que la app.
+ *
+ * Reglas: sin duplicados, todos existen, todos activos, cantidad <= cupo. Un
+ * cupo <= 1 es Individual (ver docs/modelo-datos.md §4).
+ */
+export function resolverAsignacion(alumnoIds, alumnosPorId, cupo) {
+  if (!Array.isArray(alumnoIds)) {
+    throw new ClaseInvalidaError('alumnos debe ser un arreglo de IDs')
+  }
+  const limite = Number.isFinite(cupo) ? cupo : 0
+  if (new Set(alumnoIds).size !== alumnoIds.length) {
+    throw new ClaseInvalidaError('No se admiten alumnos duplicados en una clase')
+  }
+  if (alumnoIds.length > limite) {
+    throw new ClaseInvalidaError(
+      `La clase admite ${limite} alumno(s) (cupo) y se intentaron asignar ${alumnoIds.length}`,
+    )
+  }
+  const alumnoNombres = alumnoIds.map((alumnoId) => {
+    const ficha = alumnosPorId?.[alumnoId]
+    if (!ficha) throw new ClaseInvalidaError(`El alumno ${alumnoId} no existe`)
+    if (ficha.activo === false) {
+      throw new ClaseInvalidaError(`El alumno ${alumnoId} no está activo`)
+    }
+    return ficha.nombre ?? ''
+  })
+  return { alumnos: [...alumnoIds], alumnoNombres }
 }
 
 /* --------------------------------------------------------------------- */
@@ -456,34 +500,50 @@ export async function crearClase(db, tenantId, datos, opciones = {}) {
     ? refClase(db, tenantId, claseId)
     : doc(collection(db, 'academias', tenantId, 'clases'))
 
-  const clase = {
-    tipo: 'variable',
-    serieId: null,
-    estado: 'reservada',
-    categoria: datos.categoria ?? null,
-    asistencias: [],
-    alumnos: datos.alumnos ?? [],
-    alumnoNombres: datos.alumnoNombres ?? [],
-    cupo: datos.cupo ?? 4,
-    sedeId: datos.sedeId,
-    sedeNombre: datos.sedeNombre ?? null,
-    canchaId: datos.canchaId,
-    profesorId: datos.profesorId,
-    profesorNombre: datos.profesorNombre ?? null,
-    fecha: datos.fecha,
-    horaInicio: datos.horaInicio,
-    horaFin: datos.horaFin,
-    bloques: bloques.map((b) => b.id),
-    creadoPor: uid,
-    creadoEn: Timestamp.fromDate(now),
-  }
+  const cupo = datos.cupo ?? 4
+  const alumnosIniciales = datos.alumnos ?? []
 
   await runTransaction(db, async (tx) => {
     // Todas las lecturas ANTES de cualquier escritura (requisito de las
     // transacciones de Firestore).
-    const snaps = await Promise.all(bloques.map((b) => tx.get(refBloque(db, tenantId, b.id))))
-    const ocupado = bloques.find((b, i) => snaps[i].exists())
+    const snapsBloque = await Promise.all(
+      bloques.map((b) => tx.get(refBloque(db, tenantId, b.id))),
+    )
+    const ocupado = bloques.find((b, i) => snapsBloque[i].exists())
     if (ocupado) throw new SolapamientoError(ocupado)
+
+    // Los alumnos se validan en la misma transacción: existen, activos, sin
+    // duplicados y dentro del cupo. De ahí sale `alumnoNombres` denormalizado.
+    const snapsAlumno = await Promise.all(
+      alumnosIniciales.map((id) => tx.get(refAlumno(db, tenantId, id))),
+    )
+    const alumnosPorId = {}
+    alumnosIniciales.forEach((id, i) => {
+      if (snapsAlumno[i].exists()) alumnosPorId[id] = snapsAlumno[i].data()
+    })
+    const { alumnos, alumnoNombres } = resolverAsignacion(alumnosIniciales, alumnosPorId, cupo)
+
+    const clase = {
+      tipo: 'variable',
+      serieId: null,
+      estado: 'reservada',
+      categoria: datos.categoria ?? null,
+      asistencias: [],
+      alumnos,
+      alumnoNombres,
+      cupo,
+      sedeId: datos.sedeId,
+      sedeNombre: datos.sedeNombre ?? null,
+      canchaId: datos.canchaId,
+      profesorId: datos.profesorId,
+      profesorNombre: datos.profesorNombre ?? null,
+      fecha: datos.fecha,
+      horaInicio: datos.horaInicio,
+      horaFin: datos.horaFin,
+      bloques: bloques.map((b) => b.id),
+      creadoPor: uid,
+      creadoEn: Timestamp.fromDate(now),
+    }
 
     // tx.set() y no create(): la API transaccional del SDK web no tiene create().
     // No importa para la exclusividad — la transacción ya LEYÓ cada bloque, y
@@ -500,7 +560,7 @@ export async function crearClase(db, tenantId, datos, opciones = {}) {
     }
   })
 
-  return { claseId: claseRef.id, bloques: clase.bloques }
+  return { claseId: claseRef.id, bloques: bloques.map((b) => b.id) }
 }
 
 /**
@@ -577,6 +637,25 @@ export async function reprogramarClase(db, tenantId, claseId, nuevoCambio = {}, 
     )
     if (ocupado) throw new SolapamientoError(ocupado)
 
+    // Asignación de alumnos: si cambia la lista se valida (existen, activos,
+    // sin duplicados, dentro del cupo); si solo cambia el cupo, se revisa que
+    // los ya asignados sigan entrando. Lecturas antes de cualquier escritura.
+    const cupoEfectivo = campo('cupo', 4)
+    let asignacion = null
+    if (nuevoCambio.alumnos !== undefined) {
+      const ids = Array.isArray(nuevoCambio.alumnos) ? nuevoCambio.alumnos : []
+      const snapsAlumno = await Promise.all(ids.map((id) => tx.get(refAlumno(db, tenantId, id))))
+      const alumnosPorId = {}
+      ids.forEach((id, i) => {
+        if (snapsAlumno[i].exists()) alumnosPorId[id] = snapsAlumno[i].data()
+      })
+      asignacion = resolverAsignacion(ids, alumnosPorId, cupoEfectivo)
+    } else if (nuevoCambio.cupo !== undefined && (datos.alumnos ?? []).length > cupoEfectivo) {
+      throw new ClaseInvalidaError(
+        `La clase admite ${cupoEfectivo} alumno(s) (cupo) y ya tiene ${datos.alumnos.length} asignados`,
+      )
+    }
+
     const idsNuevos = new Set(bloquesNuevos.map((b) => b.id))
     for (const bloqueId of bloquesViejos) {
       if (!idsNuevos.has(bloqueId)) tx.delete(refBloque(db, tenantId, bloqueId))
@@ -608,13 +687,57 @@ export async function reprogramarClase(db, tenantId, claseId, nuevoCambio = {}, 
       'horaInicio',
       'horaFin',
       'cupo',
-      'alumnos',
-      'alumnoNombres',
       'categoria',
     ]) {
       if (nuevoCambio[clave] !== undefined) cambios[clave] = nuevoCambio[clave]
     }
+    if (asignacion) {
+      cambios.alumnos = asignacion.alumnos
+      cambios.alumnoNombres = asignacion.alumnoNombres
+    }
     tx.update(claseRef, cambios)
+  })
+
+  return { claseId }
+}
+
+/**
+ * Reemplaza en UNA transacción la lista de alumnos de una clase. Solo se
+ * permite mientras la clase está `reservada`. Mismas validaciones que al crear:
+ * existen, activos, sin duplicados y dentro del cupo. `alumnoNombres` se
+ * denormaliza desde las fichas.
+ *
+ * Nota de diseño: que un alumno quede en dos clases a la misma hora NO se
+ * bloquea en la transacción ni genera bloques de alumno (fuera de alcance).
+ */
+export async function asignarAlumnos(db, tenantId, claseId, alumnoIds, opciones = {}) {
+  const { uid = null, now = new Date() } = opciones
+  const claseRef = refClase(db, tenantId, claseId)
+  const ids = Array.isArray(alumnoIds) ? alumnoIds : []
+
+  await runTransaction(db, async (tx) => {
+    const snap = await tx.get(claseRef)
+    if (!snap.exists()) throw new ClaseInvalidaError(`La clase ${claseId} no existe`)
+    const datos = snap.data()
+    if (datos.estado !== 'reservada') {
+      throw new ClaseInvalidaError(
+        `Solo se asignan alumnos a una clase "reservada" (estado "${datos.estado}")`,
+      )
+    }
+
+    const snapsAlumno = await Promise.all(ids.map((id) => tx.get(refAlumno(db, tenantId, id))))
+    const alumnosPorId = {}
+    ids.forEach((id, i) => {
+      if (snapsAlumno[i].exists()) alumnosPorId[id] = snapsAlumno[i].data()
+    })
+    const { alumnos, alumnoNombres } = resolverAsignacion(ids, alumnosPorId, datos.cupo ?? 0)
+
+    tx.update(claseRef, {
+      alumnos,
+      alumnoNombres,
+      actualizadoPor: uid,
+      actualizadoEn: Timestamp.fromDate(now),
+    })
   })
 
   return { claseId }
@@ -624,10 +747,11 @@ export async function reprogramarClase(db, tenantId, claseId, nuevoCambio = {}, 
  * Registra la asistencia de una clase (embebida en el documento, §4) y la deja
  * en "pendiente de cobro" en la misma escritura.
  *
- * La regla de negocio de la ausencia justificada (clase de recuperación vs
- * nota de crédito) está SIN DEFINIR: acá solo se guarda Presente/Ausente y un
- * motivo opcional. Tampoco se generan cargos ni liquidación al profesor,
- * porque el modelo no documenta ese cierre (ver reporte).
+ * Los estados son `presente`, `ausente_avisada` y `ausente_sin_aviso` (+ motivo
+ * opcional); cualquier otro valor se rechaza. Requiere exactamente una entrada
+ * por alumno asignado. La regla de negocio de la ausencia (recuperación o nota
+ * de crédito) y la ventana de aviso están SIN DEFINIR: acá solo se registra.
+ * Tampoco se generan cargos ni liquidación al profesor.
  */
 export async function registrarAsistencia(db, tenantId, claseId, asistencias, opciones = {}) {
   const { uid = null, now = new Date() } = opciones
@@ -649,6 +773,9 @@ export async function registrarAsistencia(db, tenantId, claseId, asistencias, op
       registradoEn: Timestamp.fromDate(now),
     }
   })
+  if (new Set(normalizadas.map((r) => r.alumnoId)).size !== normalizadas.length) {
+    throw new ClaseInvalidaError('No se admiten alumnos repetidos en la asistencia')
+  }
 
   const claseRef = refClase(db, tenantId, claseId)
   await runTransaction(db, async (tx) => {
@@ -657,6 +784,16 @@ export async function registrarAsistencia(db, tenantId, claseId, asistencias, op
     if (ESTADOS_CERRADOS.includes(snap.data().estado)) {
       throw new ClaseInvalidaError(
         `La clase ${claseId} ya está cerrada (estado "${snap.data().estado}")`,
+      )
+    }
+
+    // Exactamente una entrada por alumno asignado: ni de menos (falta alguno)
+    // ni de más (alumno que no pertenece a la clase).
+    const asignados = new Set(snap.data().alumnos ?? [])
+    const registrados = new Set(normalizadas.map((r) => r.alumnoId))
+    if (asignados.size !== registrados.size || [...asignados].some((id) => !registrados.has(id))) {
+      throw new ClaseInvalidaError(
+        'La asistencia debe tener exactamente una entrada por cada alumno asignado',
       )
     }
 

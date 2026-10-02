@@ -16,9 +16,15 @@ import { doc, getDoc, setDoc } from 'firebase/firestore'
 import {
   MINUTOS_BLOQUE,
   SolapamientoError,
+  actualizarAlumno,
+  asignarAlumnos,
   bloquesDeClase,
+  buscarAlumnos,
   cancelarClase,
+  crearAlumno,
   crearClase,
+  crearProfesor,
+  getAlumno,
   getCanchas,
   getClase,
   getClasesDeSedePorFecha,
@@ -76,7 +82,30 @@ async function sembrarBase(context) {
   await db.doc(`academias/${T1}/sedes/traki`).set({ nombre: 'Traki', activa: true })
   await db.doc(`academias/${T1}/sedes/traki/canchas/c1`).set({ nombre: 'Cancha 1', activa: true })
   await db.doc(`academias/${T1}/profesores/p1`).set({ nombre: 'Pablo', activo: true })
-  await db.doc(`academias/${T1}/alumnos/a1`).set({ nombre: 'Aldo Adulto', activo: true })
+
+  // Fichas: a1 y a2 activas, a3 inactiva (nunca asignable). `nombreBusqueda`
+  // es el campo normalizado (sin tildes ni mayúsculas) que usa buscarAlumnos.
+  await db.doc(`academias/${T1}/alumnos/a1`).set({
+    tipo: 'adulto',
+    nombre: 'Aldo Adulto',
+    nombreBusqueda: 'aldo adulto',
+    avisosActivos: true,
+    activo: true,
+  })
+  await db.doc(`academias/${T1}/alumnos/a2`).set({
+    tipo: 'menor',
+    nombre: 'Marta Menor',
+    nombreBusqueda: 'marta menor',
+    avisosActivos: true,
+    tutor: { nombre: 'Teresa Tutora' },
+    activo: true,
+  })
+  await db.doc(`academias/${T1}/alumnos/a3`).set({
+    tipo: 'adulto',
+    nombre: 'Nadia Inactiva',
+    nombreBusqueda: 'nadia inactiva',
+    activo: false,
+  })
 }
 
 before(async () => {
@@ -377,37 +406,218 @@ describe('reprogramarClase', () => {
   })
 })
 
-describe('registrarAsistencia', () => {
-  it('guarda la asistencia embebida y pasa la clase a pendiente_cobro', async () => {
-    const { claseId } = await reservar()
+describe('asignación de alumnos', () => {
+  it('crearClase valida y denormaliza alumnoNombres', async () => {
+    const { claseId } = await reservar({ alumnos: ['a1', 'a2'] })
+    const creada = await getClase(adminDb, T1, claseId)
+    assert.deepEqual(creada.alumnos, ['a1', 'a2'])
+    assert.deepEqual(creada.alumnoNombres, ['Aldo Adulto', 'Marta Menor'])
+  })
 
+  it('crearClase con más alumnos que el cupo → DENY y no ocupa bloques', async () => {
+    await assert.rejects(() => reservar({ cupo: 1, alumnos: ['a1', 'a2'] }), /cupo/)
+    assert.equal((await bloque(`traki_c1_${FECHA}_1800`)).exists(), false)
+  })
+
+  it('crearClase con un alumno inactivo → DENY', async () => {
+    await assert.rejects(() => reservar({ alumnos: ['a3'] }), /no está activo/)
+  })
+
+  it('crearClase con un alumno inexistente → DENY', async () => {
+    await assert.rejects(() => reservar({ alumnos: ['nope'] }), /no existe/)
+  })
+
+  it('crearClase con alumnos duplicados → DENY', async () => {
+    await assert.rejects(() => reservar({ alumnos: ['a1', 'a1'] }), /duplicad/)
+  })
+
+  it('asignarAlumnos reemplaza la lista de una clase reservada', async () => {
+    const { claseId } = await reservar({ alumnos: ['a1'] })
+    await asignarAlumnos(adminDb, T1, claseId, ['a2'], { uid: ADMIN })
+    const clase = await getClase(adminDb, T1, claseId)
+    assert.deepEqual(clase.alumnos, ['a2'])
+    assert.deepEqual(clase.alumnoNombres, ['Marta Menor'])
+  })
+
+  it('asignarAlumnos fuera del cupo → DENY', async () => {
+    const { claseId } = await reservar({ cupo: 1, alumnos: ['a1'] })
+    await assert.rejects(
+      () => asignarAlumnos(adminDb, T1, claseId, ['a1', 'a2'], { uid: ADMIN }),
+      /cupo/,
+    )
+  })
+
+  it('asignarAlumnos con un alumno inactivo → DENY', async () => {
+    const { claseId } = await reservar({ alumnos: [] })
+    await assert.rejects(() => asignarAlumnos(adminDb, T1, claseId, ['a3'], { uid: ADMIN }), /no está activo/)
+  })
+
+  it('asignarAlumnos en una clase cerrada → DENY', async () => {
+    const { claseId } = await reservar({ alumnos: ['a1'] })
+    await registrarAsistencia(adminDb, T1, claseId, [{ alumnoId: 'a1', estado: 'presente' }], {
+      uid: ADMIN,
+    })
+    await assert.rejects(
+      () => asignarAlumnos(adminDb, T1, claseId, ['a2'], { uid: ADMIN }),
+      /reservada/,
+    )
+  })
+
+  it('reprogramarClase puede cambiar los alumnos (mismas validaciones)', async () => {
+    const { claseId } = await reservar({ alumnos: ['a1'] })
+    await reprogramarClase(adminDb, T1, claseId, { alumnos: ['a2'] }, { uid: ADMIN })
+    const clase = await getClase(adminDb, T1, claseId)
+    assert.deepEqual(clase.alumnos, ['a2'])
+    assert.deepEqual(clase.alumnoNombres, ['Marta Menor'])
+  })
+
+  it('reprogramarClase no puede bajar el cupo por debajo de los asignados', async () => {
+    const { claseId } = await reservar({ alumnos: ['a1', 'a2'] })
+    await assert.rejects(
+      () => reprogramarClase(adminDb, T1, claseId, { cupo: 1 }, { uid: ADMIN }),
+      /cupo/,
+    )
+  })
+})
+
+describe('buscarAlumnos', () => {
+  it('encuentra por prefijo, sin tildes ni mayúsculas', async () => {
+    await setDoc(doc(adminDb, 'academias', T1, 'alumnos', 'a4'), {
+      tipo: 'adulto',
+      nombre: 'Álvaro Ávila',
+      nombreBusqueda: 'alvaro avila',
+      activo: true,
+    })
+    const sinTilde = await buscarAlumnos(adminDb, T1, 'alv')
+    assert.deepEqual(
+      sinTilde.map((a) => a.id),
+      ['a4'],
+    )
+    const conTilde = await buscarAlumnos(adminDb, T1, 'ÁLV')
+    assert.deepEqual(
+      conTilde.map((a) => a.id),
+      ['a4'],
+    )
+  })
+
+  it('no devuelve alumnos inactivos', async () => {
+    assert.equal((await buscarAlumnos(adminDb, T1, 'nadia')).length, 0)
+  })
+
+  it('texto vacío no lee nada', async () => {
+    assert.deepEqual(await buscarAlumnos(adminDb, T1, '   '), [])
+  })
+
+  it('acota a 10 resultados (límite por defecto)', async () => {
+    for (let i = 0; i < 12; i += 1) {
+      await setDoc(doc(adminDb, 'academias', T1, 'alumnos', `z${i}`), {
+        tipo: 'adulto',
+        nombre: `Zeta ${i}`,
+        nombreBusqueda: `zeta ${i}`,
+        activo: true,
+      })
+    }
+    assert.equal((await buscarAlumnos(adminDb, T1, 'zeta')).length, 10)
+    assert.equal((await buscarAlumnos(adminDb, T1, 'zeta', { limite: 3 })).length, 3)
+  })
+})
+
+describe('fichas', () => {
+  it('crearAlumno normaliza el nombre, exige tutor en menores y arranca activo', async () => {
+    const { alumnoId } = await crearAlumno(
+      adminDb,
+      T1,
+      { nombre: 'Ángel Niño', tipo: 'menor', tutor: { nombre: 'Tutor Uno' } },
+      { uid: ADMIN },
+    )
+    const ficha = await getAlumno(adminDb, T1, alumnoId)
+    assert.equal(ficha.nombreBusqueda, 'angel nino')
+    assert.equal(ficha.avisosActivos, true)
+    assert.equal(ficha.activo, true)
+    assert.equal(ficha.tutor.nombre, 'Tutor Uno')
+
+    await assert.rejects(
+      () => crearAlumno(adminDb, T1, { nombre: 'Sin Tutor', tipo: 'menor' }, { uid: ADMIN }),
+      /tutor/,
+    )
+  })
+
+  it('actualizarAlumno hace soft delete con activo:false y lo saca del buscador', async () => {
+    await actualizarAlumno(adminDb, T1, 'a1', { activo: false }, { uid: ADMIN })
+    assert.equal((await getAlumno(adminDb, T1, 'a1')).activo, false)
+    assert.equal((await buscarAlumnos(adminDb, T1, 'aldo')).length, 0)
+  })
+
+  it('crearProfesor no escribe tarifa por hora', async () => {
+    const { profesorId } = await crearProfesor(
+      adminDb,
+      T1,
+      { nombre: 'Paola Profesora', telefono: '+58 412 000 0002' },
+      { uid: ADMIN },
+    )
+    const snap = await getDoc(doc(adminDb, 'academias', T1, 'profesores', profesorId))
+    assert.equal(snap.data().tarifaHoraCentavos, undefined)
+    assert.equal(snap.data().activo, true)
+  })
+})
+
+describe('registrarAsistencia', () => {
+  it('acepta ausente_avisada y ausente_sin_aviso y guarda el motivo', async () => {
+    const { claseId } = await reservar({ alumnos: ['a1', 'a2'] })
     await registrarAsistencia(
       adminDb,
       T1,
       claseId,
       [
-        { alumnoId: 'a1', estado: 'presente' },
-        { alumnoId: 'a2', estado: 'ausente', motivo: 'enfermedad' },
+        { alumnoId: 'a1', estado: 'ausente_avisada', motivo: 'viaje' },
+        { alumnoId: 'a2', estado: 'ausente_sin_aviso' },
       ],
       { uid: ADMIN },
     )
-
     const clase = await getClase(adminDb, T1, claseId)
     assert.equal(clase.estado, 'pendiente_cobro')
-    assert.equal(clase.asistencias.length, 2)
-    assert.equal(clase.asistencias[0].estado, 'presente')
+    assert.equal(clase.asistencias[0].estado, 'ausente_avisada')
+    assert.equal(clase.asistencias[0].motivo, 'viaje')
     assert.equal(clase.asistencias[0].registradoPor, ADMIN)
     assert.ok(clase.asistencias[0].registradoEn)
-    assert.equal(clase.asistencias[1].motivo, 'enfermedad')
+    assert.equal(clase.asistencias[1].estado, 'ausente_sin_aviso')
+    assert.equal(clase.asistencias[1].motivo, null)
   })
 
-  it('un estado de asistencia inválido → DENY', async () => {
+  it('un estado de asistencia inválido (el viejo "ausente") → DENY', async () => {
     const { claseId } = await reservar()
     await assert.rejects(
-      () => registrarAsistencia(adminDb, T1, claseId, [{ alumnoId: 'a1', estado: 'tarde' }], { uid: ADMIN }),
+      () => registrarAsistencia(adminDb, T1, claseId, [{ alumnoId: 'a1', estado: 'ausente' }], { uid: ADMIN }),
       /Estado de asistencia inválido/,
     )
     assert.equal((await getClase(adminDb, T1, claseId)).estado, 'reservada')
+  })
+
+  it('exige una entrada por cada alumno asignado (falta uno) → DENY', async () => {
+    const { claseId } = await reservar({ alumnos: ['a1', 'a2'] })
+    await assert.rejects(
+      () => registrarAsistencia(adminDb, T1, claseId, [{ alumnoId: 'a1', estado: 'presente' }], { uid: ADMIN }),
+      /exactamente una entrada/,
+    )
+    assert.equal((await getClase(adminDb, T1, claseId)).estado, 'reservada')
+  })
+
+  it('rechaza una entrada de un alumno que no está en la clase → DENY', async () => {
+    const { claseId } = await reservar({ alumnos: ['a1'] })
+    await assert.rejects(
+      () =>
+        registrarAsistencia(
+          adminDb,
+          T1,
+          claseId,
+          [
+            { alumnoId: 'a1', estado: 'presente' },
+            { alumnoId: 'a2', estado: 'presente' },
+          ],
+          { uid: ADMIN },
+        ),
+      /exactamente una entrada/,
+    )
   })
 
   it('una clase ya cerrada no se puede cerrar dos veces', async () => {
