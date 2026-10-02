@@ -1,6 +1,11 @@
 /*
  * Pruebas de las Security Rules contra el emulador de Firestore.
  *
+ * ACCESO POR AHORA: solo `administrador` opera. Profesor, alumno adulto, alumno
+ * menor y tutor son FICHAS (records), no usuarios con acceso: todos sus casos
+ * son DENY. La única lectura permitida a un no-admin es su propia membresía
+ * (arranque de sesión + descubrimiento de tenants).
+ *
  * Cada test dice explícitamente el ROL que actúa y si se espera ALLOW o DENY.
  * Las reglas son la única frontera de autorización del sistema, así que esto
  * se prueba de verdad y no a ojo.
@@ -36,11 +41,13 @@ const T2 = 't2'
 
 // Uidos de los usuarios de prueba. No se crean en Auth: `authenticatedContext`
 // alcanza para que las reglas vean request.auth.uid.
+// Profesor, alumno y tutor se conservan como usuarios NEGATIVOS: tienen su
+// membresía con su rol, pero ninguna concesión de acceso.
 const UID = {
   adminT1: 'uid-admin-t1',
   profT1: 'uid-prof-t1',
   alumnoT1: 'uid-alumno-t1',
-  alumno2T1: 'uid-alumno2-t1',
+  tutorT1: 'uid-tutor-t1',
   inactivoT1: 'uid-inactivo-t1',
   dual: 'uid-dual',
   adminT2: 'uid-admin-t2',
@@ -117,6 +124,7 @@ before(async () => {
       activa: true,
     })
 
+    // Fichas (records), no usuarios con acceso.
     await setDoc(doc(db, 'academias', T1, 'profesores', 'p1'), {
       nombre: 'Pablo Profesor',
       activo: true,
@@ -126,29 +134,39 @@ before(async () => {
     await setDoc(doc(db, 'academias', T1, 'alumnos', 'a1'), {
       tipo: 'adulto',
       nombre: 'Aldo Adulto',
+      email: 'alumno@ensayo.test',
+      telefono: '+58 414 000 0001',
       activo: true,
     })
     await setDoc(doc(db, 'academias', T1, 'alumnos', 'a2'), {
-      tipo: 'adulto',
-      nombre: 'Ana Otra',
+      tipo: 'menor',
+      nombre: 'Marta Menor',
+      email: 'tutor@ensayo.test',
+      tutor: {
+        nombre: 'Teresa Tutora',
+        email: 'tutor@ensayo.test',
+        telefono: '+58 414 000 0003',
+        parentesco: 'madre',
+      },
       activo: true,
     })
 
+    // Membresías. Solo `administrador` tiene acceso; los demás roles quedan
+    // como usuarios negativos. Sin `profesorId`/`alumnoId`: esos vínculos de
+    // login son obsoletos (las fichas se referencian por id en las clases).
     const membresia = (uid, rol, extra = {}) => ({
       uid,
       rol,
       activo: true,
       nombre: uid,
-      profesorId: null,
-      alumnoId: null,
       creadoEn: null,
       ...extra,
     })
 
     await setDoc(doc(db, 'academias', T1, 'miembros', UID.adminT1), membresia(UID.adminT1, 'administrador'))
-    await setDoc(doc(db, 'academias', T1, 'miembros', UID.profT1), membresia(UID.profT1, 'profesor', { profesorId: 'p1' }))
-    await setDoc(doc(db, 'academias', T1, 'miembros', UID.alumnoT1), membresia(UID.alumnoT1, 'alumno_adulto', { alumnoId: 'a1' }))
-    await setDoc(doc(db, 'academias', T1, 'miembros', UID.alumno2T1), membresia(UID.alumno2T1, 'alumno_adulto', { alumnoId: 'a2' }))
+    await setDoc(doc(db, 'academias', T1, 'miembros', UID.profT1), membresia(UID.profT1, 'profesor'))
+    await setDoc(doc(db, 'academias', T1, 'miembros', UID.alumnoT1), membresia(UID.alumnoT1, 'alumno_adulto'))
+    await setDoc(doc(db, 'academias', T1, 'miembros', UID.tutorT1), membresia(UID.tutorT1, 'alumno_menor'))
     await setDoc(doc(db, 'academias', T1, 'miembros', UID.inactivoT1), membresia(UID.inactivoT1, 'administrador', { activo: false }))
     // Pertenece a las dos academias: sirve para probar el descubrimiento.
     await setDoc(doc(db, 'academias', T1, 'miembros', UID.dual), membresia(UID.dual, 'administrador'))
@@ -177,10 +195,6 @@ describe('1. Aislamiento por tenant', () => {
     await assertFails(getDocs(collection(as(UID.adminT1), 'academias', T2, 'clases')))
   })
 
-  it('profesor de t1 LEE clases de t1 → ALLOW (mismo tenant)', async () => {
-    await assertSucceeds(getDoc(doc(as(UID.profT1), 'academias', T1, 'clases', 'c1')))
-  })
-
   it('administrador de t2 LEE clases de t1 → DENY (leer otro tenant)', async () => {
     await assertFails(getDoc(doc(as(UID.adminT2), 'academias', T1, 'clases', 'c1')))
   })
@@ -195,17 +209,21 @@ describe('1. Aislamiento por tenant', () => {
   })
 })
 
-describe('2. Crear clases: solo administrador', () => {
+describe('2. Admin permite, no-admin deniega al crear clases', () => {
   it('administrador de t1 CREA clase en t1 → ALLOW', async () => {
     await assertSucceeds(setDoc(doc(as(UID.adminT1), 'academias', T1, 'clases', 'nueva-admin'), clase()))
   })
 
-  it('profesor de t1 CREA clase en t1 → DENY', async () => {
+  it('profesor de t1 CREA clase en t1 → DENY (rol profesor, escritura)', async () => {
     await assertFails(setDoc(doc(as(UID.profT1), 'academias', T1, 'clases', 'nueva-profe'), clase()))
   })
 
-  it('alumno_adulto de t1 CREA clase en t1 → DENY', async () => {
+  it('alumno_adulto de t1 CREA clase en t1 → DENY (rol alumno_adulto, escritura)', async () => {
     await assertFails(setDoc(doc(as(UID.alumnoT1), 'academias', T1, 'clases', 'nueva-alumno'), clase()))
+  })
+
+  it('alumno_menor (tutor) de t1 CREA clase en t1 → DENY (rol alumno_menor, escritura)', async () => {
+    await assertFails(setDoc(doc(as(UID.tutorT1), 'academias', T1, 'clases', 'nueva-tutor'), clase()))
   })
 
   it('administrador de t2 CREA clase en t1 → DENY (otro tenant)', async () => {
@@ -218,59 +236,68 @@ describe('2. Crear clases: solo administrador', () => {
   })
 })
 
-describe('3. Profesor: asistencia y estado sí, cupo no', () => {
-  it('profesor de t1 ACTUALiza asistencias de la clase → ALLOW', async () => {
-    await assertSucceeds(
+describe('3. Profesor: sin acceso (ni lectura ni asistencia)', () => {
+  it('profesor de t1 LEE una clase de t1 → DENY (rol profesor, lectura)', async () => {
+    await assertFails(getDoc(doc(as(UID.profT1), 'academias', T1, 'clases', 'c1')))
+  })
+
+  it('profesor de t1 LISTA clases de t1 → DENY (rol profesor, lectura)', async () => {
+    await assertFails(getDocs(collection(as(UID.profT1), 'academias', T1, 'clases')))
+  })
+
+  it('profesor de t1 ACTUALiza asistencias de la clase → DENY (rol profesor, escritura)', async () => {
+    await assertFails(
       updateDoc(doc(as(UID.profT1), 'academias', T1, 'clases', 'c1'), {
         asistencias: [{ alumnoId: 'a1', estado: 'presente', motivo: null }],
       }),
     )
   })
 
-  it('profesor de t1 ACTUALiza estado de la clase → ALLOW', async () => {
-    await assertSucceeds(
-      updateDoc(doc(as(UID.profT1), 'academias', T1, 'clases', 'c1'), { estado: 'ejecutada' }),
-    )
-  })
-
-  it('profesor de t1 ACTUALiza cupo → DENY', async () => {
-    await assertFails(updateDoc(doc(as(UID.profT1), 'academias', T1, 'clases', 'c1'), { cupo: 8 }))
-  })
-
-  it('profesor de t1 ACTUALiza cancha/fecha → DENY (no puede mover la reserva)', async () => {
-    await assertFails(updateDoc(doc(as(UID.profT1), 'academias', T1, 'clases', 'c1'), { canchaId: 'c2' }))
-    await assertFails(updateDoc(doc(as(UID.profT1), 'academias', T1, 'clases', 'c1'), { fecha: '2026-10-06' }))
-  })
-
-  it('profesor de t1 ACTUALiza alumnos (inscribir) → DENY', async () => {
-    await assertFails(updateDoc(doc(as(UID.profT1), 'academias', T1, 'clases', 'c1'), { alumnos: ['a1', 'a2'] }))
-  })
-
-  it('alumno_adulto de t1 ACTUALiza estado/asistencias → DENY', async () => {
+  it('profesor de t1 ACTUALiza el estado de la clase → DENY (rol profesor, escritura)', async () => {
     await assertFails(
-      updateDoc(doc(as(UID.alumnoT1), 'academias', T1, 'clases', 'c1'), { estado: 'ejecutada' }),
+      updateDoc(doc(as(UID.profT1), 'academias', T1, 'clases', 'c1'), { estado: 'pendiente_cobro' }),
     )
   })
 
-  it('administrador de t1 ACTUALiza cupo → ALLOW', async () => {
-    await assertSucceeds(updateDoc(doc(as(UID.adminT1), 'academias', T1, 'clases', 'c1'), { cupo: 8 }))
+  it('profesor de t1 LEE una sede de t1 → DENY (rol profesor, lectura)', async () => {
+    await assertFails(getDoc(doc(as(UID.profT1), 'academias', T1, 'sedes', 'traki')))
+  })
+
+  it('profesor de t1 LEE la ficha de un profesor → DENY (rol profesor, lectura)', async () => {
+    await assertFails(getDoc(doc(as(UID.profT1), 'academias', T1, 'profesores', 'p1')))
+  })
+
+  it('profesor de t1 LEE un bloque de t1 → DENY (rol profesor, lectura)', async () => {
+    await assertFails(getDoc(doc(as(UID.profT1), 'academias', T1, 'bloques', 'cancha_traki_c1_2026-10-05_1800')))
+  })
+
+  it('profesor de t1 ACTUALiza la ficha de un alumno → DENY (rol profesor, escritura)', async () => {
+    await assertFails(updateDoc(doc(as(UID.profT1), 'academias', T1, 'alumnos', 'a2'), { telefono: '+58 414 999 9999' }))
   })
 })
 
-describe('4. Alumnos no editan nada', () => {
-  it('alumno_adulto LEE alumnos de t1 → ALLOW (listado de la academia)', async () => {
-    await assertSucceeds(getDoc(doc(as(UID.alumnoT1), 'academias', T1, 'alumnos', 'a1')))
+describe('4. Alumno y tutor: fichas sin acceso', () => {
+  it('alumno_adulto de t1 LEE la ficha de un alumno → DENY (dato de contacto)', async () => {
+    await assertFails(getDoc(doc(as(UID.alumnoT1), 'academias', T1, 'alumnos', 'a1')))
   })
 
-  it('alumno_adulto de t1 ACTUALiza su propia ficha → DENY', async () => {
+  it('alumno_adulto de t1 LEE su propia ficha → DENY (dato de contacto)', async () => {
+    await assertFails(getDoc(doc(as(UID.alumnoT1), 'academias', T1, 'alumnos', 'a1')))
+  })
+
+  it('alumno_adulto de t1 LISTA alumnos de t1 → DENY (rol alumno_adulto, lectura)', async () => {
+    await assertFails(getDocs(collection(as(UID.alumnoT1), 'academias', T1, 'alumnos')))
+  })
+
+  it('alumno_adulto de t1 ACTUALiza su propia ficha → DENY (rol alumno_adulto, escritura)', async () => {
     await assertFails(updateDoc(doc(as(UID.alumnoT1), 'academias', T1, 'alumnos', 'a1'), { telefono: '+58 414 999 9999' }))
   })
 
-  it('alumno_adulto de t1 ACTUALiza la ficha de OTRO alumno → DENY', async () => {
-    await assertFails(updateDoc(doc(as(UID.alumnoT1), 'academias', T1, 'alumnos', 'a2'), { telefono: '+58 414 999 9999' }))
+  it('alumno_adulto de t1 LEE una clase de t1 → DENY (rol alumno_adulto, lectura)', async () => {
+    await assertFails(getDoc(doc(as(UID.alumnoT1), 'academias', T1, 'clases', 'c1')))
   })
 
-  it('alumno_adulto de t1 ACTUALiza la clase donde está inscrito → DENY', async () => {
+  it('alumno_adulto de t1 ACTUALiza la clase donde está inscrito → DENY (rol alumno_adulto, escritura)', async () => {
     await assertFails(updateDoc(doc(as(UID.alumnoT1), 'academias', T1, 'clases', 'c1'), { alumnos: [] }))
   })
 
@@ -278,8 +305,12 @@ describe('4. Alumnos no editan nada', () => {
     await assertFails(getDoc(doc(as(UID.alumnoT1), 'academias', T2, 'alumnos', 'a1')))
   })
 
-  it('profesor de t1 ACTUALiza la ficha de un alumno → DENY', async () => {
-    await assertFails(updateDoc(doc(as(UID.profT1), 'academias', T1, 'alumnos', 'a2'), { telefono: '+58 414 999 9999' }))
+  it('alumno_menor (tutor) de t1 LEE la ficha del menor a su cargo → DENY (dato de contacto)', async () => {
+    await assertFails(getDoc(doc(as(UID.tutorT1), 'academias', T1, 'alumnos', 'a2')))
+  })
+
+  it('alumno_menor (tutor) de t1 LEE una clase de t1 → DENY (rol alumno_menor, lectura)', async () => {
+    await assertFails(getDoc(doc(as(UID.tutorT1), 'academias', T1, 'clases', 'c1')))
   })
 })
 
@@ -296,10 +327,34 @@ describe('5. Descubrimiento: collectionGroup("miembros")', () => {
     await assertFails(getDocs(q))
   })
 
-  it('alumno_adulto LISTA sus propias membresías → ALLOW', async () => {
+  it('alumno_adulto LISTA sus propias membresías → ALLOW (única lectura de un no-admin)', async () => {
     const q = query(collectionGroup(as(UID.alumnoT1), 'miembros'), where('uid', '==', UID.alumnoT1))
     const snap = await assertSucceeds(getDocs(q))
     assert.equal(snap.docs.length, 1)
+  })
+
+  it('alumno_menor (tutor) LISTA sus propias membresías → ALLOW (única lectura de un no-admin)', async () => {
+    const q = query(collectionGroup(as(UID.tutorT1), 'miembros'), where('uid', '==', UID.tutorT1))
+    const snap = await assertSucceeds(getDocs(q))
+    assert.equal(snap.docs.length, 1)
+  })
+
+  it('profesor LISTA sus propias membresías → ALLOW (única lectura de un no-admin)', async () => {
+    const q = query(collectionGroup(as(UID.profT1), 'miembros'), where('uid', '==', UID.profT1))
+    const snap = await assertSucceeds(getDocs(q))
+    assert.equal(snap.docs.length, 1)
+  })
+
+  it('profesor LEE su propia membresía → ALLOW (arranque de sesión)', async () => {
+    await assertSucceeds(getDoc(doc(as(UID.profT1), 'academias', T1, 'miembros', UID.profT1)))
+  })
+
+  it('profesor LEE la membresía de OTRO → DENY', async () => {
+    await assertFails(getDoc(doc(as(UID.profT1), 'academias', T1, 'miembros', UID.adminT1)))
+  })
+
+  it('profesor LISTA los miembros de t1 → DENY (rol profesor, lectura de fichas)', async () => {
+    await assertFails(getDocs(collection(as(UID.profT1), 'academias', T1, 'miembros')))
   })
 
   it('usuario NO autenticado LISTA membresías → DENY', async () => {
@@ -308,11 +363,41 @@ describe('5. Descubrimiento: collectionGroup("miembros")', () => {
     await assertFails(getDocs(q))
   })
 
-  it('miembro de t1 LISTA los miembros de t1 → ALLOW', async () => {
+  it('administrador de t1 LISTA los miembros de t1 → ALLOW', async () => {
     await assertSucceeds(getDocs(collection(as(UID.adminT1), 'academias', T1, 'miembros')))
   })
 
-  it('miembro de t1 LISTA los miembros de t2 → DENY (otro tenant)', async () => {
+  it('administrador de t1 LISTA los miembros de t2 → DENY (otro tenant)', async () => {
     await assertFails(getDocs(collection(as(UID.adminT1), 'academias', T2, 'miembros')))
+  })
+})
+
+describe('6. Admin conserva lectura y escritura de fichas y facturación', () => {
+  it('administrador de t1 LEE la ficha de un alumno → ALLOW (dato de contacto)', async () => {
+    await assertSucceeds(getDoc(doc(as(UID.adminT1), 'academias', T1, 'alumnos', 'a1')))
+  })
+
+  it('administrador de t1 ACTUALiza la ficha de un alumno → ALLOW', async () => {
+    await assertSucceeds(updateDoc(doc(as(UID.adminT1), 'academias', T1, 'alumnos', 'a1'), { telefono: '+58 414 111 1111' }))
+  })
+
+  it('administrador de t1 ACTUALiza cupo y estado de una clase → ALLOW', async () => {
+    await assertSucceeds(updateDoc(doc(as(UID.adminT1), 'academias', T1, 'clases', 'c1'), { cupo: 8 }))
+    await assertSucceeds(
+      updateDoc(doc(as(UID.adminT1), 'academias', T1, 'clases', 'c1'), {
+        estado: 'pendiente_cobro',
+        asistencias: [{ alumnoId: 'a1', estado: 'presente', motivo: null }],
+      }),
+    )
+  })
+
+  it('administrador de t1 CREA un bloque → ALLOW', async () => {
+    await assertSucceeds(
+      setDoc(doc(as(UID.adminT1), 'academias', T1, 'bloques', 'cancha_traki_c1_2026-10-05_1800'), {
+        tipo: 'cancha',
+        sedeId: 'traki',
+        canchaId: 'c1',
+      }),
+    )
   })
 })

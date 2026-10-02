@@ -9,8 +9,11 @@ import { hoyISO } from '../lib/fechas'
  * Las sedes se leen una vez (al cambiar de tenant); las clases, cada vez que
  * cambia la sede o el día. El estado de "cargando" se deriva de si ya existe
  * la lectura para la clave actual, así el efecto no sincroniza estado.
+ *
+ * `habilitado` es false hasta confirmar que el usuario es administrador: en ese
+ * caso no se dispara NINGUNA lectura (un no-admin solo puede leer su membresía).
  */
-export default function useAgenda(tenantId) {
+export default function useAgenda(tenantId, habilitado = true) {
   const [fecha, setFecha] = useState(hoyISO())
   const [sedeId, setSedeId] = useState(null)
   const [sedes, setSedes] = useState(null)
@@ -19,6 +22,7 @@ export default function useAgenda(tenantId) {
   const [version, setVersion] = useState(0)
 
   useEffect(() => {
+    if (!habilitado) return undefined
     let activo = true
 
     async function cargarSedes() {
@@ -41,12 +45,12 @@ export default function useAgenda(tenantId) {
     return () => {
       activo = false
     }
-  }, [tenantId])
+  }, [tenantId, habilitado])
 
   const clave = sedeId ? `${sedeId}|${fecha}` : null
 
   useEffect(() => {
-    if (!clave) return undefined
+    if (!habilitado || !clave) return undefined
     let activo = true
     getClasesDeSedePorFecha(db, tenantId, sedeId, fecha)
       .then((lista) => {
@@ -60,7 +64,7 @@ export default function useAgenda(tenantId) {
     return () => {
       activo = false
     }
-  }, [tenantId, sedeId, fecha, clave, version])
+  }, [tenantId, sedeId, fecha, clave, version, habilitado])
 
   const clases = clasesPorClave.clave === clave ? clasesPorClave.lista : []
   const cargandoClases = clave !== null && clasesPorClave.clave !== clave && !error
@@ -72,7 +76,7 @@ export default function useAgenda(tenantId) {
     fecha,
     setFecha,
     clases,
-    cargando: sedes === null || cargandoClases,
+    cargando: habilitado && (sedes === null || cargandoClases),
     error,
     recargar: () => setVersion((v) => v + 1),
   }

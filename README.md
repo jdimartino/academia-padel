@@ -46,15 +46,19 @@ En una **tercera terminal** corré la app:
 npm run dev
 ```
 
-Abrí http://localhost:5173 y entrá con cualquiera de los usuarios de ensayo
-(contraseña `ensayo1234`):
+Abrí http://localhost:5173 y entrá con el usuario de ensayo (contraseña
+`ensayo1234`):
 
-| Correo | Rol |
-| --- | --- |
-| `admin@ensayo.test` | Administrador |
-| `profe@ensayo.test` | Profesor |
-| `alumno@ensayo.test` | Alumno adulto |
-| `tutor@ensayo.test` | Alumno menor (tutor) |
+| Correo | Rol | Acceso |
+| --- | --- | --- |
+| `admin@ensayo.test` | Administrador | Sí, opera toda la academia |
+| `profe@ensayo.test` | Profesor | **No** (ficha; usuario negativo de test) |
+| `alumno@ensayo.test` | Alumno adulto | **No** (ficha; usuario negativo de test) |
+| `tutor@ensayo.test` | Alumno menor (tutor) | **No** (ficha; usuario negativo de test) |
+
+Por ahora **solo el administrador inicia sesión y opera**. Profesor, alumno y
+tutor son fichas del modelo, no cuentas: si entran, la app muestra "Esta cuenta
+no tiene acceso a esta academia". Se conservan para probar los DENY.
 
 Emulator UI: http://127.0.0.1:4000
 
@@ -117,10 +121,11 @@ firestore.indexes.json
 
 - Todos los datos cuelgan de `academias/{tenantId}/...`.
 - Cada usuario pertenece a un tenant vía `academias/{tenantId}/miembros/{uid}`
-  con un `rol`.
+  con un `rol`. **Hoy el único rol con acceso es `administrador`.**
 - Al iniciar sesión, el cliente descubre sus academias con una sola consulta
   `collectionGroup('miembros').where('uid','==',uid)`.
-- Las Security Rules validan membresía activa + rol en cada operación.
+- Las Security Rules exigen `administrador` activo en cada operación; el resto
+  queda en DENY salvo la lectura de la propia membresía. El default es deny.
 - La reserva no se solapa gracias a `academias/{tenantId}/bloques/{bloqueId}`:
   un documento por bloque de 30 minutos de cancha (y otro del profesor), con ID
   determinista, escritos en la misma transacción que la clase.

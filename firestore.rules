@@ -6,7 +6,16 @@ rules_version = '2';
 //   academias/{tenantId}/...              todos los datos de una academia
 //   academias/{tenantId}/miembros/{uid}   usuario + rol dentro de la academia
 //
-// Roles: administrador | profesor | alumno_adulto | alumno_menor
+// Roles del modelo: administrador | profesor | alumno_adulto | alumno_menor.
+//
+// ACCESO POR AHORA: solo `administrador` inicia sesión y opera. Profesor,
+// alumno adulto, alumno menor y tutor son FICHAS del modelo, no usuarios con
+// acceso: no tienen ninguna concesión de lectura ni escritura. Recepción sigue
+// sin definir. El enum de roles se conserva para el futuro.
+//
+// La única lectura permitida a un no-admin es su propia membresía (arranque de
+// sesión y descubrimiento de tenants); con eso la app muestra un aviso y no
+// vuelve a leer nada.
 //
 // Nota de costo: los helpers get()/exists() cuentan como lecturas de Firestore.
 // Se mantienen porque son la base de la autorización; si el consumo crece, se
@@ -37,93 +46,67 @@ service cloud.firestore {
       return rol(tenantId) == 'administrador';
     }
 
-    function esProfesor(tenantId) {
-      return rol(tenantId) == 'profesor';
-    }
-
-    function esAlumno(tenantId) {
-      return rol(tenantId) == 'alumno_adulto' || rol(tenantId) == 'alumno_menor';
-    }
-
     match /academias/{tenantId} {
-      allow read: if esMiembroActivo(tenantId);
-      allow write: if esAdmin(tenantId);
+      allow read, write: if esAdmin(tenantId);
 
       // Un usuario puede leer su propia membresía aunque todavía no figure como
-      // activa (necesario para el arranque de sesión y el descubrimiento).
+      // activa (necesario para el arranque de sesión y el descubrimiento). Es
+      // la única lectura de un no-admin. Listar todas las membresías del tenant
+      // es solo para admin.
       match /miembros/{uid} {
-        allow get: if esMiembroActivo(tenantId) || request.auth.uid == uid;
-        allow list: if esMiembroActivo(tenantId) || resource.data.uid == request.auth.uid;
+        allow get: if esAdmin(tenantId) || request.auth.uid == uid;
+        allow list: if esAdmin(tenantId) || resource.data.uid == request.auth.uid;
         allow write: if esAdmin(tenantId);
       }
 
       match /sedes/{sedeId} {
-        allow read: if esMiembroActivo(tenantId);
-        allow write: if esAdmin(tenantId);
+        allow read, write: if esAdmin(tenantId);
 
         match /canchas/{canchaId} {
-          allow read: if esMiembroActivo(tenantId);
-          allow write: if esAdmin(tenantId);
+          allow read, write: if esAdmin(tenantId);
         }
       }
 
       match /profesores/{profesorId} {
-        allow read: if esMiembroActivo(tenantId);
-        allow write: if esAdmin(tenantId);
+        allow read, write: if esAdmin(tenantId);
       }
 
+      // Ficha con datos de contacto: solo admin la lee o la escribe.
       match /alumnos/{alumnoId} {
-        allow read: if esMiembroActivo(tenantId);
-        allow write: if esAdmin(tenantId);
+        allow read, write: if esAdmin(tenantId);
       }
 
-      // La reserva la crea/borra solo admin (recepcion). El profesor solo puede
-      // registrar asistencia y pasar la clase a ejecutada, tocando únicamente
-      // esos campos.
+      // La reserva, la reprogramación, la cancelación, la asistencia y el
+      // cierre los hace solo el administrador.
       match /clases/{claseId} {
-        allow read: if esMiembroActivo(tenantId);
-        allow create, delete: if esAdmin(tenantId);
-        allow update: if esAdmin(tenantId)
-          || (
-            esProfesor(tenantId)
-            && request.resource.data.diff(resource.data)
-                 .affectedKeys()
-                 .hasOnly(['asistencias', 'estado', 'actualizadoEn', 'actualizadoPor'])
-          );
+        allow read, write: if esAdmin(tenantId);
       }
 
       // Ocupación de 30 minutos de cancha o de profesor, con ID determinista
       // (§4.1 de docs/modelo-datos.md). Solo admin los escribe: los crea y
-      // borra la misma transacción que la clase. Los alumnos y profesores
-      // pueden leerlos para pintar la agenda.
+      // borra la misma transacción que la clase.
       match /bloques/{bloqueId} {
-        allow read: if esMiembroActivo(tenantId);
-        allow write: if esAdmin(tenantId);
+        allow read, write: if esAdmin(tenantId);
       }
 
       match /planes/{planId} {
-        allow read: if esMiembroActivo(tenantId);
-        allow write: if esAdmin(tenantId);
+        allow read, write: if esAdmin(tenantId);
       }
 
       match /cargos/{cargoId} {
-        allow read: if esMiembroActivo(tenantId);
-        allow write: if esAdmin(tenantId);
+        allow read, write: if esAdmin(tenantId);
       }
 
       match /pagos/{pagoId} {
-        allow read: if esMiembroActivo(tenantId);
-        allow write: if esAdmin(tenantId);
+        allow read, write: if esAdmin(tenantId);
       }
 
       match /notasCredito/{notaId} {
-        allow read: if esMiembroActivo(tenantId);
-        allow write: if esAdmin(tenantId);
+        allow read, write: if esAdmin(tenantId);
       }
 
       match /liquidaciones/{liquidacionId} {
-        allow read: if esMiembroActivo(tenantId);
-        allow write: if esAdmin(tenantId);
+        allow read, write: if esAdmin(tenantId);
       }
     }
 

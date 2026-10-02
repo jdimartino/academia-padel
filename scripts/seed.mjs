@@ -138,11 +138,18 @@ async function crearClaseEnSeed(datos) {
   }
 }
 
+/*
+ * Usuarios de Auth del tenant de ensayo. Por ahora SOLO el administrador tiene
+ * acceso. profe@, alumno@ y tutor@ se conservan como usuarios NEGATIVOS: tienen
+ * membresía con su rol, pero las reglas les niegan toda lectura/escritura salvo
+ * su propia membresía. Profesor y alumno son fichas (records), no cuentas: ya
+ * no se enlazan con `profesorId`/`alumnoId` en la membresía.
+ */
 const USUARIOS = [
   { email: 'admin@ensayo.test', password: 'ensayo1234', nombre: 'Ana Administradora', rol: 'administrador' },
-  { email: 'profe@ensayo.test', password: 'ensayo1234', nombre: 'Pablo Profesor', rol: 'profesor', profesorId: 'p1' },
-  { email: 'alumno@ensayo.test', password: 'ensayo1234', nombre: 'Aldo Adulto', rol: 'alumno_adulto', alumnoId: 'a1' },
-  { email: 'tutor@ensayo.test', password: 'ensayo1234', nombre: 'Teresa Tutora', rol: 'alumno_menor', alumnoId: 'a2' },
+  { email: 'profe@ensayo.test', password: 'ensayo1234', nombre: 'Pablo Profesor', rol: 'profesor' },
+  { email: 'alumno@ensayo.test', password: 'ensayo1234', nombre: 'Aldo Adulto', rol: 'alumno_adulto' },
+  { email: 'tutor@ensayo.test', password: 'ensayo1234', nombre: 'Teresa Tutora', rol: 'alumno_menor' },
 ]
 
 const SEDES = [
@@ -194,7 +201,6 @@ async function main() {
   console.log(`· ${SEDES.length} sedes y sus canchas`)
 
   await setDoc(`${tenant}/profesores/p1`, {
-    uid: null,
     nombre: 'Pablo Profesor',
     email: 'profe@ensayo.test',
     telefono: '+58 412 000 0001',
@@ -203,7 +209,6 @@ async function main() {
     activo: true,
   })
   await setDoc(`${tenant}/profesores/p2`, {
-    uid: null,
     nombre: 'Paola Profesora',
     email: 'paola@ensayo.test',
     telefono: '+58 412 000 0002',
@@ -277,8 +282,8 @@ async function main() {
     alumnos: ['a1', 'a2'],
     alumnoNombres: ['Aldo Adulto', 'Marta Menor'],
     asistencias: [
-      { alumnoId: 'a1', estado: 'presente', motivo: null, registradoPor: 'uid-profe', registradoEn: new Date() },
-      { alumnoId: 'a2', estado: 'ausente', motivo: 'enfermedad', registradoPor: 'uid-profe', registradoEn: new Date() },
+      { alumnoId: 'a1', estado: 'presente', motivo: null, registradoPor: 'seed', registradoEn: new Date() },
+      { alumnoId: 'a2', estado: 'ausente', motivo: 'enfermedad', registradoPor: 'seed', registradoEn: new Date() },
     ],
     estado: 'pendiente_cobro',
   })
@@ -321,8 +326,6 @@ async function main() {
       rol: usuario.rol,
       activo: true,
       nombre: usuario.nombre,
-      profesorId: usuario.profesorId ?? null,
-      alumnoId: usuario.alumnoId ?? null,
       creadoEn: new Date(),
     })
   }
@@ -330,9 +333,10 @@ async function main() {
 
   console.log('\nListo. Usuarios de ensayo (contraseña "ensayo1234"):')
   for (const usuario of USUARIOS) {
-    console.log(`  ${usuario.rol.padEnd(14)} ${usuario.email}`)
+    const acceso = usuario.rol === 'administrador' ? 'acceso' : 'sin acceso (ficha)'
+    console.log(`  ${usuario.rol.padEnd(14)} ${usuario.email.padEnd(22)} ${acceso}`)
   }
-  console.log('\nEmulator UI: http://127.0.0.1:4000')
+  console.log('\nSolo el administrador opera la agenda. Emulator UI: http://127.0.0.1:4000')
 }
 
 main().catch((error) => {

@@ -7,8 +7,14 @@ academias/{tenantId}/...
 ```
 
 El aislamiento entre academias es por subárbol. Las Security Rules
-(`firestore.rules`) validan, en cada operación, que el usuario sea **miembro
-activo** de `academias/{tenantId}` y que su **rol** alcance para la acción.
+(`firestore.rules`) validan, en cada operación, que el usuario sea
+**administrador activo** de `academias/{tenantId}`. **Por ahora solo el
+administrador inicia sesión y opera**; profesor, alumno adulto, alumno menor y
+tutor son fichas del modelo, no usuarios con acceso (ver §0.1).
+
+> El enum de roles se conserva tal cual para el futuro, pero hoy **profesor,
+> alumno adulto, alumno menor y tutor quedan "sin acceso por ahora"**. Recepción
+> sigue SIN DEFINIR y no se crea como rol.
 
 Convenciones:
 
@@ -44,6 +50,30 @@ Estas decisiones quedaron cerradas. No se re-debaten sin evidencia nueva.
 Además, en esta sesión se decidió el mecanismo de **reserva sin solapamientos**
 (IDs deterministas + transacción). Ver §4.1.
 
+### 0.1 Quién puede hacer qué (acceso por ahora)
+
+**Decisión vigente: solo la academia administradora inicia sesión.** Todo lo
+demás son fichas de datos, no cuentas de acceso. Los roles del enum siguen
+existiendo para el futuro, pero hoy `profesor`, `alumno_adulto`, `alumno_menor`
+y tutor están **sin acceso por ahora**. Recepción queda **SIN DEFINIR**.
+
+| Quién | ¿Inicia sesión? | Puede leer | Puede escribir |
+| --- | --- | --- | --- |
+| `administrador` | Sí | Todo su tenant (sedes, canchas, profesores, alumnos, clases, bloques, planes, cargos, pagos, notas de crédito, liquidaciones, miembros) | Todo su tenant |
+| `profesor` | **No** (ficha) | Sólo su propia membresía (descubrimiento de tenants). Nada más | Nada |
+| `alumno_adulto` | **No** (ficha) | Sólo su propia membresía | Nada |
+| `alumno_menor` / tutor | **No** (ficha) | Sólo su propia membresía | Nada |
+| Recepción | **SIN DEFINIR** — no se crea | — | — |
+
+El administrador abre clases (reserva), reprograma, cancela, registra asistencia
+y cierra la clase, y más adelante marca el cobro como pagado. Los alumnos (o el
+tutor, en menores) **recibirán reportes de clase por email o Telegram**: no
+inician sesión, y el envío es una capacidad futura sin implementar (§8).
+
+La única lectura permitida a un no-admin es su propia membresía (arranque de
+sesión y descubrimiento de tenants). Con eso la app muestra el aviso "Esta
+cuenta no tiene acceso a esta academia" y **no vuelve a leer nada**.
+
 ---
 
 ## 1. Colecciones raíz
@@ -70,12 +100,17 @@ todo el sistema** (las reglas lo leen).
 | Campo | Tipo | Nota |
 | --- | --- | --- |
 | `uid` | string | Igual a `request.auth.uid` (para el collection group) |
-| `rol` | string | `administrador` \| `profesor` \| `alumno_adulto` \| `alumno_menor`. **Decisión 6: no se agrega un rol "recepción"** — recepción es un `administrador` con permisos reducidos (*reparto exacto sin definir*). |
+| `rol` | string | `administrador` \| `profesor` \| `alumno_adulto` \| `alumno_menor`. **Hoy solo `administrador` tiene acceso**; el resto queda "sin acceso por ahora". **Decisión 6: no se agrega un rol "recepción"** — recepción es un `administrador` con permisos reducidos (*reparto exacto sin definir*). |
 | `activo` | bool | |
 | `nombre` | string | Denormalizado, para mostrar sin leer el perfil |
-| `profesorId` | string \| null | Si `rol == profesor` |
-| `alumnoId` | string \| null | Si `rol` es alumno |
 | `creadoEn` | Timestamp | |
+
+> **Campos eliminados (login obsoleto):** `profesorId` y `alumnoId` en la
+> membresía ya no se usan. Se pensaban para enlazar una cuenta con su ficha,
+> pero como profesor y alumno **no inician sesión**, ese enlace es muerto. La
+> ficha se referencia por id desde las clases (`profesorId`, `alumnos[]`), no
+> desde la membresía. Si en el futuro se diera acceso a algún rol, se
+> reincorporaría el vínculo explícitamente.
 
 **Descubrimiento al iniciar sesión** (una sola consulta acotada):
 
@@ -130,13 +165,15 @@ y porque una cancha puede necesitar más campos (tarifas, tipo, estado).
 
 | Campo | Tipo | Nota |
 | --- | --- | --- |
-| `uid` | string \| null | Usuario de Auth si tiene login |
 | `nombre` | string | |
-| `email` | string | |
+| `email` | string | Dato de contacto (futuro canal de avisos, §8), no credencial |
 | `telefono` | string | |
 | `tarifaHoraCentavos` | number | Pago por hora |
 | `sedes` | string[] | IDs de sedes donde trabaja |
 | `activo` | bool | |
+
+> **Campo eliminado (login obsoleto):** el antiguo `uid` (usuario de Auth del
+> profesor) se quitó. El profesor es una ficha, no una cuenta.
 
 ### `academias/{tenantId}/alumnos/{alumnoId}`
 
@@ -154,9 +191,10 @@ y porque una cancha puede necesitar más campos (tarifas, tipo, estado).
 | `notas` | string | |
 
 **Alumno Menor:** se modela como un documento `alumnos` (no una cuenta de Auth)
-más un `tutor`. Si el tutor necesita login, es un `miembro` con rol
-`alumno_menor` enlazado por `alumnoId`. *Sin definir si el tutor gestiona varios
-menores.*
+más un `tutor`. **El tutor tampoco inicia sesión por ahora**: es el contacto del
+menor (ver §8), enlazado al `alumno` por el mapa `tutor`. *Si en el futuro se le
+diera acceso, sería un `miembro` con rol `alumno_menor`; hoy está sin acceso.*
+*Sin definir si el tutor gestiona varios menores.*
 
 ---
 
@@ -495,3 +533,44 @@ publicarse.
 - Cuándo se migra de `get()` en las reglas a custom claims (decisión 7:
   pospuesto hasta que exista Admin SDK).
 - Cuándo se habilita Blaze y con qué alerta de presupuesto (decisión 4).
+
+---
+
+## 8. Notificaciones a alumnos (futuro, sin implementar)
+
+> **TODO ESTA SECCIÓN ES UNA PROPUESTA, NO UNA DECISIÓN.** Nada de esto está en
+> el seed ni en ninguna validación, y no se implementa todavía. Alumnos y
+> tutores **no inician sesión**: reciben avisos, no operan el sistema.
+
+### Campos propuestos
+
+Opcionales, en la ficha del alumno (`alumnos/{alumnoId}`) y en el mapa `tutor`
+de los menores. Para un menor, el contacto es el del tutor, no el del chico.
+
+| Campo | Tipo | Nota |
+| --- | --- | --- |
+| `email` | string \| null | Canal base. Ya existe en la ficha; se reutiliza. |
+| `telegramChatId` | string \| null | Se completa cuando el alumno/tutor vincula el bot |
+| `canalPreferido` | string \| null | `"email"` \| `"telegram"` \| `null` |
+| `avisosActivos` | boolean | Opt-in explícito a recibir reportes |
+
+### Restricción de Telegram
+
+Un bot de Telegram **no puede escribirle a un usuario que no haya pulsado
+Start**. Por eso el vínculo no puede ser automático: hace falta un enlace de un
+solo uso `t.me/<bot>?start=<token>` que el alumno/tutor abre, y un **webhook del
+lado del servidor** que reciba el `chatId` y lo guarde en la ficha. Email es el
+canal base; Telegram es **opcional por alumno**.
+
+### Envío (sin implementar)
+
+El envío debe correr del lado del servidor (las claves no pueden vivir en el
+cliente). Planificado: **Cloud Functions v2 + Brevo**, con la API key como
+**secret de Firebase**, igual que en `tenistac-amistosos`, cuando se habilite
+Blaze. **No es parte de esta fase** y no se escribe ningún código de envío, bot
+ni Function ahora.
+
+### Contenido, disparador y frecuencia
+
+**Sin definir.** No se especifica qué dice el reporte, qué evento lo dispara
+(cierre de clase, cobro, resumen semanal) ni cada cuánto se manda.

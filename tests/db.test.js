@@ -72,7 +72,6 @@ async function sembrarBase(context) {
     rol: 'alumno_adulto',
     activo: true,
     nombre: 'Alumno',
-    alumnoId: 'a1',
   })
   await db.doc(`academias/${T1}/sedes/traki`).set({ nombre: 'Traki', activa: true })
   await db.doc(`academias/${T1}/sedes/traki/canchas/c1`).set({ nombre: 'Cancha 1', activa: true })

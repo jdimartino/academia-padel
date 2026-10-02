@@ -40,7 +40,9 @@ export default function DetailSheet({
   const alumnos = alumnosDeClase(clase)
 
   const esAdmin = rol === 'administrador'
-  const puedeAsistir = (esAdmin || rol === 'profesor') && !ESTADOS_CERRADOS.includes(clase.estado)
+  // Solo el administrador registra asistencia: profesor, alumno y tutor son
+  // fichas sin acceso.
+  const puedeAsistir = esAdmin && !ESTADOS_CERRADOS.includes(clase.estado)
   const puedeCancelar = esAdmin && !ESTADOS_CERRADOS.includes(clase.estado)
   const puedeReprogramar = esAdmin && clase.estado === 'reservada'
 

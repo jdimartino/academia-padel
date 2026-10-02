@@ -29,24 +29,25 @@ export default function Agenda() {
   const esDesktop = useMediaQuery('(min-width: 1024px)')
   const hoy = hoyISO()
 
-  const { sedes, sedeId, setSedeId, fecha, setFecha, clases, cargando, error, recargar } =
-    useAgenda(academia)
-
-  const [mes, setMes] = useState(hoy)
-  const [canchaId, setCanchaId] = useState(null)
-  const [claseSelId, setClaseSelId] = useState(null)
-  const [mostrarForm, setMostrarForm] = useState(false)
-  const [claseEdit, setClaseEdit] = useState(null)
   const [rol, setRol] = useState(null)
+  const [membresiaLista, setMembresiaLista] = useState(false)
 
+  /*
+   * Única lectura de un no-admin: su propia membresía. Hasta que no se confirme
+   * que es administrador, la agenda no dispara ninguna otra lectura.
+   */
   useEffect(() => {
     let activo = true
     getMiMembresia(db, academia, user.uid)
       .then((membresia) => {
-        if (activo) setRol(membresia?.rol ?? null)
+        if (!activo) return
+        setRol(membresia?.rol ?? null)
+        setMembresiaLista(true)
       })
       .catch(() => {
-        if (activo) setRol(null)
+        if (!activo) return
+        setRol(null)
+        setMembresiaLista(true)
       })
     return () => {
       activo = false
@@ -54,6 +55,16 @@ export default function Agenda() {
   }, [academia, user.uid])
 
   const esAdmin = rol === 'administrador'
+  const habilitado = membresiaLista && esAdmin
+
+  const { sedes, sedeId, setSedeId, fecha, setFecha, clases, cargando, error, recargar } =
+    useAgenda(academia, habilitado)
+
+  const [mes, setMes] = useState(hoy)
+  const [canchaId, setCanchaId] = useState(null)
+  const [claseSelId, setClaseSelId] = useState(null)
+  const [mostrarForm, setMostrarForm] = useState(false)
+  const [claseEdit, setClaseEdit] = useState(null)
 
   /*
    * El detalle se DERIVA de la lectura del día (igual que hace useAgenda con
@@ -137,6 +148,15 @@ export default function Agenda() {
     const d = aFecha(mes)
     d.setMonth(d.getMonth() + delta)
     setMes(aISO(d))
+  }
+
+  if (!membresiaLista) {
+    return <EstadoMensaje titulo="Cargando…" />
+  }
+
+  // Profesor, alumno y tutor son fichas, no usuarios: no tienen acceso.
+  if (!esAdmin) {
+    return <EstadoMensaje titulo="Esta cuenta no tiene acceso a esta academia" />
   }
 
   if (!sedes) {
