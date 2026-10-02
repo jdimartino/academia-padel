@@ -1,0 +1,293 @@
+/* Pantallas de fichas (Alumnos / Profesores), navegación y controles nuevos.
+   Mobile-first y sobre los tokens de vidrio; no redefine la paleta. */
+
+/* ============================================================
+   Navegación (sidebar desktop + menú bottom-sheet mobile)
+   ============================================================ */
+
+.nav-app {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.nav-app__link {
+  min-height: 44px;
+  display: flex;
+  align-items: center;
+  padding: 10px 14px;
+  border-radius: 14px;
+  border: 1px solid transparent;
+  background: transparent;
+  color: var(--texto);
+  font-weight: 600;
+  text-decoration: none;
+}
+
+.nav-app__link.is-sel {
+  background: rgba(255, 255, 255, 0.2);
+  border-color: rgba(255, 255, 255, 0.36);
+}
+
+.menu-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 60;
+  background: rgba(0, 0, 0, 0.4);
+  display: flex;
+  align-items: flex-end;
+}
+
+.menu-sheet {
+  width: 100%;
+  margin: 12px;
+  max-height: 80dvh;
+  overflow-y: auto;
+  border-radius: var(--radio-panel);
+  padding: 18px;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.menu-sheet__head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+/* ============================================================
+   Encabezados
+   ============================================================ */
+
+.m-header__top {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.p-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding-top: 8px;
+}
+
+/* ============================================================
+   Pantallas de fichas
+   ============================================================ */
+
+.fichas {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.fichas__barra {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+
+.fichas__barra .form__input {
+  flex: 1 1 12rem;
+  min-width: 0;
+}
+
+.fichas__barra .btn-cta {
+  flex: 0 0 auto;
+}
+
+.fichas__contador {
+  flex: 1 1 auto;
+  color: var(--texto-muted);
+  font-size: 14px;
+}
+
+.fichas__lista {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.ficha-item {
+  width: 100%;
+  min-height: 56px;
+  padding: 12px 14px;
+  border-radius: 16px;
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 2px;
+  color: var(--texto);
+  text-align: left;
+}
+
+.ficha-item__nombre {
+  font-weight: 700;
+}
+
+.ficha-item__meta {
+  font-size: 12px;
+  color: var(--texto-muted);
+}
+
+/* ============================================================
+   Selector de alumnos
+   ============================================================ */
+
+.chips-sel {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.chip-rem {
+  min-height: 36px;
+  padding: 0 12px;
+  border-radius: var(--radio-pill);
+  border: 1px solid rgba(255, 255, 255, 0.28);
+  background: rgba(255, 255, 255, 0.14);
+  color: var(--texto);
+  font-weight: 600;
+}
+
+.chip-sel--fijo {
+  display: inline-flex;
+  align-items: center;
+  min-height: 36px;
+  padding: 0 12px;
+  border-radius: var(--radio-pill);
+  border: 1px solid rgba(255, 255, 255, 0.22);
+  background: rgba(255, 255, 255, 0.08);
+  font-weight: 600;
+}
+
+.sugerencias {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.sugerencia {
+  width: 100%;
+  min-height: 44px;
+  padding: 8px 12px;
+  border-radius: 12px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  border: 1px solid rgba(255, 255, 255, 0.18);
+  background: rgba(255, 255, 255, 0.08);
+  color: var(--texto);
+  text-align: left;
+  font-weight: 600;
+}
+
+.sugerencia__meta {
+  font-size: 12px;
+  color: var(--texto-muted);
+  font-weight: 400;
+}
+
+.aviso--warn {
+  background: var(--estado-pendiente-bg);
+  color: var(--estado-pendiente-texto);
+}
+
+/* ============================================================
+   Ficha de alumno/profesor
+   ============================================================ */
+
+.toggle {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  min-height: 44px;
+  font-weight: 600;
+}
+
+.toggle input {
+  width: 22px;
+  height: 22px;
+  accent-color: var(--accent);
+}
+
+.tutor-box {
+  margin: 0;
+  padding: 12px;
+  border-radius: 14px;
+  border: 1px solid rgba(255, 255, 255, 0.18);
+  background: rgba(255, 255, 255, 0.06);
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.tutor-box legend {
+  padding: 0 6px;
+}
+
+/* ============================================================
+   Asistencia: control segmentado de 3 estados (cabe a 390px)
+   ============================================================ */
+
+.seg {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 4px;
+  padding: 4px;
+  border-radius: var(--radio-pill);
+  background: rgba(255, 255, 255, 0.08);
+  border: 1px solid rgba(255, 255, 255, 0.18);
+}
+
+.seg__op {
+  min-height: 44px;
+  padding: 4px 6px;
+  border: none;
+  border-radius: var(--radio-pill);
+  background: transparent;
+  color: var(--texto-muted);
+  font-size: 11px;
+  font-weight: 700;
+  line-height: 1.15;
+}
+
+.seg__op.is-sel {
+  background: var(--texto);
+  color: #0a1626;
+}
+
+/* ============================================================
+   Marcador "sin cerrar" en el bloque de la agenda
+   ============================================================ */
+
+.bloque__sin-cerrar {
+  position: absolute;
+  top: 6px;
+  right: 6px;
+  width: 9px;
+  height: 9px;
+  border-radius: 50%;
+  background: #ff7a1a;
+  box-shadow: 0 0 0 2px rgba(0, 0, 0, 0.28);
+}
+
+.bloque--sin-cerrar {
+  box-shadow: var(--bloque-sombra), inset 0 0 0 2px rgba(255, 122, 26, 0.9);
+}

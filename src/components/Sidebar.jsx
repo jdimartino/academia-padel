@@ -1,3 +1,4 @@
+import AppNav from './AppNav'
 import MiniCalendar from './MiniCalendar'
 import { LogoMark } from './Icons'
 
@@ -26,6 +27,8 @@ export default function Sidebar({
         <LogoMark />
         <span className="sidebar__titulo">Academia Pádel</span>
       </div>
+
+      <AppNav />
 
       {puedeReservar ? (
         <button type="button" className="btn-cta" onClick={onNuevaReserva}>

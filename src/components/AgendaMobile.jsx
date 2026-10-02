@@ -1,5 +1,7 @@
+import { useState } from 'react'
+import MenuMovil from './MenuMovil'
 import TimeGrid from './TimeGrid'
-import { LogoMark } from './Icons'
+import { LogoMark, MenuIcon } from './Icons'
 import { DIAS_CORTOS, diasDeSemana, formatearFechaLarga } from '../lib/fechas'
 
 export default function AgendaMobile({
@@ -14,19 +16,31 @@ export default function AgendaMobile({
   onCancha,
   clases,
   totalClases,
+  sinCerrar,
   onSelectClase,
   puedeReservar,
   onNuevaReserva,
 }) {
   const semana = diasDeSemana(fecha)
   const canchaSel = canchas.find((c) => c.id === canchaId) ?? canchas[0]
+  const [menu, setMenu] = useState(false)
 
   return (
     <>
       <header className="m-header">
-        <div className="m-marca">
-          <LogoMark size={28} />
-          <span className="m-marca__texto">Agenda · {sede?.nombre ?? ''}</span>
+        <div className="m-header__top">
+          <div className="m-marca">
+            <LogoMark size={28} />
+            <span className="m-marca__texto">Agenda · {sede?.nombre ?? ''}</span>
+          </div>
+          <button
+            type="button"
+            className="icon-btn"
+            aria-label="Abrir menú"
+            onClick={() => setMenu(true)}
+          >
+            <MenuIcon />
+          </button>
         </div>
         <h1 className="m-fecha">{formatearFechaLarga(fecha)}</h1>
       </header>
@@ -103,6 +117,7 @@ export default function AgendaMobile({
         <div className="m-bar__info">
           <strong>
             {totalClases} {totalClases === 1 ? 'clase' : 'clases'}
+            {sinCerrar ? ` · ${sinCerrar} sin cerrar` : ''}
           </strong>
           <span>
             {canchaSel?.nombre ?? ''} · {sede?.nombre ?? ''}
@@ -114,6 +129,8 @@ export default function AgendaMobile({
           </button>
         ) : null}
       </div>
+
+      {menu ? <MenuMovil onClose={() => setMenu(false)} /> : null}
     </>
   )
 }
