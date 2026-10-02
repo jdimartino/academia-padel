@@ -7,7 +7,10 @@
     "dev": "vite",
     "build": "vite build",
     "lint": "oxlint",
-    "preview": "vite preview"
+    "preview": "vite preview",
+    "emulators": "firebase emulators:start --only auth,firestore,hosting",
+    "seed": "node scripts/seed.mjs",
+    "seed:emu": "firebase emulators:exec --only auth,firestore \"npm run seed\""
   },
   "dependencies": {
     "firebase": "^12.19.0",

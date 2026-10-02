@@ -12,43 +12,120 @@ Se vende como suscripción mensual **por academia** (cada academia es un tenant)
 - Firebase (Authentication + Cloud Firestore + Hosting)
 - CSS propio, mobile-first. Sin librerías de UI.
 
-## Cómo correrlo
+## Requisitos
+
+- Node 20+ y npm
+- Firebase CLI (`npm i -g firebase-tools`)
+- Java 11+ (lo necesita el emulador de Firestore)
+
+## Cómo correrlo (Fase 0, todo local)
+
+No hay proyecto de Firebase en la nube todavía. Todo corre contra el
+**Emulator Suite**.
 
 ```bash
 npm install
-cp .env.example .env.local   # completar los valores
-dev academia-padel
+cp .env.example .env.local
 ```
 
-`dev` es el alias del workspace que levanta el servidor de Vite en
-`~/Desktop/Antigravity/academia-padel`.
+En **una terminal** levantá los emuladores (Auth + Firestore + Hosting + UI):
 
-Build de producción:
+```bash
+npm run emulators
+```
+
+En **otra terminal** sembrá el tenant de ensayo:
+
+```bash
+npm run seed
+```
+
+En una **tercera terminal** corré la app:
+
+```bash
+npm run dev
+```
+
+Abrí http://localhost:5173 y entrá con cualquiera de los usuarios de ensayo
+(contraseña `ensayo1234`):
+
+| Correo | Rol |
+| --- | --- |
+| `admin@ensayo.test` | Administrador |
+| `profe@ensayo.test` | Profesor |
+| `alumno@ensayo.test` | Alumno adulto |
+| `tutor@ensayo.test` | Alumno menor (tutor) |
+
+Emulator UI: http://127.0.0.1:4000
+
+### Atajo: sembrar sin dejar los emuladores levantados
+
+```bash
+npm run seed:emu
+```
+
+Levanta los emuladores, corre el seed y los apaga. Útil en CI o para resetear.
+
+### Build de producción
 
 ```bash
 npm run build
 ```
 
-## Firebase
+Antes de un build real, poner `VITE_USE_EMULATORS=false` en `.env.local` (o
+definir las variables en el entorno de deploy).
 
-- Project ID: `academia-padel-jdm`
-- Hosting: `academia-padel-jdm.web.app`
-- Firestore: base `(default)` en `us-east1`
+## Estructura
+
+```
+src/
+  firebase/     config.js (init + emuladores) y db.js (ÚNICA capa de datos)
+  context/      AuthContext.jsx
+  pages/        Login, Dashboard
+  components/   ProtectedRoute
+scripts/
+  seed.mjs      tenant de ensayo por REST contra el emulador
+docs/
+  fase-0.md         investigación de límites y decisiones
+  modelo-datos.md   modelo de Firestore propuesto
+firestore.rules       reglas por tenant + rol
+firestore.indexes.json
+```
+
+## Arquitectura multi-tenant
+
+- Todos los datos cuelgan de `academias/{tenantId}/...`.
+- Cada usuario pertenece a un tenant vía `academias/{tenantId}/miembros/{uid}`
+  con un `rol`.
+- Al iniciar sesión, el cliente descubre sus academias con una sola consulta
+  `collectionGroup('miembros').where('uid','==',uid)`.
+- Las Security Rules validan membresía activa + rol en cada operación.
+
+Ver `docs/modelo-datos.md` para el detalle.
 
 ## Regla de costo (no negociable)
 
-El proyecto usa el plan **Blaze**, pero todo tiene que quedar dentro de la
-cuota gratuita:
+El proyecto apunta al plan sin costo de Firebase. Todo tiene que quedar dentro
+de la cuota gratuita:
 
-- Solo la base de datos `(default)` de Firestore califica para la cuota gratis.
-  **Nunca crear una base con nombre.**
-- No habilitar nada pago: nada de Cloud Functions, Storage, backups, PITR ni TTL
-  hasta que se pida explícitamente.
+- Solo la base de datos `(default)` de Firestore califica. **Nunca crear una
+  base con nombre.**
+- **No** habilitar Cloud Functions, Cloud Storage, backups, PITR ni TTL.
 - Las consultas a Firestore van siempre acotadas (tenant, sede, rango de fechas,
-  límite/paginación) para no generar lecturas de más.
+  límite/paginación). Nada de `getDocs` sin `where`.
+
+Detalle y números en `docs/fase-0.md`.
 
 ## Regla de UI
 
 Todas las pantallas, ahora y en el futuro, tienen que ser responsivas: primero
 mobile, después desktop. Nada de anchos fijos ni de layouts que solo funcionen
 en un tamaño.
+
+## Firebase
+
+- Project ID: `academia-padel-jdm` (todavía **no creado** en la nube)
+- Hosting: `academia-padel-jdm.web.app`
+- Firestore: base `(default)`, región `us-east1`
+- Deploys: a través del tooling del workspace (`jdm`), nunca `firebase deploy`
+  desde esta carpeta.
