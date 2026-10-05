@@ -44,6 +44,9 @@ export { CATEGORIAS }
 /** Estados en los que la clase ya está cerrada y no admite más asistencia. */
 const ESTADOS_CERRADOS = ['pendiente_cobro', 'cobrada', 'cancelada']
 
+/** Cupo máximo de una clase según el modelo de datos (docs/modelo-datos.md §4). */
+export const CUPO_MAXIMO = 4
+
 /**
  * Estados de asistencia admitidos. Los tres distinguen si la ausencia fue
  * avisada: el sistema no recibe avisos, así que lo decide el administrador. La
@@ -59,6 +62,25 @@ function validarCategoria(categoria) {
   if (categoria != null && !CATEGORIAS.includes(categoria)) {
     throw new ClaseInvalidaError(
       `Categoría inválida "${categoria}". Permitidas: ${CATEGORIAS.join(', ')}`,
+    )
+  }
+}
+
+/**
+ * Valida que el cupo sea un entero entre 1 y CUPO_MAXIMO (4).
+ * Rechaza strings numéricos, decimales, 0 y valores fuera de rango.
+ * Acepta `undefined`/`null` (usa el default 4 quien llame).
+ */
+function validarCupo(cupo) {
+  if (cupo === undefined || cupo === null) return
+  if (typeof cupo !== 'number' || !Number.isInteger(cupo)) {
+    throw new ClaseInvalidaError(
+      `cupo debe ser un entero (recibido ${JSON.stringify(cupo)})`,
+    )
+  }
+  if (cupo < 1 || cupo > CUPO_MAXIMO) {
+    throw new ClaseInvalidaError(
+      `cupo debe estar entre 1 y ${CUPO_MAXIMO} (recibido ${cupo})`,
     )
   }
 }
@@ -246,16 +268,20 @@ export async function getMisMembresias(db, uid) {
 }
 
 /*
- * Sedes activas/inactivas de una academia. Acotado por tenant + limit.
- * Se ordena en el cliente por `orden` (evita depender de un índice compuesto
- * y de que el campo exista en todos los documentos).
+ * Sedes activas de una academia. Acotado por tenant + activa + limit.
+ * El filtro `activa == true` va en la query para no desperdiciar lecturas
+ * en sedes inactivas. Se ordena en el cliente por `orden` (evita depender
+ * de un índice compuesto y de que el campo exista en todos los documentos).
  */
 export async function getSedes(db, tenantId) {
-  const q = query(collection(db, 'academias', tenantId, 'sedes'), limit(50))
+  const q = query(
+    collection(db, 'academias', tenantId, 'sedes'),
+    where('activa', '==', true),
+    limit(50),
+  )
   const snap = await getDocs(q)
   return snap.docs
     .map((d) => ({ id: d.id, ...d.data() }))
-    .filter((sede) => sede.activa !== false)
     .sort(
       (a, b) =>
         (a.orden ?? 0) - (b.orden ?? 0) ||
@@ -263,13 +289,16 @@ export async function getSedes(db, tenantId) {
     )
 }
 
-/** Canchas de una sede. Acotado por sede + limit. Orden client-side por `numero`. */
+/** Canchas activas de una sede. Acotado por sede + activa + limit. Orden client-side por `numero`. */
 export async function getCanchas(db, tenantId, sedeId) {
-  const q = query(collection(db, 'academias', tenantId, 'sedes', sedeId, 'canchas'), limit(20))
+  const q = query(
+    collection(db, 'academias', tenantId, 'sedes', sedeId, 'canchas'),
+    where('activa', '==', true),
+    limit(20),
+  )
   const snap = await getDocs(q)
   return snap.docs
     .map((d) => ({ id: d.id, ...d.data() }))
-    .filter((cancha) => cancha.activa !== false)
     .sort(
       (a, b) =>
         (a.numero ?? 0) - (b.numero ?? 0) ||
@@ -278,15 +307,19 @@ export async function getCanchas(db, tenantId, sedeId) {
 }
 
 /**
- * Profesores activos de una academia. Acotado por tenant + limit. Orden
- * client-side por nombre (evita un índice compuesto).
+ * Profesores activos de una academia. El filtro `activo == true` va en la
+ * query para no leer fichas inactivas. Acotado por tenant + activo + limit.
+ * Orden client-side por nombre (evita un índice compuesto).
  */
 export async function getProfesores(db, tenantId) {
-  const q = query(collection(db, 'academias', tenantId, 'profesores'), limit(50))
+  const q = query(
+    collection(db, 'academias', tenantId, 'profesores'),
+    where('activo', '==', true),
+    limit(50),
+  )
   const snap = await getDocs(q)
   return snap.docs
     .map((d) => ({ id: d.id, ...d.data() }))
-    .filter((profesor) => profesor.activo !== false)
     .sort((a, b) => String(a.nombre ?? '').localeCompare(String(b.nombre ?? '')))
 }
 
@@ -318,6 +351,7 @@ function validarTipoAlumno(tipo) {
  * Crea una ficha de alumno. Campos según docs/modelo-datos.md §3. Para
  * `tipo: "menor"` exige un tutor con nombre (los avisos van al tutor).
  * `avisosActivos` arranca en `true`; el canal de avisos todavía no existe.
+ * Solo los campos del whitelist se escriben (el resto se ignora).
  */
 export async function crearAlumno(db, tenantId, datos = {}, opciones = {}) {
   const { uid = null, now = new Date(), alumnoId = null } = opciones
@@ -341,6 +375,7 @@ export async function crearAlumno(db, tenantId, datos = {}, opciones = {}) {
     }
   }
 
+  // Whitelist: solo los campos conocidos del modelo se persisten.
   const alumno = {
     tipo,
     nombre,
@@ -367,14 +402,45 @@ export async function crearAlumno(db, tenantId, datos = {}, opciones = {}) {
 
 /**
  * Actualiza una ficha de alumno (merge). Soft delete: `{ activo: false }`.
- * Recalcula `nombreBusqueda` si cambia el nombre.
+ * Recalcula `nombreBusqueda` si cambia el nombre. Solo los campos del
+ * whitelist se incluyen en la actualización (el resto se ignora).
+ * Si el tipo resultante es "menor", exige tutor.nombre no vacío.
  */
 export async function actualizarAlumno(db, tenantId, alumnoId, cambios = {}, opciones = {}) {
   const { uid = null, now = new Date() } = opciones
   if (cambios.tipo !== undefined) validarTipoAlumno(cambios.tipo)
   if (cambios.nivel !== undefined) validarNivel(cambios.nivel)
 
-  const update = { ...cambios }
+  // Si se envía un tutor en los cambios, validar que tenga nombre cuando el
+  // tipo resultante sea "menor" (ya sea el tipo que viene en cambios o el
+  // actual que no se está tocando — lo comprobamos solo con lo que tenemos).
+  if (cambios.tutor !== undefined || cambios.tipo === 'menor') {
+    // Necesitamos saber el tipo definitivo. Si cambios.tipo no viene,
+    // leemos el documento para conocer el tipo actual.
+    let tipoEfectivo = cambios.tipo
+    if (!tipoEfectivo) {
+      const snap = await getDoc(refAlumno(db, tenantId, alumnoId))
+      tipoEfectivo = snap.exists() ? snap.data().tipo : 'adulto'
+    }
+    if (tipoEfectivo === 'menor') {
+      const tutorNuevo = cambios.tutor
+      if (tutorNuevo !== undefined) {
+        const tutorNombre = String(tutorNuevo?.nombre ?? '').trim()
+        if (!tutorNombre) throw new FichaInvalidaError('Un alumno menor necesita un tutor con nombre')
+      }
+    }
+  }
+
+  // Whitelist de campos permitidos en una actualización de alumno.
+  const CAMPOS_ALUMNO = [
+    'tipo', 'nombre', 'nivel', 'email', 'telefono', 'documento',
+    'tutor', 'sedes', 'avisosActivos', 'activo', 'notas',
+  ]
+  const update = {}
+  for (const campo of CAMPOS_ALUMNO) {
+    if (cambios[campo] !== undefined) update[campo] = cambios[campo]
+  }
+
   if (cambios.nombre !== undefined) {
     const nombre = String(cambios.nombre ?? '').trim()
     if (!nombre) throw new FichaInvalidaError('El alumno necesita nombre')
@@ -420,12 +486,14 @@ export async function buscarAlumnos(db, tenantId, texto, opciones = {}) {
 /**
  * Crea una ficha de profesor. La tarifa por hora queda SIN DEFINIR: no se
  * escribe ningún campo de tarifa (tampoco `tarifaHoraCentavos`).
+ * Solo los campos del whitelist se persisten.
  */
 export async function crearProfesor(db, tenantId, datos = {}, opciones = {}) {
   const { uid = null, now = new Date(), profesorId = null } = opciones
   const nombre = String(datos.nombre ?? '').trim()
   if (!nombre) throw new FichaInvalidaError('El profesor necesita nombre')
 
+  // Whitelist: solo los campos conocidos del modelo se persisten.
   const profesor = {
     nombre,
     telefono: datos.telefono ?? null,
@@ -445,14 +513,24 @@ export async function crearProfesor(db, tenantId, datos = {}, opciones = {}) {
 
 /**
  * Actualiza una ficha de profesor (merge). Soft delete: `{ activo: false }`.
+ * Solo los campos del whitelist se incluyen en la actualización.
  */
 export async function actualizarProfesor(db, tenantId, profesorId, cambios = {}, opciones = {}) {
   const { uid = null, now = new Date() } = opciones
-  await updateDoc(refProfesor(db, tenantId, profesorId), {
-    ...cambios,
-    actualizadoPor: uid,
-    actualizadoEn: Timestamp.fromDate(now),
-  })
+  // Whitelist de campos permitidos en una actualización de profesor.
+  const CAMPOS_PROFESOR = ['nombre', 'telefono', 'email', 'sedes', 'activo']
+  const update = {}
+  for (const campo of CAMPOS_PROFESOR) {
+    if (cambios[campo] !== undefined) update[campo] = cambios[campo]
+  }
+  if (cambios.nombre !== undefined) {
+    const nombre = String(cambios.nombre ?? '').trim()
+    if (!nombre) throw new FichaInvalidaError('El profesor necesita nombre')
+    update.nombre = nombre
+  }
+  update.actualizadoPor = uid
+  update.actualizadoEn = Timestamp.fromDate(now)
+  await updateDoc(refProfesor(db, tenantId, profesorId), update)
   return { profesorId }
 }
 
@@ -494,6 +572,7 @@ export async function crearClase(db, tenantId, datos, opciones = {}) {
     )
   }
   validarCategoria(datos.categoria)
+  validarCupo(datos.cupo)
 
   const bloques = bloquesDeClase(datos)
   const claseRef = claseId
@@ -503,9 +582,32 @@ export async function crearClase(db, tenantId, datos, opciones = {}) {
   const cupo = datos.cupo ?? 4
   const alumnosIniciales = datos.alumnos ?? []
 
+  // Referencias de sede, cancha y profesor para leer dentro de la transacción.
+  const sedeRef = doc(db, 'academias', tenantId, 'sedes', datos.sedeId)
+  const canchaRef = doc(db, 'academias', tenantId, 'sedes', datos.sedeId, 'canchas', datos.canchaId)
+  const profRef = refProfesor(db, tenantId, datos.profesorId)
+
   await runTransaction(db, async (tx) => {
     // Todas las lecturas ANTES de cualquier escritura (requisito de las
     // transacciones de Firestore).
+
+    // Leer sede, cancha y profesor para validar existencia y actividad,
+    // y tomar los nombres denormalizados de los documentos.
+    const [snapSede, snapCancha, snapProfesor] = await Promise.all([
+      tx.get(sedeRef),
+      tx.get(canchaRef),
+      tx.get(profRef),
+    ])
+    if (!snapSede.exists() || snapSede.data().activa === false) {
+      throw new ClaseInvalidaError(`La sede "${datos.sedeId}" no existe o no está activa`)
+    }
+    if (!snapCancha.exists() || snapCancha.data().activa === false) {
+      throw new ClaseInvalidaError(`La cancha "${datos.canchaId}" no existe o no está activa en la sede "${datos.sedeId}"`)
+    }
+    if (!snapProfesor.exists() || snapProfesor.data().activo === false) {
+      throw new ClaseInvalidaError(`El profesor "${datos.profesorId}" no existe o no está activo`)
+    }
+
     const snapsBloque = await Promise.all(
       bloques.map((b) => tx.get(refBloque(db, tenantId, b.id))),
     )
@@ -533,10 +635,11 @@ export async function crearClase(db, tenantId, datos, opciones = {}) {
       alumnoNombres,
       cupo,
       sedeId: datos.sedeId,
-      sedeNombre: datos.sedeNombre ?? null,
+      // Nombres tomados de los documentos, no del cliente.
+      sedeNombre: snapSede.data().nombre ?? null,
       canchaId: datos.canchaId,
       profesorId: datos.profesorId,
-      profesorNombre: datos.profesorNombre ?? null,
+      profesorNombre: snapProfesor.data().nombre ?? null,
       fecha: datos.fecha,
       horaInicio: datos.horaInicio,
       horaFin: datos.horaFin,
@@ -565,7 +668,13 @@ export async function crearClase(db, tenantId, datos, opciones = {}) {
 
 /**
  * Cancela una clase y libera sus bloques en una sola transacción.
- * Idempotente: cancelar dos veces no falla.
+ *
+ * - Solo cancela clases en estado "reservada". Si ya está cancelada, es
+ *   un no-op (idempotencia para pantallas obsoletas/doble click).
+ * - Antes de borrar cada bloque verifica que bloque.claseId === claseId
+ *   para no destruir bloques que ya pertenecen a otra clase (escenario
+ *   de cancelación + nueva reserva + cancelación de pantalla obsoleta).
+ * - Guarda bloques: [] en la clase cancelada para dejar el campo limpio.
  */
 export async function cancelarClase(db, tenantId, claseId, opciones = {}) {
   const { uid = null, now = new Date() } = opciones
@@ -576,14 +685,34 @@ export async function cancelarClase(db, tenantId, claseId, opciones = {}) {
     if (!snap.exists()) throw new ClaseInvalidaError(`La clase ${claseId} no existe`)
     const datos = snap.data()
 
+    // No-op si ya está cancelada (idempotencia ante doble click o pantalla obsoleta).
+    if (datos.estado === 'cancelada') return
+
+    // Solo se puede cancelar una clase reservada.
+    if (datos.estado !== 'reservada') {
+      throw new ClaseInvalidaError(
+        `Solo se puede cancelar una clase "reservada" (estado "${datos.estado}")`,
+      )
+    }
+
+    // Leer cada bloque para verificar propiedad antes de borrar.
+    const bloqueIds = datos.bloques ?? []
+    const snapsBloques = await Promise.all(
+      bloqueIds.map((id) => tx.get(refBloque(db, tenantId, id))),
+    )
+
     tx.update(claseRef, {
       estado: 'cancelada',
+      bloques: [],
       actualizadoPor: uid,
       actualizadoEn: Timestamp.fromDate(now),
     })
-    for (const bloqueId of datos.bloques ?? []) {
-      tx.delete(refBloque(db, tenantId, bloqueId))
-    }
+    bloqueIds.forEach((bloqueId, i) => {
+      // Solo borrar si el bloque existe y todavía pertenece a esta clase.
+      if (snapsBloques[i].exists() && snapsBloques[i].data().claseId === claseId) {
+        tx.delete(refBloque(db, tenantId, bloqueId))
+      }
+    })
   })
 
   return { claseId, estado: 'cancelada' }
@@ -608,11 +737,19 @@ export async function reprogramarClase(db, tenantId, claseId, nuevoCambio = {}, 
     )
   }
   validarCategoria(nuevoCambio.categoria)
+  if (nuevoCambio.cupo !== undefined) validarCupo(nuevoCambio.cupo)
 
   await runTransaction(db, async (tx) => {
     const snap = await tx.get(claseRef)
     if (!snap.exists()) throw new ClaseInvalidaError(`La clase ${claseId} no existe`)
     const datos = snap.data()
+
+    // Solo se puede reprogramar una clase en estado "reservada".
+    if (datos.estado !== 'reservada') {
+      throw new ClaseInvalidaError(
+        `Solo se puede reprogramar una clase "reservada" (estado "${datos.estado}")`,
+      )
+    }
 
     const campo = (clave, fallback) =>
       nuevoCambio[clave] !== undefined ? nuevoCambio[clave] : (datos[clave] ?? fallback)
@@ -754,7 +891,7 @@ export async function asignarAlumnos(db, tenantId, claseId, alumnoIds, opciones 
  * Tampoco se generan cargos ni liquidación al profesor.
  */
 export async function registrarAsistencia(db, tenantId, claseId, asistencias, opciones = {}) {
-  const { uid = null, now = new Date() } = opciones
+  const { uid = null, now = new Date(), ahora = new Date() } = opciones
   if (!Array.isArray(asistencias)) {
     throw new ClaseInvalidaError('asistencias debe ser un arreglo')
   }
@@ -781,10 +918,32 @@ export async function registrarAsistencia(db, tenantId, claseId, asistencias, op
   await runTransaction(db, async (tx) => {
     const snap = await tx.get(claseRef)
     if (!snap.exists()) throw new ClaseInvalidaError(`La clase ${claseId} no existe`)
-    if (ESTADOS_CERRADOS.includes(snap.data().estado)) {
+    const estadoActual = snap.data().estado
+
+    // Solo se puede cerrar una clase que está en estado "reservada".
+    if (estadoActual !== 'reservada') {
       throw new ClaseInvalidaError(
-        `La clase ${claseId} ya está cerrada (estado "${snap.data().estado}")`,
+        estadoActual === 'cancelada'
+          ? `La clase ${claseId} está cancelada y no se puede cerrar`
+          : `La clase ${claseId} ya está cerrada (estado "${estadoActual}")`,
       )
+    }
+
+    // No se puede cerrar una clase que todavía no terminó.
+    // Se compara en hora LOCAL para no depender de UTC (Caracas = UTC-4).
+    const d = snap.data()
+    const [fy, fm, fd] = String(d.fecha ?? '').split('-').map(Number)
+    if (fy && fm && fd && d.horaFin) {
+      const finMinutos = aMinutos(d.horaFin)
+      if (finMinutos !== null) {
+        const finFecha = new Date(fy, fm - 1, fd)
+        finFecha.setMinutes(finMinutos)
+        if (ahora.getTime() < finFecha.getTime()) {
+          throw new ClaseInvalidaError(
+            `La clase ${claseId} todavía no terminó (horaFin ${d.horaFin} el ${d.fecha})`,
+          )
+        }
+      }
     }
 
     // Exactamente una entrada por alumno asignado: ni de menos (falta alguno)

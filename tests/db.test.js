@@ -16,7 +16,10 @@ import { doc, getDoc, setDoc } from 'firebase/firestore'
 import {
   MINUTOS_BLOQUE,
   SolapamientoError,
+  ClaseInvalidaError,
+  FichaInvalidaError,
   actualizarAlumno,
+  actualizarProfesor,
   asignarAlumnos,
   bloquesDeClase,
   buscarAlumnos,
@@ -39,6 +42,8 @@ const T1 = 't1'
 const ADMIN = 'uid-admin-t1'
 const ALUMNO = 'uid-alumno-t1'
 const FECHA = '2026-10-05'
+/** Momento local después de que termina la clase de ensayo (horaFin 19:30). */
+const DESPUES_DEL_FIN = new Date(2026, 9, 5, 20, 0, 0)
 
 let env
 let adminDb
@@ -81,7 +86,9 @@ async function sembrarBase(context) {
   })
   await db.doc(`academias/${T1}/sedes/traki`).set({ nombre: 'Traki', activa: true })
   await db.doc(`academias/${T1}/sedes/traki/canchas/c1`).set({ nombre: 'Cancha 1', activa: true })
+  await db.doc(`academias/${T1}/sedes/traki/canchas/c2`).set({ nombre: 'Cancha 2', activa: true })
   await db.doc(`academias/${T1}/profesores/p1`).set({ nombre: 'Pablo', activo: true })
+  await db.doc(`academias/${T1}/profesores/p2`).set({ nombre: 'Pedro', activo: true })
 
   // Fichas: a1 y a2 activas, a3 inactiva (nunca asignable). `nombreBusqueda`
   // es el campo normalizado (sin tildes ni mayúsculas) que usa buscarAlumnos.
@@ -272,10 +279,9 @@ describe('lecturas de agenda', () => {
 
   it('getCanchas devuelve las canchas de la sede', async () => {
     const canchas = await getCanchas(adminDb, T1, 'traki')
-    assert.deepEqual(
-      canchas.map((c) => c.id),
-      ['c1'],
-    )
+    // c1 y c2 están sembradas en sembrarBase.
+    assert.ok(canchas.some((c) => c.id === 'c1'), 'debe incluir c1')
+    assert.ok(canchas.some((c) => c.id === 'c2'), 'debe incluir c2')
   })
 
   it('getProfesores devuelve solo los profesores activos', async () => {
@@ -456,6 +462,7 @@ describe('asignación de alumnos', () => {
     const { claseId } = await reservar({ alumnos: ['a1'] })
     await registrarAsistencia(adminDb, T1, claseId, [{ alumnoId: 'a1', estado: 'presente' }], {
       uid: ADMIN,
+      ahora: DESPUES_DEL_FIN,
     })
     await assert.rejects(
       () => asignarAlumnos(adminDb, T1, claseId, ['a2'], { uid: ADMIN }),
@@ -572,7 +579,7 @@ describe('registrarAsistencia', () => {
         { alumnoId: 'a1', estado: 'ausente_avisada', motivo: 'viaje' },
         { alumnoId: 'a2', estado: 'ausente_sin_aviso' },
       ],
-      { uid: ADMIN },
+      { uid: ADMIN, ahora: DESPUES_DEL_FIN },
     )
     const clase = await getClase(adminDb, T1, claseId)
     assert.equal(clase.estado, 'pendiente_cobro')
@@ -596,7 +603,10 @@ describe('registrarAsistencia', () => {
   it('exige una entrada por cada alumno asignado (falta uno) → DENY', async () => {
     const { claseId } = await reservar({ alumnos: ['a1', 'a2'] })
     await assert.rejects(
-      () => registrarAsistencia(adminDb, T1, claseId, [{ alumnoId: 'a1', estado: 'presente' }], { uid: ADMIN }),
+      () => registrarAsistencia(adminDb, T1, claseId, [{ alumnoId: 'a1', estado: 'presente' }], {
+        uid: ADMIN,
+        ahora: DESPUES_DEL_FIN,
+      }),
       /exactamente una entrada/,
     )
     assert.equal((await getClase(adminDb, T1, claseId)).estado, 'reservada')
@@ -614,7 +624,7 @@ describe('registrarAsistencia', () => {
             { alumnoId: 'a1', estado: 'presente' },
             { alumnoId: 'a2', estado: 'presente' },
           ],
-          { uid: ADMIN },
+          { uid: ADMIN, ahora: DESPUES_DEL_FIN },
         ),
       /exactamente una entrada/,
     )
@@ -624,9 +634,13 @@ describe('registrarAsistencia', () => {
     const { claseId } = await reservar()
     await registrarAsistencia(adminDb, T1, claseId, [{ alumnoId: 'a1', estado: 'presente' }], {
       uid: ADMIN,
+      ahora: DESPUES_DEL_FIN,
     })
     await assert.rejects(
-      () => registrarAsistencia(adminDb, T1, claseId, [{ alumnoId: 'a1', estado: 'presente' }], { uid: ADMIN }),
+      () => registrarAsistencia(adminDb, T1, claseId, [{ alumnoId: 'a1', estado: 'presente' }], {
+        uid: ADMIN,
+        ahora: DESPUES_DEL_FIN,
+      }),
       /ya está cerrada/,
     )
   })
@@ -644,5 +658,253 @@ describe('carreras', () => {
 
     const creada = await getClase(adminDb, T1, ganadoras[0].value.claseId)
     assert.equal(creada.bloques.length, 6)
+  })
+})
+
+// ============================================================
+// BLOCK A — nuevas pruebas (deben FALLAR antes del fix)
+// ============================================================
+
+describe('[A1] cancelarClase: guardia de estado y propiedad de bloques', () => {
+  it('[REPRODUCE] cancelar clase ya cancelada no borra bloques de clase B (escenario doble-click)', async () => {
+    // 1. Reservar clase A y cancelarla (libera los bloques).
+    const { claseId: claseA, bloques: bloquesA } = await reservar()
+    await cancelarClase(adminDb, T1, claseA, { uid: ADMIN })
+
+    // 2. Reservar clase B en los mismos slots: reutiliza los mismos IDs de bloque.
+    const { claseId: claseB, bloques: bloquesB } = await reservar()
+    assert.deepEqual(bloquesA, bloquesB, 'los IDs de bloque deben ser deterministas e idénticos')
+
+    // 3. Cancelar clase A de nuevo (pantalla vieja / doble click).
+    //    Con el bug: clase A ya está cancelada → estado no se chequea → se borran
+    //    los bloques por ID → los bloques de clase B quedan destruidos.
+    //    Con el fix: se detecta que clase A ya está cancelada → no-op.
+    await cancelarClase(adminDb, T1, claseA, { uid: ADMIN })
+
+    // Los bloques de clase B deben seguir existiendo.
+    for (const bloqueId of bloquesB) {
+      const snap = await bloque(bloqueId)
+      assert.ok(
+        snap.exists() && snap.data().claseId === claseB,
+        `bloque ${bloqueId} debe pertenecer a clase B`,
+      )
+    }
+  })
+
+  it('cancelar clase en estado pendiente_cobro → DENY', async () => {
+    const { claseId } = await reservar({ alumnos: ['a1'] })
+    await registrarAsistencia(adminDb, T1, claseId, [{ alumnoId: 'a1', estado: 'presente' }], {
+      uid: ADMIN,
+      ahora: DESPUES_DEL_FIN,
+    })
+    // Clase pasa a pendiente_cobro — no se puede cancelar.
+    await assert.rejects(
+      () => cancelarClase(adminDb, T1, claseId, { uid: ADMIN }),
+      /reservada/,
+    )
+    assert.equal((await getClase(adminDb, T1, claseId)).estado, 'pendiente_cobro')
+  })
+
+  it('cancelar guarda bloques: [] en la clase cancelada', async () => {
+    const { claseId } = await reservar()
+    await cancelarClase(adminDb, T1, claseId, { uid: ADMIN })
+    const cancelada = await getClase(adminDb, T1, claseId)
+    assert.deepEqual(cancelada.bloques, [])
+  })
+})
+
+describe('[A2] reprogramarClase: guardia de estado', () => {
+  it('[REPRODUCE] reprogramar clase cancelada crea bloques fantasma → DENY', async () => {
+    const { claseId } = await reservar()
+    await cancelarClase(adminDb, T1, claseId, { uid: ADMIN })
+    // Intentar reprogramar una clase cancelada debe fallar.
+    await assert.rejects(
+      () => reprogramarClase(adminDb, T1, claseId, { fecha: '2026-10-07' }, { uid: ADMIN }),
+      /reservada/,
+    )
+  })
+
+  it('[REPRODUCE] reprogramar clase en pendiente_cobro → DENY', async () => {
+    const { claseId } = await reservar({ alumnos: ['a1'] })
+    await registrarAsistencia(adminDb, T1, claseId, [{ alumnoId: 'a1', estado: 'presente' }], {
+      uid: ADMIN,
+      ahora: DESPUES_DEL_FIN,
+    })
+    await assert.rejects(
+      () => reprogramarClase(adminDb, T1, claseId, { fecha: '2026-10-07' }, { uid: ADMIN }),
+      /reservada/,
+    )
+  })
+})
+
+describe('[A3] registrarAsistencia: guardia de estado y hora', () => {
+  it('[REPRODUCE] cerrar clase cancelada → DENY (solo se cierra estando reservada)', async () => {
+    const { claseId } = await reservar({ alumnos: ['a1'] })
+    await cancelarClase(adminDb, T1, claseId, { uid: ADMIN })
+    // La clase cancelada NO está en ESTADOS_CERRADOS, así el bug pasa el filtro actual.
+    await assert.rejects(
+      () => registrarAsistencia(adminDb, T1, claseId, [{ alumnoId: 'a1', estado: 'presente' }], { uid: ADMIN }),
+      /cancelada|reservada/,
+    )
+  })
+
+  it('no se puede cerrar clase que todavía no empezó (ahora < horaFin)', async () => {
+    // Clase el FECHA a las 18:00-19:30; simulamos que son las 17:00.
+    const { claseId } = await reservar({ alumnos: ['a1'] })
+    const antesDeEmpezar = new Date('2026-10-05T17:00:00')
+    await assert.rejects(
+      () =>
+        registrarAsistencia(
+          adminDb,
+          T1,
+          claseId,
+          [{ alumnoId: 'a1', estado: 'presente' }],
+          { uid: ADMIN, ahora: antesDeEmpezar },
+        ),
+      /todavía no terminó/,
+    )
+    assert.equal((await getClase(adminDb, T1, claseId)).estado, 'reservada')
+  })
+})
+
+// ============================================================
+// BLOCK B — nuevas pruebas de validación
+// ============================================================
+
+describe('[B1] cupo: validación de entero 1-4', () => {
+  it('cupo 0 → DENY', async () => {
+    await assert.rejects(() => reservar({ cupo: 0 }), /cupo/)
+  })
+
+  it('cupo 5 → DENY (excede el máximo del modelo)', async () => {
+    await assert.rejects(() => reservar({ cupo: 5 }), /cupo/)
+  })
+
+  it('cupo string numérico → DENY', async () => {
+    await assert.rejects(() => reservar({ cupo: '2' }), /cupo/)
+  })
+
+  it('cupo 1.5 (no entero) → DENY', async () => {
+    await assert.rejects(() => reservar({ cupo: 1.5 }), /cupo/)
+  })
+
+  it('cupo 4 (máximo) → ALLOW', async () => {
+    const { claseId } = await reservar({ cupo: 4, alumnos: [] })
+    assert.equal((await getClase(adminDb, T1, claseId)).cupo, 4)
+  })
+
+  it('cupo 1 (Individual) → ALLOW', async () => {
+    const { claseId } = await reservar({ cupo: 1, alumnos: ['a1'] })
+    assert.equal((await getClase(adminDb, T1, claseId)).cupo, 1)
+  })
+})
+
+describe('[B2] crearClase: sede/cancha/profesor deben existir y estar activos', () => {
+  it('sedeId inexistente → DENY', async () => {
+    await assert.rejects(() => reservar({ sedeId: 'no-existe' }), /sede/)
+  })
+
+  it('sede inactiva → DENY', async () => {
+    // Sembrar sede inactiva
+    await setDoc(doc(adminDb, 'academias', T1, 'sedes', 'inactiva'), { nombre: 'Inactiva', activa: false })
+    await assert.rejects(
+      () => reservar({ sedeId: 'inactiva' }),
+      /sede/,
+    )
+  })
+
+  it('canchaId inexistente en la sede → DENY', async () => {
+    await assert.rejects(() => reservar({ canchaId: 'no-existe' }), /cancha/)
+  })
+
+  it('cancha que pertenece a otra sede → DENY', async () => {
+    // cancha c1 pertenece a 'traki', no a 'boleita'
+    await setDoc(doc(adminDb, 'academias', T1, 'sedes', 'boleita'), { nombre: 'Boleita', activa: true })
+    await assert.rejects(
+      () => reservar({ sedeId: 'boleita', canchaId: 'c1' }),
+      /cancha/,
+    )
+  })
+
+  it('profesor inexistente → DENY', async () => {
+    await assert.rejects(() => reservar({ profesorId: 'no-existe' }), /profesor/)
+  })
+
+  it('profesor inactivo → DENY', async () => {
+    await setDoc(doc(adminDb, 'academias', T1, 'profesores', 'pinact'), { nombre: 'Inactivo', activo: false })
+    await assert.rejects(
+      () => reservar({ profesorId: 'pinact' }),
+      /profesor/,
+    )
+  })
+
+  it('nombres denormalizados se toman del documento, no del cliente', async () => {
+    const { claseId } = await reservar({ sedeNombre: 'IGNORAR', profesorNombre: 'IGNORAR' })
+    const c = await getClase(adminDb, T1, claseId)
+    // El nombre real de la sede es 'Traki' y del profesor 'Pablo'
+    assert.equal(c.sedeNombre, 'Traki', 'sedeNombre debe venir del doc de sede')
+    assert.equal(c.profesorNombre, 'Pablo', 'profesorNombre debe venir del doc de profesor')
+  })
+})
+
+describe('[B3] fichas: whitelist y tutor para menores', () => {
+  it('crearAlumno ignora campos no permitidos (whitelist)', async () => {
+    const { alumnoId } = await crearAlumno(
+      adminDb,
+      T1,
+      { nombre: 'Test', tipo: 'adulto', campoExtraño: 'inyectado', activo: true },
+      { uid: ADMIN },
+    )
+    const ficha = await getAlumno(adminDb, T1, alumnoId)
+    assert.equal(ficha.campoExtraño, undefined, 'campos no permitidos no deben guardarse')
+  })
+
+  it('actualizarAlumno ignora campos no permitidos (whitelist)', async () => {
+    await actualizarAlumno(adminDb, T1, 'a1', { campoExtraño: 'inyectado' }, { uid: ADMIN })
+    const ficha = await getAlumno(adminDb, T1, 'a1')
+    assert.equal(ficha.campoExtraño, undefined)
+  })
+
+  it('crearProfesor ignora campos no permitidos (whitelist)', async () => {
+    const { profesorId } = await crearProfesor(
+      adminDb,
+      T1,
+      { nombre: 'Test Prof', campoExtraño: 'inyectado' },
+      { uid: ADMIN },
+    )
+    const snap = await getDoc(doc(adminDb, 'academias', T1, 'profesores', profesorId))
+    assert.equal(snap.data().campoExtraño, undefined)
+  })
+
+  it('actualizarProfesor ignora campos no permitidos (whitelist)', async () => {
+    await actualizarProfesor(adminDb, T1, 'p1', { campoExtraño: 'inyectado' }, { uid: ADMIN })
+    const snap = await getDoc(doc(adminDb, 'academias', T1, 'profesores', 'p1'))
+    assert.equal(snap.data().campoExtraño, undefined)
+  })
+
+  it('actualizarAlumno tipo menor sin tutor.nombre → DENY', async () => {
+    // a2 ya es menor con tutor; si se cambia tipo a menor y se quita el nombre del tutor
+    await assert.rejects(
+      () => actualizarAlumno(adminDb, T1, 'a2', { tutor: { nombre: '' } }, { uid: ADMIN }),
+      /tutor/,
+    )
+  })
+})
+
+describe('[B4] getSedes y getProfesores: filtro activo en la query', () => {
+  it('getSedes no devuelve sedes inactivas aunque estén en la BD', async () => {
+    await setDoc(doc(adminDb, 'academias', T1, 'sedes', 'inactivaSede'), {
+      nombre: 'Inactiva', activa: false, orden: 99,
+    })
+    const sedes = await getSedes(adminDb, T1)
+    assert.ok(!sedes.some((s) => s.id === 'inactivaSede'), 'sede inactiva no debe aparecer')
+  })
+
+  it('getProfesores no devuelve profesores inactivos aunque estén en la BD', async () => {
+    await setDoc(doc(adminDb, 'academias', T1, 'profesores', 'inactivoProf'), {
+      nombre: 'Inactivo', activo: false,
+    })
+    const profesores = await getProfesores(adminDb, T1)
+    assert.ok(!profesores.some((p) => p.id === 'inactivoProf'), 'profesor inactivo no debe aparecer')
   })
 })
