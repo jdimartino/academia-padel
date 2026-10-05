@@ -203,10 +203,12 @@ const PROFESORES = [
 const PROFESORES_POR_ID = Object.fromEntries(PROFESORES.map((p) => [p.id, p]))
 
 /*
- * Fichas de alumno de ensayo: un adulto, un menor con representante y una
- * inactiva (que el seed NUNCA asigna: `resolverAsignacion` la rechaza). Los
- * datos de contacto son solo del administrador (ver firestore.rules), y los
- * teléfonos/documentos son claramente falsos.
+ * Fichas de alumno de ensayo. La base son tres (un adulto, un menor con
+ * representante y una inactiva que el seed NUNCA asigna: `resolverAsignacion`
+ * la rechaza) más una docena de fichas variadas: apellidos con tildes y con
+ * ñ, adultos y menores (los menores siempre con representante) y al menos dos
+ * inactivas. Los datos de contacto son solo del administrador (ver
+ * firestore.rules), y los teléfonos/documentos son claramente falsos.
  */
 const ALUMNOS = [
   {
@@ -262,9 +264,286 @@ const ALUMNOS = [
     activo: false,
     notas: 'Ficha de ensayo inactiva (no se asigna)',
   },
+  // Doce fichas variadas: apellidos con tildes y con ñ, adultos y menores (los
+  // menores con representante) y dos inactivas más (a9 y a13).
+  {
+    id: 'a4',
+    tipo: 'adulto',
+    nombre: 'Ángel',
+    apellidos: 'Ávila',
+    nivel: '7a',
+    email: 'a4@ensayo.test',
+    telefono: '+58 000 000 0004',
+    documento: { tipo: 'cedula', numero: 'V-00000004' },
+    contactoEmergencia: { nombre: 'Ana Ávila', telefono: '+58 000 000 0104' },
+    representante: null,
+    fechaIngreso: diaRelativo(-150),
+    avisosActivos: true,
+    activo: true,
+    notas: '',
+  },
+  {
+    id: 'a5',
+    tipo: 'menor',
+    nombre: 'Iker',
+    apellidos: 'Ñáñez',
+    nivel: 'principiante',
+    email: null,
+    telefono: null,
+    documento: null,
+    contactoEmergencia: null,
+    representante: {
+      nombre: 'Nora',
+      apellidos: 'Ñáñez',
+      email: 'nora.nanez@ensayo.test',
+      telefono: '+58 000 000 0005',
+    },
+    fechaIngreso: diaRelativo(-45),
+    avisosActivos: true,
+    activo: true,
+    notas: '',
+  },
+  {
+    id: 'a6',
+    tipo: 'adulto',
+    nombre: 'Lucía',
+    apellidos: 'Muñoz',
+    nivel: '3a',
+    email: null,
+    telefono: '+58 000 000 0006',
+    documento: null,
+    contactoEmergencia: null,
+    representante: null,
+    fechaIngreso: diaRelativo(-90),
+    avisosActivos: false,
+    activo: true,
+    notas: '',
+  },
+  {
+    id: 'a7',
+    tipo: 'menor',
+    nombre: 'Diego',
+    apellidos: 'Peña',
+    nivel: '5a',
+    email: null,
+    telefono: null,
+    documento: null,
+    contactoEmergencia: null,
+    representante: {
+      nombre: 'Raúl',
+      apellidos: 'Peña',
+      email: 'raul.pena@ensayo.test',
+      telefono: '+58 000 000 0007',
+    },
+    fechaIngreso: diaRelativo(-30),
+    avisosActivos: true,
+    activo: true,
+    notas: '',
+  },
+  {
+    id: 'a8',
+    tipo: 'adulto',
+    nombre: 'Sofía',
+    apellidos: 'Vásquez',
+    nivel: '2a',
+    email: 'sofia.vasquez@ensayo.test',
+    telefono: '+58 000 000 0008',
+    documento: { tipo: 'pasaporte', numero: 'P-00000008' },
+    contactoEmergencia: null,
+    representante: null,
+    fechaIngreso: diaRelativo(-210),
+    avisosActivos: true,
+    activo: true,
+    notas: '',
+  },
+  {
+    id: 'a9',
+    tipo: 'adulto',
+    nombre: 'Tomás',
+    apellidos: 'González',
+    nivel: null,
+    email: null,
+    telefono: '+58 000 000 0009',
+    documento: null,
+    contactoEmergencia: null,
+    representante: null,
+    fechaIngreso: diaRelativo(-400),
+    avisosActivos: false,
+    activo: false,
+    notas: 'Ficha de ensayo inactiva (no se asigna)',
+  },
+  {
+    id: 'a10',
+    tipo: 'menor',
+    nombre: 'Camila',
+    apellidos: 'Ríos',
+    nivel: '6a',
+    email: null,
+    telefono: null,
+    documento: null,
+    contactoEmergencia: null,
+    representante: {
+      nombre: 'Valeria',
+      apellidos: 'Ríos',
+      email: 'valeria.rios@ensayo.test',
+      telefono: '+58 000 000 0010',
+    },
+    fechaIngreso: diaRelativo(-75),
+    avisosActivos: true,
+    activo: true,
+    notas: '',
+  },
+  {
+    id: 'a11',
+    tipo: 'adulto',
+    nombre: 'Joaquín',
+    apellidos: 'Iriarte',
+    nivel: '4a',
+    email: null,
+    telefono: '+58 000 000 0011',
+    documento: null,
+    contactoEmergencia: null,
+    representante: null,
+    fechaIngreso: diaRelativo(-20),
+    avisosActivos: true,
+    activo: true,
+    notas: '',
+  },
+  {
+    id: 'a12',
+    tipo: 'menor',
+    nombre: 'Renata',
+    apellidos: 'Cañas',
+    nivel: '1a',
+    email: null,
+    telefono: null,
+    documento: null,
+    contactoEmergencia: null,
+    representante: {
+      nombre: 'Marta',
+      apellidos: 'Cañas',
+      email: 'marta.canas@ensayo.test',
+      telefono: '+58 000 000 0012',
+    },
+    fechaIngreso: diaRelativo(-55),
+    avisosActivos: true,
+    activo: true,
+    notas: '',
+  },
+  {
+    id: 'a13',
+    tipo: 'menor',
+    nombre: 'Bruno',
+    apellidos: 'Iturbe',
+    nivel: 'principiante',
+    email: null,
+    telefono: null,
+    documento: null,
+    contactoEmergencia: null,
+    representante: {
+      nombre: 'Paola',
+      apellidos: 'Iturbe',
+      email: null,
+      telefono: '+58 000 000 0013',
+    },
+    fechaIngreso: diaRelativo(-330),
+    avisosActivos: false,
+    activo: false,
+    notas: 'Ficha de ensayo inactiva (no se asigna)',
+  },
+  {
+    id: 'a14',
+    tipo: 'adulto',
+    nombre: 'Elena',
+    apellidos: 'Zambrano',
+    nivel: '7a',
+    email: null,
+    telefono: '+58 000 000 0014',
+    documento: null,
+    contactoEmergencia: null,
+    representante: null,
+    fechaIngreso: diaRelativo(-10),
+    avisosActivos: true,
+    activo: true,
+    notas: '',
+  },
+  {
+    id: 'a15',
+    tipo: 'adulto',
+    nombre: 'Óscar',
+    apellidos: 'Núñez',
+    nivel: null,
+    email: 'oscar.nunez@ensayo.test',
+    telefono: '+58 000 000 0015',
+    documento: null,
+    contactoEmergencia: null,
+    representante: null,
+    fechaIngreso: diaRelativo(-180),
+    avisosActivos: false,
+    activo: true,
+    notas: '',
+  },
 ]
 
 const ALUMNOS_POR_ID = Object.fromEntries(ALUMNOS.map((alumno) => [alumno.id, alumno]))
+
+/*
+ * Alumnos extra deterministas: `SEED_ALUMNOS_EXTRA=N` agrega N fichas más para
+ * ejercitar el listado paginado (páginas de 100). Son ficticios y repetitivos
+ * A PROPÓSITO: mismos datos en cada corrida, sin `Math.random()`, para que el
+ * ensayo sea reproducible. Se reparten ~1 de cada 7 inactivos y ~1 de cada 3
+ * menores (con representante).
+ */
+const NOMBRES_EXTRA = [
+  'Ana', 'Beto', 'Carmen', 'Diego', 'Elena', 'Fabio', 'Gabriela', 'Hernán',
+  'Irene', 'Jorge', 'Karina', 'Luis', 'María', 'Néstor', 'Olga', 'Pedro',
+  'Quirino', 'Rosa', 'Simón', 'Teresa', 'Úrsula', 'Víctor', 'Wanda', 'Xiomara',
+]
+
+const APELLIDOS_EXTRA = [
+  'Ávila', 'Blanco', 'Cañas', 'Delgado', 'Espinoza', 'Farías', 'González', 'Hernández',
+  'Ibarra', 'Jiménez', 'López', 'Muñoz', 'Núñez', 'Ñáñez', 'Ochoa', 'Peña',
+  'Quintero', 'Rodríguez', 'Sánchez', 'Torres', 'Urbina', 'Vásquez', 'Yáñez', 'Zambrano',
+].sort((a, b) => a.localeCompare(b, 'es'))
+
+const NIVELES_EXTRA = ['principiante', '7a', '5a', '3a', '1a']
+
+function alumnoExtra(indice) {
+  const n = NOMBRES_EXTRA[indice % NOMBRES_EXTRA.length]
+  const a = APELLIDOS_EXTRA[indice % APELLIDOS_EXTRA.length]
+  const numero = String(indice + 1).padStart(4, '0')
+  const menor = indice % 3 === 1
+  return {
+    id: `extra-${numero}`,
+    tipo: menor ? 'menor' : 'adulto',
+    nombre: n,
+    apellidos: a,
+    nivel: indice % 4 === 3 ? null : NIVELES_EXTRA[indice % NIVELES_EXTRA.length],
+    email: null,
+    telefono: menor ? null : `+58 000 000 ${numero}`,
+    documento: null,
+    contactoEmergencia: null,
+    representante: menor
+      ? {
+          nombre: 'Rep',
+          apellidos: `Extra ${numero}`,
+          email: null,
+          telefono: `+58 000 001 ${numero}`,
+        }
+      : null,
+    fechaIngreso: diaRelativo(-((indice % 300) + 1)),
+    avisosActivos: indice % 2 === 0,
+    activo: indice % 7 !== 5,
+    notas: '',
+  }
+}
+
+const CANTIDAD_EXTRA = Math.max(0, Number.parseInt(process.env.SEED_ALUMNOS_EXTRA ?? '0', 10) || 0)
+
+const ALUMNOS_EXTRA = Array.from({ length: CANTIDAD_EXTRA }, (_, i) => alumnoExtra(i))
+
+/** Todas las fichas de alumno que escribe el seed (base + extra). */
+const ALUMNOS_SEED = [...ALUMNOS, ...ALUMNOS_EXTRA]
 
 async function main() {
   console.log(`Seed del tenant "${TENANT}" en ${EMULATOR_HOST} (proyecto ${PROJECT_ID})…`)
@@ -313,13 +592,17 @@ async function main() {
     await setDoc(`${tenant}/profesores/${id}`, ficha)
   }
 
-  for (const alumno of ALUMNOS) {
+  for (const alumno of ALUMNOS_SEED) {
     const { id, ...ficha } = alumno
     await setDoc(`${tenant}/alumnos/${id}`, {
       ...ficha,
       ...camposBusqueda(ficha),
     })
   }
+  const extra = ALUMNOS_EXTRA.length
+    ? ` (${ALUMNOS.length} base + ${ALUMNOS_EXTRA.length} extra por SEED_ALUMNOS_EXTRA)`
+    : ''
+  console.log(`· ${ALUMNOS_SEED.length} alumnos${extra}`)
 
   await crearClaseEnSeed({
     id: 'c1',

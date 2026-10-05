@@ -276,6 +276,10 @@ describe('3. Profesor: sin acceso (ni lectura ni asistencia)', () => {
   it('profesor de t1 ACTUALiza la ficha de un alumno → DENY (rol profesor, escritura)', async () => {
     await assertFails(updateDoc(doc(as(UID.profT1), 'academias', T1, 'alumnos', 'a2'), { telefono: '+58 414 999 9999' }))
   })
+
+  it('profesor de t1 LISTA alumnos de t1 → DENY (rol profesor, lectura; dato de contacto)', async () => {
+    await assertFails(getDocs(collection(as(UID.profT1), 'academias', T1, 'alumnos')))
+  })
 })
 
 describe('4. Alumno y representante: fichas sin acceso', () => {

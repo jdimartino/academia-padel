@@ -34,6 +34,7 @@ import {
   getClasesDeSedePorFecha,
   getProfesores,
   getSedes,
+  listarAlumnos,
   nombreCompleto,
   registrarAsistencia,
   reprogramarClase,
@@ -588,6 +589,232 @@ describe('buscarAlumnos', () => {
     })
     const resultados = await buscarAlumnos(adminDb, T1, 'zoe')
     assert.deepEqual(resultados.map((a) => a.id), ['a5'])
+  })
+})
+
+describe('listarAlumnos: orden accent-insensitive, filtro de estado y paginación', () => {
+  /**
+   * Crea N alumnos de prueba. Por defecto deja ~1 de cada 5 inactivo (así el
+   * listado tiene las dos poblaciones); con `activo` se fija el estado de todas.
+   */
+  async function crearMuchos(cantidad, { desde = 0, activo } = {}) {
+    const ids = []
+    for (let i = desde; i < desde + cantidad; i += 1) {
+      const numero = String(i).padStart(4, '0')
+      const datos = {
+        nombre: `Zeta ${numero}`,
+        apellidos: `Apellido ${numero}`,
+        tipo: 'adulto',
+        activo: activo ?? i % 5 !== 0,
+      }
+      const { alumnoId } = await crearAlumno(adminDb, T1, datos, { uid: ADMIN })
+      ids.push(alumnoId)
+    }
+    return ids
+  }
+
+  it('ordena por apellido sin distinguir tildes ni ñ', async () => {
+    const casos = [
+      ['Ávila', 'Álvaro'],
+      ['Cañas', 'Renata'],
+      ['Iriarte', 'Joaquín'],
+      ['Muñoz', 'Lucía'],
+      ['Ñáñez', 'Iker'],
+      ['Núñez', 'Óscar'],
+      ['Peña', 'Diego'],
+      ['Zambrano', 'Elena'],
+    ]
+    for (const [apellidos, nombre] of casos) {
+      await crearAlumno(adminDb, T1, { nombre, apellidos, tipo: 'adulto' }, { uid: ADMIN })
+    }
+
+    const { alumnos, siguiente } = await listarAlumnos(adminDb, T1, { limite: 100 })
+    assert.equal(siguiente, null)
+    // El default es `activos`, así que la ficha inactiva del seed (a3) no
+    // aparece. El resto va por el apellido normalizado: sin tildes ni ñ.
+    assert.deepEqual(
+      alumnos.map((a) => a.apellidos),
+      ['Adulto', 'Ávila', 'Cañas', 'Iriarte', 'Menor', 'Muñoz', 'Ñáñez', 'Núñez', 'Peña', 'Zambrano'],
+    )
+    // Con "todos" la inactiva sí entra y el orden sigue siendo el alfabético.
+    const todos = await listarAlumnos(adminDb, T1, { estado: 'todos', limite: 100 })
+    assert.deepEqual(
+      todos.alumnos.map((a) => a.apellidos),
+      ['Adulto', 'Ávila', 'Cañas', 'Inactiva', 'Iriarte', 'Menor', 'Muñoz', 'Ñáñez', 'Núñez', 'Peña', 'Zambrano'],
+    )
+    // El campo persistido queda sin tildes: Firestore ordena por bytes UTF-8 y
+    // con tildes esas fichas se irían al final del listado.
+    const avila = alumnos.find((a) => a.apellidos === 'Ávila')
+    assert.equal(avila.busquedaApellido, 'avila alvaro')
+  })
+
+  it('por defecto lista solo activos y hasta 100 por página', async () => {
+    await crearMuchos(120, { activo: true })
+
+    const { alumnos, siguiente } = await listarAlumnos(adminDb, T1)
+    assert.equal(alumnos.length, 100)
+    assert.ok(siguiente, 'debería haber una página siguiente')
+    assert.ok(alumnos.every((a) => a.activo !== false))
+  })
+
+  it('pagina con cursor: sin repetidos, sin huecos y `siguiente` null al final', async () => {
+    await crearMuchos(105)
+
+    const vistos = []
+    let despues = null
+    let paginas = 0
+    do {
+      const pagina = await listarAlumnos(adminDb, T1, { estado: 'todos', limite: 100, despues })
+      vistos.push(...pagina.alumnos.map((a) => a.id))
+      despues = pagina.siguiente
+      paginas += 1
+    } while (despues && paginas < 10)
+
+    // 105 creados + 3 del seed = 108 → dos páginas (100 + 8), sin repetidos.
+    assert.equal(vistos.length, 108)
+    assert.equal(new Set(vistos).size, 108, 'no debe repetir alumnos')
+    assert.equal(paginas, 2)
+    assert.equal(despues, null)
+
+    // Y lo mismo con el default (solo activos): 84 creados + 2 del seed = 86,
+    // que entra en una sola página.
+    const activos = []
+    let cursor = null
+    let vueltas = 0
+    do {
+      const pagina = await listarAlumnos(adminDb, T1, { limite: 100, despues: cursor })
+      activos.push(...pagina.alumnos.map((a) => a.id))
+      cursor = pagina.siguiente
+      vueltas += 1
+    } while (cursor && vueltas < 10)
+
+    assert.equal(activos.length, 86)
+    assert.equal(new Set(activos).size, 86, 'no debe repetir alumnos activos')
+    assert.equal(vueltas, 1)
+    assert.equal(cursor, null)
+  })
+
+  it('filtra por estado inactivos y todos', async () => {
+    await crearMuchos(6, { activo: true })
+
+    const inactivos = await listarAlumnos(adminDb, T1, { estado: 'inactivos' })
+    assert.deepEqual(
+      inactivos.alumnos.map((a) => a.apellidos),
+      ['Inactiva'],
+    )
+    assert.ok(inactivos.alumnos.every((a) => a.activo === false))
+
+    await actualizarAlumno(adminDb, T1, 'a3', { activo: true }, { uid: ADMIN })
+    assert.equal((await listarAlumnos(adminDb, T1, { estado: 'inactivos' })).alumnos.length, 0)
+
+    const todos = await listarAlumnos(adminDb, T1, { estado: 'todos' })
+    assert.equal(todos.alumnos.length, 9) // 3 del seed + 6
+  })
+
+  it('acota el límite a 100 aunque pidan más', async () => {
+    await crearMuchos(120, { activo: true })
+    const { alumnos, siguiente } = await listarAlumnos(adminDb, T1, { limite: 500 })
+    assert.equal(alumnos.length, 100)
+    assert.ok(siguiente)
+  })
+
+  it('un filtro de estado desconocido cae en activos', async () => {
+    const raro = await listarAlumnos(adminDb, T1, { estado: 'cualquiera' })
+    assert.deepEqual(raro.alumnos.map((a) => a.id), ['a1', 'a2'])
+  })
+})
+
+describe('buscarAlumnos con estado', () => {
+  it('estado inactivos encuentra solo fichas inactivas', async () => {
+    const inactivos = await buscarAlumnos(adminDb, T1, 'nadia', { estado: 'inactivos' })
+    assert.deepEqual(inactivos.map((a) => a.id), ['a3'])
+  })
+
+  it('estado todos incluye activos e inactivos (mismo prefijo de apellido)', async () => {
+    // "Ávila" (activa) y "Ávila inactiva": las dos comparten prefijo normalizado.
+    await setDoc(doc(adminDb, 'academias', T1, 'alumnos', 'a4'), {
+      tipo: 'adulto',
+      nombre: 'Álvaro',
+      apellidos: 'Ávila',
+      busquedaNombre: 'alvaro avila',
+      busquedaApellido: 'avila alvaro',
+      activo: true,
+    })
+    await setDoc(doc(adminDb, 'academias', T1, 'alumnos', 'a5'), {
+      tipo: 'adulto',
+      nombre: 'Ana',
+      apellidos: 'Ávila',
+      busquedaNombre: 'ana avila',
+      busquedaApellido: 'avila ana',
+      activo: false,
+    })
+
+    const todos = await buscarAlumnos(adminDb, T1, 'avila', { estado: 'todos', limite: 30 })
+    assert.deepEqual(todos.map((a) => a.id).sort(), ['a4', 'a5'])
+
+    const activos = await buscarAlumnos(adminDb, T1, 'avila', { limite: 30 })
+    assert.deepEqual(activos.map((a) => a.id), ['a4'])
+
+    const inactivos = await buscarAlumnos(adminDb, T1, 'avila', { estado: 'inactivos', limite: 30 })
+    assert.deepEqual(inactivos.map((a) => a.id), ['a5'])
+  })
+
+  it('limite 30 devuelve 30 cuando hay más coincidencias', async () => {
+    for (let i = 0; i < 40; i += 1) {
+      const numero = String(i).padStart(2, '0')
+      await setDoc(doc(adminDb, 'academias', T1, 'alumnos', `w${numero}`), {
+        tipo: 'adulto',
+        nombre: `Wolf ${numero}`,
+        apellidos: `Wolf ${numero}`,
+        busquedaNombre: `wolf ${numero}`,
+        busquedaApellido: `wolf ${numero}`,
+        activo: true,
+      })
+    }
+    assert.equal((await buscarAlumnos(adminDb, T1, 'wolf', { limite: 30 })).length, 30)
+    // Tope duro: aunque pidan más, no pasa de 50.
+    assert.equal((await buscarAlumnos(adminDb, T1, 'wolf', { limite: 500 })).length, 40)
+  })
+})
+
+describe('reactivación de un alumno inactivo', () => {
+  it('actualizarAlumno con activo:true reactiva una ficha inactiva', async () => {
+    const antes = await getAlumno(adminDb, T1, 'a3')
+    assert.equal(antes.activo, false)
+
+    await actualizarAlumno(adminDb, T1, 'a3', { activo: true }, { uid: ADMIN })
+
+    const despues = await getAlumno(adminDb, T1, 'a3')
+    assert.equal(despues.activo, true)
+    // Ordenado por apellido normalizado: adulto, inactiva, menor.
+    assert.deepEqual((await listarAlumnos(adminDb, T1)).alumnos.map((a) => a.id), ['a1', 'a3', 'a2'])
+  })
+})
+
+describe('getProfesores con estado', () => {
+  it('por defecto solo activos, ordenados por apellidos y después nombre', async () => {
+    const profesores = await getProfesores(adminDb, T1)
+    assert.deepEqual(profesores.map((p) => p.id), ['p2', 'p1', 'p3'])
+  })
+
+  it('estado inactivos y todos incluyen fichas inactivas', async () => {
+    await setDoc(doc(adminDb, 'academias', T1, 'profesores', 'p4'), {
+      nombre: 'Zoilo',
+      apellidos: 'Inactivo',
+      sedes: ['traki'],
+      activo: false,
+    })
+
+    assert.deepEqual((await getProfesores(adminDb, T1, { estado: 'inactivos' })).map((p) => p.id), ['p4'])
+    assert.deepEqual(
+      (await getProfesores(adminDb, T1, { estado: 'todos' })).map((p) => p.id),
+      ['p4', 'p2', 'p1', 'p3'],
+    )
+    // El filtro por sede se conserva con estado "todos".
+    assert.deepEqual(
+      (await getProfesores(adminDb, T1, { estado: 'todos', sedeId: 'boleita' })).map((p) => p.id),
+      ['p2', 'p3'],
+    )
   })
 })
 
@@ -1253,8 +1480,8 @@ describe('[B4] getSedes y getProfesores: filtro activo en la query', () => {
     assert.deepEqual(await getProfesores(adminDb, T1, { sedeId: 'sin-gente' }), [])
   })
 
-  it('getProfesores ordena por nombre completo', async () => {
+  it('getProfesores ordena por apellidos y después nombre', async () => {
     const nombres = (await getProfesores(adminDb, T1)).map((p) => nombreCompleto(p))
-    assert.deepEqual(nombres, ['Pablo Profesor', 'Pedro Pérez', 'Sofía Solo Boleita'])
+    assert.deepEqual(nombres, ['Pedro Pérez', 'Pablo Profesor', 'Sofía Solo Boleita'])
   })
 })

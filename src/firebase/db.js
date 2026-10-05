@@ -30,6 +30,7 @@ import {
   query,
   runTransaction,
   setDoc,
+  startAfter,
   updateDoc,
   where,
 } from 'firebase/firestore'
@@ -99,15 +100,22 @@ function validarCupo(cupo) {
 }
 
 /**
- * Normaliza un texto para buscarlo por prefijo: sin tildes, minúsculas y con
- * los espacios colapsados. Se usa para escribir los campos `busquedaNombre` y
- * `busquedaApellido` y para consultarlos (ver `buscarAlumnos`).
+ * Normaliza un texto para buscarlo por prefijo y para ORDENARLO: minúsculas,
+ * sin tildes y sin la tilde de la ñ, y con los espacios colapsados. Se usa para
+ * escribir los campos `busquedaNombre` y `busquedaApellido` y para consultarlos
+ * (ver `buscarAlumnos` y `listarAlumnos`).
+ *
+ * Se pasa a minúsculas ANTES de descomponer: así las vocales acentuadas
+ * mayúsculas (Á, É, Í, Ó, Ú, Ü) también se descomponen (en NFD, `Á` es un solo
+ * carácter y no se descompone; `á` sí). De `Ñ`/`ñ` queda `n`: el orden de
+ * Firestore es por bytes UTF-8, así que un campo con tildes o con ñ se iría al
+ * final del listado. Normalizado, el orden coincide con el alfabético.
  */
 export function normalizarBusqueda(texto) {
   return String(texto ?? '')
+    .toLowerCase()
     .normalize('NFD')
     .replace(/[\u0300-\u036f]/g, '')
-    .toLowerCase()
     .replace(/\s+/g, ' ')
     .trim()
 }
@@ -360,25 +368,62 @@ export async function getCanchas(db, tenantId, sedeId) {
     )
 }
 
+/** Estados admitidos por los filtros de listado. */
+export const ESTADOS_LISTA = ['activos', 'inactivos', 'todos']
+
+/** Tope duro de una página de `listarAlumnos`. */
+export const LIMITE_PAGINA_ALUMNOS = 100
+
+/** Tope duro de `buscarAlumnos`. */
+export const LIMITE_BUSQUEDA_ALUMNOS = 50
+
+/** Tope por defecto/duro de `getProfesores` cuando la pantalla pide la lista. */
+export const LIMITE_PROFESORES = 200
+
+/** Normaliza el filtro de estado. Cualquier valor raro cae en "activos". */
+function normalizarEstado(estado) {
+  return ESTADOS_LISTA.includes(estado) ? estado : 'activos'
+}
+
+/** Condición `activo` de una query según el filtro de estado (o ninguna). */
+function filtroActivo(estado) {
+  if (estado === 'todos') return []
+  return [where('activo', '==', estado === 'inactivos' ? false : true)]
+}
+
 /**
- * Profesores activos de una academia. Con `{ sedeId }` devuelve solo los que
- * dictan en esa sede (`sedes` array-contains). Acotado por tenant + activo
- * (+ sede) + limit. Orden client-side por nombre completo.
- * Índice: `profesores: activo + sedes` (firestore.indexes.json).
+ * Profesores de una academia. Con `{ sedeId }` devuelve solo los que dictan en
+ * esa sede (`sedes` array-contains). Con `{ estado }` filtra por activo:
+ * `"activos"` (default), `"inactivos"` o `"todos"` (sin condición de activo).
+ * Acotado por tenant + activo (+ sede) + limit (`200` por defecto, tope duro).
+ * El orden es client-side por apellidos y después nombre (el conjunto es chico).
+ * Índices: `profesores: activo + sedes` (firestore.indexes.json); con
+ * `estado: "todos"` alcanza el índice de un solo campo.
  */
 export async function getProfesores(db, tenantId, opciones = {}) {
-  const { sedeId = null } = opciones
-  const filtros = [where('activo', '==', true)]
+  const {
+    sedeId = null,
+    estado = 'activos',
+    limite = LIMITE_PROFESORES,
+  } = opciones
+  const pedido = Number.isFinite(limite) ? Math.floor(limite) : LIMITE_PROFESORES
+  const tope = Math.min(Math.max(pedido, 1), LIMITE_PROFESORES)
+
+  const filtros = filtroActivo(normalizarEstado(estado))
   if (sedeId) filtros.push(where('sedes', 'array-contains', sedeId))
   const q = query(
     collection(db, 'academias', tenantId, 'profesores'),
     ...filtros,
-    limit(50),
+    limit(tope),
   )
   const snap = await getDocs(q)
   return snap.docs
     .map((d) => ({ id: d.id, ...d.data() }))
-    .sort((a, b) => nombreCompleto(a).localeCompare(nombreCompleto(b)))
+    .sort(
+      (a, b) =>
+        String(a.apellidos ?? '').localeCompare(String(b.apellidos ?? ''), 'es') ||
+        String(a.nombre ?? '').localeCompare(String(b.nombre ?? ''), 'es'),
+    )
 }
 
 /* --------------------------------------------------------------------- */
@@ -607,28 +652,77 @@ export async function getAlumno(db, tenantId, alumnoId) {
 }
 
 /**
- * Busca alumnos ACTIVOS por prefijo de nombre O de apellido, sin tildes ni
- * mayúsculas. Los campos normalizados son `busquedaNombre` ("nombre apellidos")
- * y `busquedaApellido` ("apellidos nombre"): corren dos consultas de prefijo en
- * paralelo, se mezclan sin duplicados y se cortan a `limite` (10 por defecto).
- * Exige al menos 2 letras para no barrer la colección. Acotado por tenant +
- * activo + límite. Índices: `alumnos: activo + busquedaNombre` y
- * `alumnos: activo + busquedaApellido` (firestore.indexes.json).
+ * Lista paginada de alumnos por `busquedaApellido` ("apellidos nombre",
+ * minúsculas y sin tildes), así que el orden es alfabético por APELLIDO y sin
+ * distinguir acentos. Una página son `limite` documentos (100 por defecto,
+ * tope duro) más uno de sonda: el extra se recorta y se devuelve como cursor
+ * `siguiente` para la próxima llamada (`startAfter`). `siguiente` es `null`
+ * cuando no hay más.
+ *
+ * `estado`: `"activos"` (default) | `"inactivos"` | `"todos"` (sin condición de
+ * activo). `despues`: cursor devuelto por la llamada anterior, o `null`.
+ *
+ * Costo: `limite + 1` lecturas por página. Índices (firestore.indexes.json):
+ * `alumnos: activo + busquedaApellido` para activos/inactivos; con `"todos"`
+ * alcanza el índice de un solo campo.
+ */
+export async function listarAlumnos(db, tenantId, opciones = {}) {
+  const {
+    estado = 'activos',
+    limite = LIMITE_PAGINA_ALUMNOS,
+    despues = null,
+  } = opciones
+  const pedido = Number.isFinite(limite) ? Math.floor(limite) : LIMITE_PAGINA_ALUMNOS
+  const tope = Math.min(Math.max(pedido, 1), LIMITE_PAGINA_ALUMNOS)
+
+  const q = query(
+    collection(db, 'academias', tenantId, 'alumnos'),
+    ...filtroActivo(normalizarEstado(estado)),
+    orderBy('busquedaApellido'),
+    ...(despues ? [startAfter(despues)] : []),
+    limit(tope + 1),
+  )
+  const snap = await getDocs(q)
+  const docs = snap.docs
+  const hayMas = docs.length > tope
+  const pagina = hayMas ? docs.slice(0, tope) : docs
+
+  return {
+    alumnos: pagina.map((d) => ({ id: d.id, ...d.data() })),
+    siguiente: hayMas ? pagina[pagina.length - 1] : null,
+  }
+}
+
+/**
+ * Busca alumnos por prefijo de nombre O de apellido, sin tildes ni mayúsculas.
+ * Los campos normalizados son `busquedaNombre` ("nombre apellidos") y
+ * `busquedaApellido` ("apellidos nombre"): corren dos consultas de prefijo en
+ * paralelo, se mezclan sin duplicados y se cortan a `limite` (10 por defecto,
+ * tope duro 50). Exige al menos 2 letras para no barrer la colección.
+ *
+ * `estado`: `"activos"` (default) | `"inactivos"` | `"todos"`. Con `"todos"` se
+ * quita la condición de activo y alcanza el índice de un solo campo.
+ *
+ * Acotado por tenant + (activo) + límite. Índices (firestore.indexes.json):
+ * `alumnos: activo + busquedaNombre` y `alumnos: activo + busquedaApellido`.
  */
 export async function buscarAlumnos(db, tenantId, texto, opciones = {}) {
-  const { limite = 10 } = opciones
+  const { limite = 10, estado = 'activos' } = opciones
+  const pedido = Number.isFinite(limite) ? Math.floor(limite) : 10
+  const tope = Math.min(Math.max(pedido, 1), LIMITE_BUSQUEDA_ALUMNOS)
   const prefijo = normalizarBusqueda(texto)
   if (prefijo.length < 2) return []
 
+  const condiciones = filtroActivo(normalizarEstado(estado))
   const coleccion = collection(db, 'academias', tenantId, 'alumnos')
   const porCampo = (campo) =>
     query(
       coleccion,
-      where('activo', '==', true),
+      ...condiciones,
       where(campo, '>=', prefijo),
       where(campo, '<=', `${prefijo}\uf8ff`),
       orderBy(campo),
-      limit(limite),
+      limit(tope),
     )
 
   const [porNombre, porApellido] = await Promise.all([
@@ -640,7 +734,7 @@ export async function buscarAlumnos(db, tenantId, texto, opciones = {}) {
   for (const snap of [...porNombre.docs, ...porApellido.docs]) {
     if (encontrados.has(snap.id)) continue
     encontrados.set(snap.id, { id: snap.id, ...snap.data() })
-    if (encontrados.size >= limite) break
+    if (encontrados.size >= tope) break
   }
   return [...encontrados.values()]
 }

@@ -176,8 +176,12 @@ y porque una cancha puede necesitar más campos (tarifas, tipo, estado).
 | `activo` | bool | |
 
 Fichas creadas por `crearProfesor` / `actualizarProfesor` (soft delete con
-`activo:false`). `getProfesores(db, tenant, {sedeId})` devuelve solo los activos
-y, con `sedeId`, solo los asignados a esa sede (`sedes` array-contains).
+`activo:false`). `getProfesores(db, tenant, {sedeId, estado, limite})`: con
+`estado: "activos"` (default) devuelve solo los activos, con `"inactivos"` solo
+los inactivos y con `"todos"` no filtra por activo; con `sedeId`, solo los
+asignados a esa sede (`sedes` array-contains). `limite` es 200 por defecto y
+tope duro. El orden es del lado del cliente: apellidos y después nombre (el
+catálogo de profesores es chico). Mismo criterio en §6.
 
 > **Campo eliminado (login obsoleto):** el antiguo `uid` (usuario de Auth del
 > profesor) se quitó. El profesor es una ficha, no una cuenta.
@@ -189,8 +193,8 @@ y, con `sedeId`, solo los asignados a esa sede (`sedes` array-contains).
 | `tipo` | string | `adulto` \| `menor`. Lo elige el administrador; no hay fecha de nacimiento |
 | `nombre` | string | Requerido, recortado, máx. 200 |
 | `apellidos` | string | Requerido, recortado, máx. 200 |
-| `busquedaNombre` | string | `"nombre apellidos"` en minúsculas y sin tildes. Lo escribe `db.js` al crear/editar. Campo del buscador por prefijo (`buscarAlumnos`, §6) |
-| `busquedaApellido` | string | `"apellidos nombre"` normalizado. Segundo campo del buscador, para encontrar por apellido |
+| `busquedaNombre` | string | `"nombre apellidos"` en minúsculas y sin tildes (ni la tilde de la ñ). Lo escribe `db.js` al crear/editar. Campo del buscador por prefijo (`buscarAlumnos`, §6) |
+| `busquedaApellido` | string | `"apellidos nombre"` normalizado igual que el anterior. Segundo campo del buscador y **clave de orden del listado** (`listarAlumnos`, §6) |
 | `documento` | map \| null | Opcional: `{tipo: "cedula"\|"pasaporte", numero}`. Van los dos o ninguno; el número máx. 30 y sin validación de formato |
 | `email` | string \| null | Dato de contacto (admin-only), máx. 200 |
 | `telefono` | string \| null | Dato de contacto (admin-only), máx. 30 |
@@ -218,8 +222,17 @@ el contacto del menor (ver §8), enlazado al `alumno` por el mapa
 *Sin definir si el representante gestiona varios menores.*
 
 Fichas creadas/actualizadas por `crearAlumno` / `actualizarAlumno`; `getAlumno`
-lee una y `buscarAlumnos` busca activos por nombre o apellido (mínimo 2 letras,
-máx. 10 resultados).
+lee una y `buscarAlumnos` busca por nombre o apellido (mínimo 2 letras;
+10 resultados por defecto, tope 50). `listarAlumnos` es el listado paginado de
+la pantalla de Alumnos. Detalle de las tres en §6.
+
+La reactivación es un `actualizarAlumno` con `activo: true` (el soft delete no
+se revierte de otra forma): la ficha inactiva se abre igual en el sheet y el
+toggle "Activo" la vuelve a habilitar.
+
+> **Dato derivado:** `busquedaNombre` / `busquedaApellido` se escriben al crear o
+> editar. Si cambia la normalización (por ejemplo, al empezar a plegar tildes),
+> las fichas viejas conservan el valor anterior hasta que se vuelvan a guardar.
 
 ---
 
@@ -529,6 +542,60 @@ Pago por hora: hacen falta las horas efectivamente dictadas.
 
 ---
 
+## 5.1 Listado, búsqueda y paginación de fichas
+
+Tres funciones de `db.js` cubren las pantallas de Alumnos y Profesores. Todas
+están acotadas por tenant y por límite; ninguna puede traer la colección entera.
+
+### `listarAlumnos(db, tenantId, { estado, limite, despues })`
+
+Listado paginado de la pantalla de Alumnos. Devuelve `{ alumnos, siguiente }`.
+
+- `estado`: `"activos"` (default) | `"inactivos"` | `"todos"`. Cualquier otro
+  valor cae en `"activos"`. Con `"activos"`/`"inactivos"` la consulta lleva
+  `where('activo','==',true|false)`; con `"todos"` no lleva condición de activo
+  (alcanza el índice de un solo campo).
+- `limite`: tamaño de página, **100 por defecto y tope duro** (se recorta con
+  `Math.min`).
+- `despues`: cursor de la llamada anterior (`null` en la primera). La consulta
+  es `orderBy('busquedaApellido')` + `startAfter(despues)`.
+- **Orden accent-insensitive por apellido.** Firestore ordena strings por bytes
+  UTF-8, así que `Ávila` o `Ñáñez` se irían al final si el campo llevara tildes.
+  Por eso `busquedaApellido` se guarda plegado (minúsculas, sin tildes y con la
+  ñ como `n`): el orden por bytes coincide con el alfabético. El desempate
+  dentro del mismo apellido es por el nombre, que ya viene en el mismo campo
+  (`"apellidos nombre"`).
+- **Cursor.** Se pide `limite + 1` documentos: si llegan `limite + 1` hay más
+  páginas, se recorta la lista a `limite` y el documento `limite + 1` se
+  devuelve como cursor. No se reescribe ni se inventa un `orderBy` por id: el
+  cursor es el `DocumentSnapshot` de Firestore.
+- **Costo:** `limite + 1` lecturas por página. Una visita a la pantalla son 100
+  lecturas de arranque, más 100 por cada "Cargar más".
+
+### `buscarAlumnos(db, tenantId, texto, { estado, limite })`
+
+Buscador por prefijo de nombre O de apellido (`>=` / `<=` sobre
+`busquedaNombre` y `busquedaApellido`, en paralelo y sin duplicados).
+
+- Mínimo 2 letras normalizadas (si no, devuelve `[]` sin leer nada).
+- `limite`: 10 por defecto, **tope 50**. Los llamadores históricos (selector de
+  alumnos de la reserva) siguen con el default de 10 activos.
+- `estado`: igual que en `listarAlumnos`. La pantalla de Alumnos usa 30 y
+  avisa "Hay mas resultados" cuando llega justo al tope.
+- El texto se normaliza igual que los campos, así que buscar `munoz` encuentra
+  a `Muñoz` y buscar `nunez` encuentra a `Núñez`.
+
+### `getProfesores(db, tenantId, { sedeId, estado, limite })`
+
+Lista de la pantalla de Profesores. Sin paginación: el catálogo es chico.
+
+- `limite`: 200 por defecto y tope duro.
+- `estado`: `"activos"` (default) | `"inactivos"` | `"todos"`.
+- `sedeId`: `sedes` array-contains, se conserva con cualquier estado.
+- El orden es **client-side**: `apellidos` y después `nombre`.
+
+---
+
 ## 6. Índices compuestos
 
 Declarados en `firestore.indexes.json`. Mínimos para las consultas previstas:
@@ -541,8 +608,20 @@ Declarados en `firestore.indexes.json`. Mínimos para las consultas previstas:
 - `cargos`: `estado` + `periodo`.
 - `pagos`: `estado` + `creadoEn` desc.
 - `alumnos`: `activo` + `busquedaNombre` y `activo` + `busquedaApellido`
-  (buscador por prefijo de nombre o apellido de `buscarAlumnos`).
+  (buscador por prefijo de nombre o apellido de `buscarAlumnos` y listado
+  paginado de `listarAlumnos`).
 - `profesores`: `activo` + `sedes` (array-contains) para `getProfesores({sedeId})`.
+
+**Sin cambios en esta ronda.** Con `estado: "activos"`/`"inactivos"`, tanto
+`listarAlumnos` (igualdad en `activo` + `orderBy` en `busquedaApellido`) como
+`buscarAlumnos` (igualdad en `activo` + rango en `busquedaNombre`/`busquedaApellido`)
+ya quedan cubiertos por los dos compuestos de `alumnos`. Con `estado: "todos"`
+la consulta es de un solo campo y no necesita compuesto. En `profesores`, el
+estado agrega o quita la igualdad sobre `activo`, y el índice existente
+(`activo` + `sedes`) sigue aplicando. No se agregó ni se quitó ningún índice.
+
+> El **emulador no enforcea índices**: que los tests pasen no prueba que el
+> índice exista. La lista de arriba es la referencia para el deploy real.
 
 Cada consulta nueva que se agregue a `db.js` debe traer su índice antes de
 publicarse.

@@ -70,6 +70,21 @@ npm run seed:emu
 
 Levanta los emuladores, corre el seed y los apaga. Útil en CI o para resetear.
 
+### Alumnos extra para probar la paginación
+
+El seed deja **15 alumnos** de ensayo (apellidos con tildes y con ñ, adultos y
+menores, y 3 inactivos). Para ejercitar el listado paginado de la pantalla de
+Alumnos se pueden sembrar fichas extra deterministas:
+
+```bash
+SEED_ALUMNOS_EXTRA=150 npm run seed:emu
+```
+
+`SEED_ALUMNOS_EXTRA=N` agrega N alumnos ficticios más (ids `extra-0001`…) sin
+`Math.random()`: la misma N produce siempre las mismas fichas. Con N=150 el
+listado arranca con 100 y aparece "Cargar mas". Sin la variable, el seed
+escribe solo los 15 de base.
+
 ### Tests de reglas
 
 ```bash
