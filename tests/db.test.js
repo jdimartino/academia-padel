@@ -27,12 +27,14 @@ import {
   crearAlumno,
   crearClase,
   crearProfesor,
+  fechaHoyLocal,
   getAlumno,
   getCanchas,
   getClase,
   getClasesDeSedePorFecha,
   getProfesores,
   getSedes,
+  nombreCompleto,
   registrarAsistencia,
   reprogramarClase,
 } from '../src/firebase/db.js'
@@ -87,30 +89,48 @@ async function sembrarBase(context) {
   await db.doc(`academias/${T1}/sedes/traki`).set({ nombre: 'Traki', activa: true })
   await db.doc(`academias/${T1}/sedes/traki/canchas/c1`).set({ nombre: 'Cancha 1', activa: true })
   await db.doc(`academias/${T1}/sedes/traki/canchas/c2`).set({ nombre: 'Cancha 2', activa: true })
-  await db.doc(`academias/${T1}/profesores/p1`).set({ nombre: 'Pablo', activo: true })
-  await db.doc(`academias/${T1}/profesores/p2`).set({ nombre: 'Pedro', activo: true })
+  // p1 y p2 dictan en traki; p3 solo en boleita (sirve para el rechazo
+  // "profesor no asignado a la sede").
+  await db
+    .doc(`academias/${T1}/profesores/p1`)
+    .set({ nombre: 'Pablo', apellidos: 'Profesor', sedes: ['traki'], activo: true })
+  await db
+    .doc(`academias/${T1}/profesores/p2`)
+    .set({ nombre: 'Pedro', apellidos: 'Pérez', sedes: ['traki', 'boleita'], activo: true })
+  await db
+    .doc(`academias/${T1}/profesores/p3`)
+    .set({ nombre: 'Sofía', apellidos: 'Solo Boleita', sedes: ['boleita'], activo: true })
 
-  // Fichas: a1 y a2 activas, a3 inactiva (nunca asignable). `nombreBusqueda`
-  // es el campo normalizado (sin tildes ni mayúsculas) que usa buscarAlumnos.
+  // Fichas: a1 y a2 activas, a3 inactiva (nunca asignable). Los campos
+  // normalizados del buscador son `busquedaNombre` ("nombre apellidos") y
+  // `busquedaApellido` ("apellidos nombre").
   await db.doc(`academias/${T1}/alumnos/a1`).set({
     tipo: 'adulto',
-    nombre: 'Aldo Adulto',
-    nombreBusqueda: 'aldo adulto',
+    nombre: 'Aldo',
+    apellidos: 'Adulto',
+    busquedaNombre: 'aldo adulto',
+    busquedaApellido: 'adulto aldo',
+    fechaIngreso: '2026-01-01',
     avisosActivos: true,
     activo: true,
   })
   await db.doc(`academias/${T1}/alumnos/a2`).set({
     tipo: 'menor',
-    nombre: 'Marta Menor',
-    nombreBusqueda: 'marta menor',
+    nombre: 'Marta',
+    apellidos: 'Menor',
+    busquedaNombre: 'marta menor',
+    busquedaApellido: 'menor marta',
+    fechaIngreso: '2026-01-01',
     avisosActivos: true,
-    tutor: { nombre: 'Teresa Tutora' },
+    representante: { nombre: 'Teresa', apellidos: 'Tutora', email: null, telefono: null },
     activo: true,
   })
   await db.doc(`academias/${T1}/alumnos/a3`).set({
     tipo: 'adulto',
-    nombre: 'Nadia Inactiva',
-    nombreBusqueda: 'nadia inactiva',
+    nombre: 'Nadia',
+    apellidos: 'Inactiva',
+    busquedaNombre: 'nadia inactiva',
+    busquedaApellido: 'inactiva nadia',
     activo: false,
   })
 }
@@ -290,9 +310,10 @@ describe('lecturas de agenda', () => {
       activo: false,
     })
     const profesores = await getProfesores(adminDb, T1)
+    // p1 y p3 están activos; p2 se acaba de marcar inactivo.
     assert.deepEqual(
       profesores.map((p) => p.id),
-      ['p1'],
+      ['p1', 'p3'],
     )
   })
 
@@ -488,13 +509,18 @@ describe('asignación de alumnos', () => {
 })
 
 describe('buscarAlumnos', () => {
-  it('encuentra por prefijo, sin tildes ni mayúsculas', async () => {
-    await setDoc(doc(adminDb, 'academias', T1, 'alumnos', 'a4'), {
+  const sembrarAlvaro = () =>
+    setDoc(doc(adminDb, 'academias', T1, 'alumnos', 'a4'), {
       tipo: 'adulto',
-      nombre: 'Álvaro Ávila',
-      nombreBusqueda: 'alvaro avila',
+      nombre: 'Álvaro',
+      apellidos: 'Ávila',
+      busquedaNombre: 'alvaro avila',
+      busquedaApellido: 'avila alvaro',
       activo: true,
     })
+
+  it('encuentra por prefijo del nombre, sin tildes ni mayúsculas', async () => {
+    await sembrarAlvaro()
     const sinTilde = await buscarAlumnos(adminDb, T1, 'alv')
     assert.deepEqual(
       sinTilde.map((a) => a.id),
@@ -505,6 +531,27 @@ describe('buscarAlumnos', () => {
       conTilde.map((a) => a.id),
       ['a4'],
     )
+  })
+
+  it('encuentra por prefijo del apellido', async () => {
+    await sembrarAlvaro()
+    const porApellido = await buscarAlumnos(adminDb, T1, 'Ávi')
+    assert.deepEqual(
+      porApellido.map((a) => a.id),
+      ['a4'],
+    )
+  })
+
+  it('encuentra por prefijo "nombre apellido" y "apellido nombre"', async () => {
+    await sembrarAlvaro()
+    assert.deepEqual((await buscarAlumnos(adminDb, T1, 'aldo ad')).map((a) => a.id), ['a1'])
+    assert.deepEqual((await buscarAlumnos(adminDb, T1, 'adulto ald')).map((a) => a.id), ['a1'])
+  })
+
+  it('exige al menos 2 letras', async () => {
+    await sembrarAlvaro()
+    assert.deepEqual(await buscarAlumnos(adminDb, T1, 'a'), [])
+    assert.deepEqual(await buscarAlumnos(adminDb, T1, 'á'), [])
   })
 
   it('no devuelve alumnos inactivos', async () => {
@@ -520,33 +567,222 @@ describe('buscarAlumnos', () => {
       await setDoc(doc(adminDb, 'academias', T1, 'alumnos', `z${i}`), {
         tipo: 'adulto',
         nombre: `Zeta ${i}`,
-        nombreBusqueda: `zeta ${i}`,
+        apellidos: 'Zeta',
+        busquedaNombre: `zeta ${i}`,
+        busquedaApellido: `zeta ${i}`,
         activo: true,
       })
     }
     assert.equal((await buscarAlumnos(adminDb, T1, 'zeta')).length, 10)
     assert.equal((await buscarAlumnos(adminDb, T1, 'zeta', { limite: 3 })).length, 3)
   })
+
+  it('no repite alumnos que coinciden por nombre y por apellido', async () => {
+    await setDoc(doc(adminDb, 'academias', T1, 'alumnos', 'a5'), {
+      tipo: 'adulto',
+      nombre: 'Zoe',
+      apellidos: 'Zoe',
+      busquedaNombre: 'zoe zoe',
+      busquedaApellido: 'zoe zoe',
+      activo: true,
+    })
+    const resultados = await buscarAlumnos(adminDb, T1, 'zoe')
+    assert.deepEqual(resultados.map((a) => a.id), ['a5'])
+  })
 })
 
 describe('fichas', () => {
-  it('crearAlumno normaliza el nombre, exige tutor en menores y arranca activo', async () => {
+  const alumnoBase = (extra = {}) => ({
+    nombre: 'Ángel',
+    apellidos: 'Niño',
+    tipo: 'menor',
+    representante: { nombre: 'Teresa', apellidos: 'Tutora' },
+    ...extra,
+  })
+
+  it('crearAlumno recorta, denormaliza el buscador, exige representante en menores y arranca activo', async () => {
     const { alumnoId } = await crearAlumno(
       adminDb,
       T1,
-      { nombre: 'Ángel Niño', tipo: 'menor', tutor: { nombre: 'Tutor Uno' } },
+      alumnoBase({ nombre: '  Ángel ', apellidos: ' Niño ' }),
       { uid: ADMIN },
     )
     const ficha = await getAlumno(adminDb, T1, alumnoId)
-    assert.equal(ficha.nombreBusqueda, 'angel nino')
+    assert.equal(ficha.nombre, 'Ángel')
+    assert.equal(ficha.apellidos, 'Niño')
+    assert.equal(ficha.busquedaNombre, 'angel nino')
+    assert.equal(ficha.busquedaApellido, 'nino angel')
     assert.equal(ficha.avisosActivos, true)
     assert.equal(ficha.activo, true)
-    assert.equal(ficha.tutor.nombre, 'Tutor Uno')
+    assert.equal(ficha.representante.nombre, 'Teresa')
+    assert.equal(ficha.tipo, 'menor')
 
     await assert.rejects(
-      () => crearAlumno(adminDb, T1, { nombre: 'Sin Tutor', tipo: 'menor' }, { uid: ADMIN }),
-      /tutor/,
+      () => crearAlumno(adminDb, T1, { nombre: 'Sin', apellidos: 'Representante', tipo: 'menor' }, { uid: ADMIN }),
+      FichaInvalidaError,
     )
+  })
+
+  it('crearAlumno exige nombre y apellidos', async () => {
+    await assert.rejects(
+      () => crearAlumno(adminDb, T1, { apellidos: 'Sin Nombre' }, { uid: ADMIN }),
+      FichaInvalidaError,
+    )
+    await assert.rejects(
+      () => crearAlumno(adminDb, T1, { nombre: 'Sin Apellidos' }, { uid: ADMIN }),
+      FichaInvalidaError,
+    )
+  })
+
+  it('representante de un menor exige nombre y apellidos', async () => {
+    await assert.rejects(
+      () => crearAlumno(adminDb, T1, alumnoBase({ representante: { apellidos: 'Solo Apellido' } }), { uid: ADMIN }),
+      FichaInvalidaError,
+    )
+    await assert.rejects(
+      () => crearAlumno(adminDb, T1, alumnoBase({ representante: { nombre: 'Solo Nombre' } }), { uid: ADMIN }),
+      FichaInvalidaError,
+    )
+  })
+
+  it('profesor exige nombre y apellidos', async () => {
+    await assert.rejects(
+      () => crearProfesor(adminDb, T1, { apellidos: 'Sin Nombre' }, { uid: ADMIN }),
+      FichaInvalidaError,
+    )
+    await assert.rejects(
+      () => crearProfesor(adminDb, T1, { nombre: 'Sin Apellidos' }, { uid: ADMIN }),
+      FichaInvalidaError,
+    )
+  })
+
+  it('documento: van el tipo y el número juntos o ninguno, y el tipo sale del enum', async () => {
+    // Ninguno: se guarda null.
+    const { alumnoId } = await crearAlumno(
+      adminDb,
+      T1,
+      { nombre: 'Doc', apellidos: 'Nulo', documento: { tipo: '', numero: '' } },
+      { uid: ADMIN },
+    )
+    assert.equal((await getAlumno(adminDb, T1, alumnoId)).documento, null)
+
+    // Completo: se recorta.
+    const { alumnoId: conDoc } = await crearAlumno(
+      adminDb,
+      T1,
+      { nombre: 'Doc', apellidos: 'Completo', documento: { tipo: 'cedula', numero: ' V-1 ' } },
+      { uid: ADMIN },
+    )
+    assert.deepEqual((await getAlumno(adminDb, T1, conDoc)).documento, {
+      tipo: 'cedula',
+      numero: 'V-1',
+    })
+
+    // Solo uno de los dos → error.
+    await assert.rejects(
+      () => crearAlumno(adminDb, T1, { nombre: 'Doc', apellidos: 'Medio', documento: { tipo: 'cedula' } }, { uid: ADMIN }),
+      FichaInvalidaError,
+    )
+    // Tipo fuera del enum → error.
+    await assert.rejects(
+      () => crearAlumno(
+        adminDb,
+        T1,
+        { nombre: 'Doc', apellidos: 'Malo', documento: { tipo: 'rif', numero: 'X-1' } },
+        { uid: ADMIN },
+      ),
+      FichaInvalidaError,
+    )
+  })
+
+  it('contactoEmergencia: nombre y teléfono van juntos o ninguno', async () => {
+    const { alumnoId } = await crearAlumno(
+      adminDb,
+      T1,
+      {
+        nombre: 'Con',
+        apellidos: 'Contacto',
+        contactoEmergencia: { nombre: 'Elsa', telefono: '+58 000 000 0009' },
+      },
+      { uid: ADMIN },
+    )
+    assert.deepEqual((await getAlumno(adminDb, T1, alumnoId)).contactoEmergencia, {
+      nombre: 'Elsa',
+      telefono: '+58 000 000 0009',
+    })
+
+    await assert.rejects(
+      () => crearAlumno(
+        adminDb,
+        T1,
+        { nombre: 'Sin', apellidos: 'Telefono', contactoEmergencia: { nombre: 'Elsa' } },
+        { uid: ADMIN },
+      ),
+      FichaInvalidaError,
+    )
+  })
+
+  it('nivel fuera del enum → FichaInvalidaError', async () => {
+    await assert.rejects(
+      () => crearAlumno(adminDb, T1, { nombre: 'Nivel', apellidos: 'Malo', nivel: 'intermedio' }, { uid: ADMIN }),
+      FichaInvalidaError,
+    )
+  })
+
+  it('fechaIngreso arranca en la fecha LOCAL de hoy y acepta "YYYY-MM-DD"', async () => {
+    const ahora = new Date(2026, 0, 15, 23, 30)
+    assert.equal(fechaHoyLocal(ahora), '2026-01-15')
+    const { alumnoId } = await crearAlumno(
+      adminDb,
+      T1,
+      { nombre: 'Hoy', apellidos: 'Local' },
+      { uid: ADMIN, now: ahora },
+    )
+    assert.equal((await getAlumno(adminDb, T1, alumnoId)).fechaIngreso, '2026-01-15')
+
+    const { alumnoId: conFecha } = await crearAlumno(
+      adminDb,
+      T1,
+      { nombre: 'Fecha', apellidos: 'Fija', fechaIngreso: '2025-03-01' },
+      { uid: ADMIN },
+    )
+    assert.equal((await getAlumno(adminDb, T1, conFecha)).fechaIngreso, '2025-03-01')
+  })
+
+  it('aplica los topes de largo de los textos', async () => {
+    await assert.rejects(
+      () => crearAlumno(adminDb, T1, { nombre: 'x'.repeat(201), apellidos: 'Largo' }, { uid: ADMIN }),
+      FichaInvalidaError,
+    )
+    await assert.rejects(
+      () => crearAlumno(adminDb, T1, { nombre: 'Tel', apellidos: 'Largo', telefono: '9'.repeat(31) }, { uid: ADMIN }),
+      FichaInvalidaError,
+    )
+    await assert.rejects(
+      () =>
+        crearAlumno(
+          adminDb,
+          T1,
+          {
+            nombre: 'Doc',
+            apellidos: 'Largo',
+            documento: { tipo: 'cedula', numero: '9'.repeat(31) },
+          },
+          { uid: ADMIN },
+        ),
+      FichaInvalidaError,
+    )
+    await assert.rejects(
+      () => crearAlumno(adminDb, T1, { nombre: 'Notas', apellidos: 'Largas', notas: 'x'.repeat(1001) }, { uid: ADMIN }),
+      FichaInvalidaError,
+    )
+  })
+
+  it('actualizarAlumno recalcula el buscador al cambiar nombre o apellidos', async () => {
+    await actualizarAlumno(adminDb, T1, 'a1', { apellidos: 'Actualizado' }, { uid: ADMIN })
+    const ficha = await getAlumno(adminDb, T1, 'a1')
+    assert.equal(ficha.busquedaNombre, 'aldo actualizado')
+    assert.equal(ficha.busquedaApellido, 'actualizado aldo')
   })
 
   it('actualizarAlumno hace soft delete con activo:false y lo saca del buscador', async () => {
@@ -555,16 +791,18 @@ describe('fichas', () => {
     assert.equal((await buscarAlumnos(adminDb, T1, 'aldo')).length, 0)
   })
 
-  it('crearProfesor no escribe tarifa por hora', async () => {
+  it('crearProfesor no escribe tarifa por hora y guarda sus sedes', async () => {
     const { profesorId } = await crearProfesor(
       adminDb,
       T1,
-      { nombre: 'Paola Profesora', telefono: '+58 412 000 0002' },
+      { nombre: 'Paola', apellidos: 'Profesora', telefono: '+58 000 000 0002', sedes: ['traki'] },
       { uid: ADMIN },
     )
     const snap = await getDoc(doc(adminDb, 'academias', T1, 'profesores', profesorId))
     assert.equal(snap.data().tarifaHoraCentavos, undefined)
     assert.equal(snap.data().activo, true)
+    assert.deepEqual(snap.data().sedes, ['traki'])
+    assert.equal(nombreCompleto(snap.data()), 'Paola Profesora')
   })
 })
 
@@ -890,18 +1128,22 @@ describe('[B2] crearClase: sede/cancha/profesor deben existir y estar activos', 
   it('nombres denormalizados se toman del documento, no del cliente', async () => {
     const { claseId } = await reservar({ sedeNombre: 'IGNORAR', profesorNombre: 'IGNORAR' })
     const c = await getClase(adminDb, T1, claseId)
-    // El nombre real de la sede es 'Traki' y del profesor 'Pablo'
+    // El nombre real de la sede es 'Traki' y el del profesor "Pablo Profesor".
     assert.equal(c.sedeNombre, 'Traki', 'sedeNombre debe venir del doc de sede')
-    assert.equal(c.profesorNombre, 'Pablo', 'profesorNombre debe venir del doc de profesor')
+    assert.equal(
+      c.profesorNombre,
+      'Pablo Profesor',
+      'profesorNombre debe venir del doc de profesor',
+    )
   })
 })
 
-describe('[B3] fichas: whitelist y tutor para menores', () => {
+describe('[B3] fichas: whitelist y representante para menores', () => {
   it('crearAlumno ignora campos no permitidos (whitelist)', async () => {
     const { alumnoId } = await crearAlumno(
       adminDb,
       T1,
-      { nombre: 'Test', tipo: 'adulto', campoExtraño: 'inyectado', activo: true },
+      { nombre: 'Test', apellidos: 'Whitelist', tipo: 'adulto', campoExtraño: 'inyectado', activo: true },
       { uid: ADMIN },
     )
     const ficha = await getAlumno(adminDb, T1, alumnoId)
@@ -918,7 +1160,7 @@ describe('[B3] fichas: whitelist y tutor para menores', () => {
     const { profesorId } = await crearProfesor(
       adminDb,
       T1,
-      { nombre: 'Test Prof', campoExtraño: 'inyectado' },
+      { nombre: 'Test', apellidos: 'Prof', campoExtraño: 'inyectado' },
       { uid: ADMIN },
     )
     const snap = await getDoc(doc(adminDb, 'academias', T1, 'profesores', profesorId))
@@ -931,12 +1173,58 @@ describe('[B3] fichas: whitelist y tutor para menores', () => {
     assert.equal(snap.data().campoExtraño, undefined)
   })
 
-  it('actualizarAlumno tipo menor sin tutor.nombre → DENY', async () => {
-    // a2 ya es menor con tutor; si se cambia tipo a menor y se quita el nombre del tutor
+  it('actualizarAlumno a menor sin representante → FichaInvalidaError', async () => {
     await assert.rejects(
-      () => actualizarAlumno(adminDb, T1, 'a2', { tutor: { nombre: '' } }, { uid: ADMIN }),
-      /tutor/,
+      () => actualizarAlumno(adminDb, T1, 'a2', { representante: { nombre: '' } }, { uid: ADMIN }),
+      FichaInvalidaError,
     )
+  })
+
+  it('actualizarAlumno de menor a adulto limpia el representante', async () => {
+    await actualizarAlumno(adminDb, T1, 'a2', { tipo: 'adulto' }, { uid: ADMIN })
+    const ficha = await getAlumno(adminDb, T1, 'a2')
+    assert.equal(ficha.tipo, 'adulto')
+    assert.equal(ficha.representante, null)
+  })
+})
+
+describe('[B5] profesor por sede: create y reprogram', () => {
+  it('crearClase con un profesor no asignado a la sede → ClaseInvalidaError', async () => {
+    await assert.rejects(
+      () => reservar({ profesorId: 'p3' }),
+      (error) => error instanceof ClaseInvalidaError && /no está asignado a la sede/.test(error.message),
+    )
+  })
+
+  it('reprogramarClase a un profesor no asignado a la sede → ClaseInvalidaError', async () => {
+    const { claseId } = await reservar()
+    await assert.rejects(
+      () => reprogramarClase(adminDb, T1, claseId, { profesorId: 'p3' }, { uid: ADMIN }),
+      (error) => error instanceof ClaseInvalidaError && /no está asignado a la sede/.test(error.message),
+    )
+    // La clase queda intacta.
+    assert.equal((await getClase(adminDb, T1, claseId)).profesorId, 'p1')
+  })
+
+  it('reprogramarClase a otra sede con un profesor de esa sede → ALLOW', async () => {
+    await setDoc(doc(adminDb, 'academias', T1, 'sedes', 'boleita'), { nombre: 'Boleíta', activa: true })
+    await setDoc(doc(adminDb, 'academias', T1, 'sedes', 'boleita', 'canchas', 'c1'), {
+      nombre: 'Cancha 1',
+      activa: true,
+    })
+    const { claseId } = await reservar()
+    await reprogramarClase(
+      adminDb,
+      T1,
+      claseId,
+      { sedeId: 'boleita', profesorId: 'p3' },
+      { uid: ADMIN },
+    )
+    const movida = await getClase(adminDb, T1, claseId)
+    assert.equal(movida.sedeId, 'boleita')
+    assert.equal(movida.profesorId, 'p3')
+    assert.equal(movida.sedeNombre, 'Boleíta')
+    assert.equal(movida.profesorNombre, 'Sofía Solo Boleita')
   })
 })
 
@@ -951,9 +1239,22 @@ describe('[B4] getSedes y getProfesores: filtro activo en la query', () => {
 
   it('getProfesores no devuelve profesores inactivos aunque estén en la BD', async () => {
     await setDoc(doc(adminDb, 'academias', T1, 'profesores', 'inactivoProf'), {
-      nombre: 'Inactivo', activo: false,
+      nombre: 'Inactivo', apellidos: 'Prof', activo: false,
     })
     const profesores = await getProfesores(adminDb, T1)
     assert.ok(!profesores.some((p) => p.id === 'inactivoProf'), 'profesor inactivo no debe aparecer')
+  })
+
+  it('getProfesores con sedeId solo devuelve los asignados a esa sede', async () => {
+    const deTraki = await getProfesores(adminDb, T1, { sedeId: 'traki' })
+    assert.deepEqual(deTraki.map((p) => p.id).sort(), ['p1', 'p2'])
+    const deBoleita = await getProfesores(adminDb, T1, { sedeId: 'boleita' })
+    assert.deepEqual(deBoleita.map((p) => p.id).sort(), ['p2', 'p3'])
+    assert.deepEqual(await getProfesores(adminDb, T1, { sedeId: 'sin-gente' }), [])
+  })
+
+  it('getProfesores ordena por nombre completo', async () => {
+    const nombres = (await getProfesores(adminDb, T1)).map((p) => nombreCompleto(p))
+    assert.deepEqual(nombres, ['Pablo Profesor', 'Pedro Pérez', 'Sofía Solo Boleita'])
   })
 })

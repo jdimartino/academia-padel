@@ -10,10 +10,10 @@ El aislamiento entre academias es por subárbol. Las Security Rules
 (`firestore.rules`) validan, en cada operación, que el usuario sea
 **administrador activo** de `academias/{tenantId}`. **Por ahora solo el
 administrador inicia sesión y opera**; profesor, alumno adulto, alumno menor y
-tutor son fichas del modelo, no usuarios con acceso (ver §0.1).
+representante son fichas del modelo, no usuarios con acceso (ver §0.1).
 
 > El enum de roles se conserva tal cual para el futuro, pero hoy **profesor,
-> alumno adulto, alumno menor y tutor quedan "sin acceso por ahora"**. Recepción
+> alumno adulto, alumno menor y representante quedan "sin acceso por ahora"**. Recepción
 > sigue SIN DEFINIR y no se crea como rol.
 
 Convenciones:
@@ -55,19 +55,19 @@ Además, en esta sesión se decidió el mecanismo de **reserva sin solapamientos
 **Decisión vigente: solo la academia administradora inicia sesión.** Todo lo
 demás son fichas de datos, no cuentas de acceso. Los roles del enum siguen
 existiendo para el futuro, pero hoy `profesor`, `alumno_adulto`, `alumno_menor`
-y tutor están **sin acceso por ahora**. Recepción queda **SIN DEFINIR**.
+y representante están **sin acceso por ahora**. Recepción queda **SIN DEFINIR**.
 
 | Quién | ¿Inicia sesión? | Puede leer | Puede escribir |
 | --- | --- | --- | --- |
 | `administrador` | Sí | Todo su tenant (sedes, canchas, profesores, alumnos, clases, bloques, planes, cargos, pagos, notas de crédito, liquidaciones, miembros) | Todo su tenant |
 | `profesor` | **No** (ficha) | Sólo su propia membresía (descubrimiento de tenants). Nada más | Nada |
 | `alumno_adulto` | **No** (ficha) | Sólo su propia membresía | Nada |
-| `alumno_menor` / tutor | **No** (ficha) | Sólo su propia membresía | Nada |
+| `alumno_menor` / representante | **No** (ficha) | Sólo su propia membresía | Nada |
 | Recepción | **SIN DEFINIR** — no se crea | — | — |
 
 El administrador abre clases (reserva), reprograma, cancela, registra asistencia
 y cierra la clase, y más adelante marca el cobro como pagado. Los alumnos (o el
-tutor, en menores) **recibirán reportes de clase por email o Telegram**: no
+representante, en menores) **recibirán reportes de clase por email o Telegram**: no
 inician sesión, y el envío es una capacidad futura sin implementar (§8).
 
 La única lectura permitida a un no-admin es su propia membresía (arranque de
@@ -165,15 +165,19 @@ y porque una cancha puede necesitar más campos (tarifas, tipo, estado).
 
 | Campo | Tipo | Nota |
 | --- | --- | --- |
-| `nombre` | string | |
-| `email` | string | Dato de contacto (futuro canal de avisos, §8), no credencial |
-| `telefono` | string | Opcional |
+| `nombre` | string | Requerido, recortado, máx. 200 |
+| `apellidos` | string | Requerido, recortado, máx. 200 |
+| `telefono` | string \| null | Opcional, máx. 30. Sin validación de formato |
+| `email` | string \| null | Dato de contacto (futuro canal de avisos, §8), no credencial. Máx. 200 |
+| `documento` | map \| null | Opcional: `{tipo: "cedula"\|"pasaporte", numero}`. Van los dos o ninguno; el número máx. 30 y sin validación de formato |
 | `tarifaHoraCentavos` | number | **SIN DEFINIR / sin implementar.** La tarifa por hora es de facturación; `crearProfesor` no la escribe y el seed tampoco. |
-| `sedes` | string[] | IDs de sedes donde trabaja |
+| `sedes` | string[] | IDs de las sedes donde dicta. Solo esas sedes lo pueden asignar a una clase |
+| `notas` | string | Opcional, máx. 1000 |
 | `activo` | bool | |
 
 Fichas creadas por `crearProfesor` / `actualizarProfesor` (soft delete con
-`activo:false`). `getProfesores` devuelve solo los activos.
+`activo:false`). `getProfesores(db, tenant, {sedeId})` devuelve solo los activos
+y, con `sedeId`, solo los asignados a esa sede (`sedes` array-contains).
 
 > **Campo eliminado (login obsoleto):** el antiguo `uid` (usuario de Auth del
 > profesor) se quitó. El profesor es una ficha, no una cuenta.
@@ -182,18 +186,21 @@ Fichas creadas por `crearProfesor` / `actualizarProfesor` (soft delete con
 
 | Campo | Tipo | Nota |
 | --- | --- | --- |
-| `tipo` | string | `adulto` \| `menor` |
-| `nombre` | string | |
-| `nombreBusqueda` | string | `nombre` en minúsculas y sin tildes. Lo escribe `db.js` al crear/editar. Es el campo del buscador por prefijo (`buscarAlumnos`, §6). |
-| `documento` | string \| null | *sin definir tipo/validación* |
-| `email` | string \| null | Dato de contacto (admin-only) |
-| `telefono` | string \| null | Dato de contacto (admin-only) |
-| `tutor` | map \| null | Solo `menor`: `{nombre, email?, telefono?}` (+ `documento`, `parentesco` opcionales). Los avisos van al tutor. |
-| `sedes` | string[] | Sedes donde toma clases |
-| `nivel` | string \| null | Opcional. Mismos 8 valores que `clase.categoria` (`principiante`, `7a`…`1a`), validado en `crearAlumno`/`actualizarAlumno`. |
+| `tipo` | string | `adulto` \| `menor`. Lo elige el administrador; no hay fecha de nacimiento |
+| `nombre` | string | Requerido, recortado, máx. 200 |
+| `apellidos` | string | Requerido, recortado, máx. 200 |
+| `busquedaNombre` | string | `"nombre apellidos"` en minúsculas y sin tildes. Lo escribe `db.js` al crear/editar. Campo del buscador por prefijo (`buscarAlumnos`, §6) |
+| `busquedaApellido` | string | `"apellidos nombre"` normalizado. Segundo campo del buscador, para encontrar por apellido |
+| `documento` | map \| null | Opcional: `{tipo: "cedula"\|"pasaporte", numero}`. Van los dos o ninguno; el número máx. 30 y sin validación de formato |
+| `email` | string \| null | Dato de contacto (admin-only), máx. 200 |
+| `telefono` | string \| null | Dato de contacto (admin-only), máx. 30 |
+| `contactoEmergencia` | map \| null | Opcional: `{nombre, telefono}`. Van los dos o ninguno |
+| `representante` | map \| null | Solo `menor` (requerido): `{nombre*, apellidos*, email?, telefono?}`. Los avisos van al representante |
+| `fechaIngreso` | string | `"YYYY-MM-DD"`. Default: la fecha **local** de hoy (partes locales, nunca `toISOString()`) |
+| `nivel` | string \| null | Opcional. Mismos 8 ids que `clase.categoria` (`principiante`, `7a`…`1a`), validado en `crearAlumno`/`actualizarAlumno`. Las etiquetas que ve el usuario se centralizan en `src/lib/agenda.js` (`etiquetaCategoria`) |
 | `avisosActivos` | bool | Opt-in a recibir reportes. Default `true` al crear. |
 | `activo` | bool | Soft delete: **nunca se borra físicamente**, se marca `false`. |
-| `notas` | string | |
+| `notas` | string | Opcional, máx. 1000 |
 | `creadoPor` / `creadoEn` / `actualizadoEn` | | |
 
 Los datos de contacto son **solo del administrador**: `firestore.rules` niega
@@ -204,13 +211,15 @@ tenant.
 no se hardcodea en el código.
 
 **Alumno Menor:** se modela como un documento `alumnos` (no una cuenta de Auth)
-más un `tutor`. **El tutor tampoco inicia sesión por ahora**: es el contacto del
-menor (ver §8), enlazado al `alumno` por el mapa `tutor`. *Si en el futuro se le
-diera acceso, sería un `miembro` con rol `alumno_menor`; hoy está sin acceso.*
-*Sin definir si el tutor gestiona varios menores.*
+más un `representante`. **El representante tampoco inicia sesión por ahora**: es
+el contacto del menor (ver §8), enlazado al `alumno` por el mapa
+`representante`. *Si en el futuro se le diera acceso, sería un `miembro` con rol
+`alumno_menor`; hoy está sin acceso.*
+*Sin definir si el representante gestiona varios menores.*
 
 Fichas creadas/actualizadas por `crearAlumno` / `actualizarAlumno`; `getAlumno`
-lee una y `buscarAlumnos` busca activos por prefijo (limit 10).
+lee una y `buscarAlumnos` busca activos por nombre o apellido (mínimo 2 letras,
+máx. 10 resultados).
 
 ---
 
@@ -531,7 +540,9 @@ Declarados en `firestore.indexes.json`. Mínimos para las consultas previstas:
 - `cargos`: `alumnoId` + `periodo` desc.
 - `cargos`: `estado` + `periodo`.
 - `pagos`: `estado` + `creadoEn` desc.
-- `alumnos`: `activo` + `nombreBusqueda` (buscador por prefijo de `buscarAlumnos`).
+- `alumnos`: `activo` + `busquedaNombre` y `activo` + `busquedaApellido`
+  (buscador por prefijo de nombre o apellido de `buscarAlumnos`).
+- `profesores`: `activo` + `sedes` (array-contains) para `getProfesores({sedeId})`.
 
 Cada consulta nueva que se agregue a `db.js` debe traer su índice antes de
 publicarse.
@@ -577,17 +588,17 @@ publicarse.
 
 > **TODO ESTA SECCIÓN ES UNA PROPUESTA, NO UNA DECISIÓN.** Nada de esto está en
 > el seed ni en ninguna validación, y no se implementa todavía. Alumnos y
-> tutores **no inician sesión**: reciben avisos, no operan el sistema.
+> representantes **no inician sesión**: reciben avisos, no operan el sistema.
 
 ### Campos propuestos
 
-Opcionales, en la ficha del alumno (`alumnos/{alumnoId}`) y en el mapa `tutor`
-de los menores. Para un menor, el contacto es el del tutor, no el del chico.
+Opcionales, en la ficha del alumno (`alumnos/{alumnoId}`) y en el mapa `representante`
+de los menores. Para un menor, el contacto es el del representante, no el del chico.
 
 | Campo | Tipo | Nota |
 | --- | --- | --- |
 | `email` | string \| null | Canal base. Ya existe en la ficha; se reutiliza. |
-| `telegramChatId` | string \| null | Se completa cuando el alumno/tutor vincula el bot |
+| `telegramChatId` | string \| null | Se completa cuando el alumno/representante vincula el bot |
 | `canalPreferido` | string \| null | `"email"` \| `"telegram"` \| `null` |
 | `avisosActivos` | boolean | Opt-in explícito a recibir reportes |
 
@@ -595,7 +606,7 @@ de los menores. Para un menor, el contacto es el del tutor, no el del chico.
 
 Un bot de Telegram **no puede escribirle a un usuario que no haya pulsado
 Start**. Por eso el vínculo no puede ser automático: hace falta un enlace de un
-solo uso `t.me/<bot>?start=<token>` que el alumno/tutor abre, y un **webhook del
+solo uso `t.me/<bot>?start=<token>` que el alumno/representante abre, y un **webhook del
 lado del servidor** que reciba el `chatId` y lo guarde en la ficha. Email es el
 canal base; Telegram es **opcional por alumno**.
 

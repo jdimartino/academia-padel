@@ -68,7 +68,23 @@
       "queryScope": "COLLECTION",
       "fields": [
         { "fieldPath": "activo", "order": "ASCENDING" },
-        { "fieldPath": "nombreBusqueda", "order": "ASCENDING" }
+        { "fieldPath": "busquedaNombre", "order": "ASCENDING" }
+      ]
+    },
+    {
+      "collectionGroup": "alumnos",
+      "queryScope": "COLLECTION",
+      "fields": [
+        { "fieldPath": "activo", "order": "ASCENDING" },
+        { "fieldPath": "busquedaApellido", "order": "ASCENDING" }
+      ]
+    },
+    {
+      "collectionGroup": "profesores",
+      "queryScope": "COLLECTION",
+      "fields": [
+        { "fieldPath": "activo", "order": "ASCENDING" },
+        { "fieldPath": "sedes", "arrayConfig": "CONTAINS" }
       ]
     }
   ],

@@ -54,10 +54,10 @@ Abrí http://localhost:5173 y entrá con el usuario de ensayo (contraseña
 | `admin@ensayo.test` | Administrador | Sí, opera toda la academia |
 | `profe@ensayo.test` | Profesor | **No** (ficha; usuario negativo de test) |
 | `alumno@ensayo.test` | Alumno adulto | **No** (ficha; usuario negativo de test) |
-| `tutor@ensayo.test` | Alumno menor (tutor) | **No** (ficha; usuario negativo de test) |
+| `representante@ensayo.test` | Alumno menor (representante) | **No** (ficha; usuario negativo de test) |
 
 Por ahora **solo el administrador inicia sesión y opera**. Profesor, alumno y
-tutor son fichas del modelo, no cuentas: si entran, la app muestra "Esta cuenta
+representante son fichas del modelo, no cuentas: si entran, la app muestra "Esta cuenta
 no tiene acceso a esta academia". Se conservan para probar los DENY.
 
 Emulator UI: http://127.0.0.1:4000

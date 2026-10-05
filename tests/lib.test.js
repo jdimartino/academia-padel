@@ -39,12 +39,14 @@ describe('título de clase', () => {
 
   it('etiqueta de categoría', () => {
     assert.equal(etiquetaCategoria('principiante'), 'Principiante')
-    assert.equal(etiquetaCategoria('6a'), '6ª')
+    assert.equal(etiquetaCategoria('6a'), '6ta')
+    assert.equal(etiquetaCategoria('1a'), '1ra')
+    assert.equal(etiquetaCategoria('7a'), '7ma')
     assert.equal(etiquetaCategoria(null), null)
   })
 
   it('título = "Modalidad · Categoría" y solo modalidad sin categoría', () => {
-    assert.equal(tituloClase({ cupo: 4, categoria: '6a' }), 'Grupal · 6ª')
+    assert.equal(tituloClase({ cupo: 4, categoria: '6a' }), 'Grupal · 6ta')
     assert.equal(tituloClase({ cupo: 1, categoria: null }), 'Individual')
   })
 })

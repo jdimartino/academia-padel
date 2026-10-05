@@ -59,16 +59,28 @@ export function capitalizar(texto) {
 }
 
 /*
- * Categoría de la clase (opcional). Se guarda con el código sin tilde
- * ("7a", "principiante") y se muestra con su etiqueta ("7ª", "Principiante").
+ * Categoría de la clase (opcional). El id guardado NO cambia ("7a",
+ * "principiante"); la etiqueta que ve el usuario se centraliza acá:
+ * Principiante, 1ra, 2da, 3ra, 4ta, 5ta, 6ta, 7ma.
  * Ver docs/modelo-datos.md §4.
  */
 export const CATEGORIAS = ['principiante', '7a', '6a', '5a', '4a', '3a', '2a', '1a']
 
+/** Única tabla de rótulos de nivel/categoría que ve el usuario. */
+const ETIQUETAS_CATEGORIA = {
+  principiante: 'Principiante',
+  '1a': '1ra',
+  '2a': '2da',
+  '3a': '3ra',
+  '4a': '4ta',
+  '5a': '5ta',
+  '6a': '6ta',
+  '7a': '7ma',
+}
+
 export function etiquetaCategoria(categoria) {
   if (!categoria) return null
-  if (categoria === 'principiante') return 'Principiante'
-  return `${categoria.slice(0, -1)}ª`
+  return ETIQUETAS_CATEGORIA[categoria] ?? capitalizar(categoria)
 }
 
 /*

@@ -58,6 +58,22 @@ export const ESTADOS_ASISTENCIA = ['presente', 'ausente_avisada', 'ausente_sin_a
 /** Tipos de ficha de alumno. */
 export const TIPOS_ALUMNO = ['adulto', 'menor']
 
+/** Tipos de documento admitidos. El tipo y el número van juntos o ninguno. */
+export const TIPOS_DOCUMENTO = ['cedula', 'pasaporte']
+
+/**
+ * Topes de longitud de los textos de una ficha (después de recortar).
+ * Ver docs/modelo-datos.md §3.
+ */
+export const LIMITES_FICHA = {
+  nombre: 200,
+  apellidos: 200,
+  email: 200,
+  telefono: 30,
+  documentoNumero: 30,
+  notas: 1000,
+}
+
 function validarCategoria(categoria) {
   if (categoria != null && !CATEGORIAS.includes(categoria)) {
     throw new ClaseInvalidaError(
@@ -86,16 +102,45 @@ function validarCupo(cupo) {
 }
 
 /**
- * Normaliza un nombre para buscarlo por prefijo: sin tildes, minúsculas y sin
- * espacios sobrantes. El valor se guarda en `nombreBusqueda` y se consulta con
- * el mismo normalizador (ver `buscarAlumnos`).
+ * Normaliza un texto para buscarlo por prefijo: sin tildes, minúsculas y con
+ * los espacios colapsados. Se usa para escribir los campos `busquedaNombre` y
+ * `busquedaApellido` y para consultarlos (ver `buscarAlumnos`).
  */
 export function normalizarBusqueda(texto) {
   return String(texto ?? '')
     .normalize('NFD')
     .replace(/[\u0300-\u036f]/g, '')
     .toLowerCase()
+    .replace(/\s+/g, ' ')
     .trim()
+}
+
+/**
+ * Campos normalizados del buscador de alumnos:
+ * - `busquedaNombre`   = "nombre apellidos"
+ * - `busquedaApellido` = "apellidos nombre"
+ *
+ * Con dos consultas de prefijo, `buscarAlumnos` encuentra tanto por nombre
+ * como por apellido. Los espacios de más no generan ruido: se colapsan.
+ */
+export function camposBusqueda({ nombre, apellidos } = {}) {
+  const n = normalizarBusqueda(nombre)
+  const a = normalizarBusqueda(apellidos)
+  return {
+    busquedaNombre: [n, a].filter(Boolean).join(' '),
+    busquedaApellido: [a, n].filter(Boolean).join(' '),
+  }
+}
+
+/**
+ * "Nombre Apellidos" de una ficha (alumno o profesor). Es la única forma de
+ * armar el nombre para mostrar y para los nombres denormalizados de `clases`.
+ */
+export function nombreCompleto(ficha) {
+  return [ficha?.nombre, ficha?.apellidos]
+    .map((parte) => String(parte ?? '').trim())
+    .filter(Boolean)
+    .join(' ')
 }
 
 const RE_HHMM = /^([01]\d|2[0-3]):([0-5]\d)$/
@@ -142,6 +187,18 @@ export function aHoraHHmm(minutos) {
   const hh = String(Math.floor(minutos / 60)).padStart(2, '0')
   const mm = String(minutos % 60).padStart(2, '0')
   return `${hh}:${mm}`
+}
+
+/**
+ * Fecha de HOY en "YYYY-MM-DD" con partes LOCALES. Nunca se usa
+ * `toISOString()`: pasaría a UTC y con Caracas (UTC-4) adelantaría el día.
+ * `ahora` es inyectable para poder probarlo.
+ */
+export function fechaHoyLocal(ahora = new Date()) {
+  const y = ahora.getFullYear()
+  const m = String(ahora.getMonth() + 1).padStart(2, '0')
+  const d = String(ahora.getDate()).padStart(2, '0')
+  return `${y}-${m}-${d}`
 }
 
 function hhmmId(minutos) {
@@ -234,7 +291,7 @@ export function resolverAsignacion(alumnoIds, alumnosPorId, cupo) {
     if (ficha.activo === false) {
       throw new ClaseInvalidaError(`El alumno ${alumnoId} no está activo`)
     }
-    return ficha.nombre ?? ''
+    return nombreCompleto(ficha)
   })
   return { alumnos: [...alumnoIds], alumnoNombres }
 }
@@ -307,20 +364,24 @@ export async function getCanchas(db, tenantId, sedeId) {
 }
 
 /**
- * Profesores activos de una academia. El filtro `activo == true` va en la
- * query para no leer fichas inactivas. Acotado por tenant + activo + limit.
- * Orden client-side por nombre (evita un índice compuesto).
+ * Profesores activos de una academia. Con `{ sedeId }` devuelve solo los que
+ * dictan en esa sede (`sedes` array-contains). Acotado por tenant + activo
+ * (+ sede) + limit. Orden client-side por nombre completo.
+ * Índice: `profesores: activo + sedes` (firestore.indexes.json).
  */
-export async function getProfesores(db, tenantId) {
+export async function getProfesores(db, tenantId, opciones = {}) {
+  const { sedeId = null } = opciones
+  const filtros = [where('activo', '==', true)]
+  if (sedeId) filtros.push(where('sedes', 'array-contains', sedeId))
   const q = query(
     collection(db, 'academias', tenantId, 'profesores'),
-    where('activo', '==', true),
+    ...filtros,
     limit(50),
   )
   const snap = await getDocs(q)
   return snap.docs
     .map((d) => ({ id: d.id, ...d.data() }))
-    .sort((a, b) => String(a.nombre ?? '').localeCompare(String(b.nombre ?? '')))
+    .sort((a, b) => nombreCompleto(a).localeCompare(nombreCompleto(b)))
 }
 
 /* --------------------------------------------------------------------- */
@@ -347,10 +408,98 @@ function validarTipoAlumno(tipo) {
   }
 }
 
+/** Recorta un nombre requerido y falla con `mensajeVacio` si queda vacío. */
+function exigirNombre(valor, mensajeVacio) {
+  const texto = String(valor ?? '').trim()
+  if (!texto) throw new FichaInvalidaError(mensajeVacio)
+  if (texto.length > LIMITES_FICHA.nombre) {
+    throw new FichaInvalidaError(
+      `El nombre no puede superar ${LIMITES_FICHA.nombre} caracteres`,
+    )
+  }
+  return texto
+}
+
+/** Texto opcional: se recorta, vacío queda `null` y tiene tope de largo. */
+function textoOpcional(valor, campo, max) {
+  if (valor === undefined || valor === null) return null
+  const texto = String(valor).trim()
+  if (!texto) return null
+  if (texto.length > max) {
+    throw new FichaInvalidaError(`El campo ${campo} no puede superar ${max} caracteres`)
+  }
+  return texto
+}
+
 /**
- * Crea una ficha de alumno. Campos según docs/modelo-datos.md §3. Para
- * `tipo: "menor"` exige un tutor con nombre (los avisos van al tutor).
- * `avisosActivos` arranca en `true`; el canal de avisos todavía no existe.
+ * Documento opcional `{tipo, numero}`: van los dos o ninguno, el tipo sale del
+ * enum y el número no se valida por formato (solo largo).
+ */
+function validarDocumento(documento) {
+  if (documento === undefined || documento === null) return null
+  const tipo = String(documento.tipo ?? '').trim()
+  const numero = String(documento.numero ?? '').trim()
+  if (!tipo && !numero) return null
+  if (!tipo || !numero) {
+    throw new FichaInvalidaError('Completa el tipo y el numero del documento')
+  }
+  if (!TIPOS_DOCUMENTO.includes(tipo)) {
+    throw new FichaInvalidaError(
+      `Tipo de documento inválido "${tipo}". Permitidos: ${TIPOS_DOCUMENTO.join(', ')}`,
+    )
+  }
+  if (numero.length > LIMITES_FICHA.documentoNumero) {
+    throw new FichaInvalidaError(
+      `El numero del documento no puede superar ${LIMITES_FICHA.documentoNumero} caracteres`,
+    )
+  }
+  return { tipo, numero }
+}
+
+/** Contacto de emergencia opcional: `{nombre, telefono}` van juntos o ninguno. */
+function validarContactoEmergencia(contacto) {
+  if (contacto === undefined || contacto === null) return null
+  const nombre = textoOpcional(contacto.nombre, 'nombre del contacto', LIMITES_FICHA.nombre)
+  const telefono = textoOpcional(
+    contacto.telefono,
+    'telefono del contacto',
+    LIMITES_FICHA.telefono,
+  )
+  if (!nombre && !telefono) return null
+  if (!nombre || !telefono) {
+    throw new FichaInvalidaError('Completa el nombre y el telefono del contacto de emergencia')
+  }
+  return { nombre, telefono }
+}
+
+/** Representante (solo menores): nombre y apellidos son requeridos. */
+function validarRepresentante(representante) {
+  const rep = representante ?? {}
+  return {
+    nombre: exigirNombre(rep.nombre, 'El representante necesita un nombre'),
+    apellidos: exigirNombre(rep.apellidos, 'El representante necesita apellidos'),
+    email: textoOpcional(rep.email, 'email del representante', LIMITES_FICHA.email),
+    telefono: textoOpcional(rep.telefono, 'telefono del representante', LIMITES_FICHA.telefono),
+  }
+}
+
+/** Fecha "YYYY-MM-DD" opcional; si no viene, HOY con partes locales. */
+function validarFechaIngreso(fecha, ahora = new Date()) {
+  if (fecha === undefined || fecha === null || fecha === '') return fechaHoyLocal(ahora)
+  const texto = String(fecha).trim()
+  if (!RE_FECHA.test(texto)) {
+    throw new FichaInvalidaError(
+      `Fecha de ingreso inválida "${fecha}", se espera "YYYY-MM-DD"`,
+    )
+  }
+  return texto
+}
+
+/**
+ * Crea una ficha de alumno. Campos según docs/modelo-datos.md §3. `nombre` y
+ * `apellidos` son obligatorios y recortados; para `tipo: "menor"` hace falta un
+ * representante con nombre y apellidos (los avisos van al representante).
+ * `fechaIngreso` arranca en la fecha local de hoy; `avisosActivos` en `true`.
  * Solo los campos del whitelist se escriben (el resto se ignora).
  */
 export async function crearAlumno(db, tenantId, datos = {}, opciones = {}) {
@@ -358,37 +507,26 @@ export async function crearAlumno(db, tenantId, datos = {}, opciones = {}) {
   const tipo = datos.tipo ?? 'adulto'
   validarTipoAlumno(tipo)
   validarNivel(datos.nivel)
-  const nombre = String(datos.nombre ?? '').trim()
-  if (!nombre) throw new FichaInvalidaError('El alumno necesita nombre')
-
-  let tutor = null
-  if (tipo === 'menor') {
-    const t = datos.tutor ?? {}
-    const tutorNombre = String(t.nombre ?? '').trim()
-    if (!tutorNombre) throw new FichaInvalidaError('Un alumno menor necesita un tutor con nombre')
-    tutor = {
-      nombre: tutorNombre,
-      email: t.email ?? null,
-      telefono: t.telefono ?? null,
-      documento: t.documento ?? null,
-      parentesco: t.parentesco ?? null,
-    }
-  }
+  const nombre = exigirNombre(datos.nombre, 'El alumno necesita un nombre')
+  const apellidos = exigirNombre(datos.apellidos, 'El alumno necesita apellidos')
+  const representante = tipo === 'menor' ? validarRepresentante(datos.representante) : null
 
   // Whitelist: solo los campos conocidos del modelo se persisten.
   const alumno = {
     tipo,
     nombre,
-    nombreBusqueda: normalizarBusqueda(nombre),
+    apellidos,
+    ...camposBusqueda({ nombre, apellidos }),
     nivel: datos.nivel ?? null,
-    email: datos.email ?? null,
-    telefono: datos.telefono ?? null,
-    documento: datos.documento ?? null,
-    tutor,
-    sedes: datos.sedes ?? [],
+    email: textoOpcional(datos.email, 'email', LIMITES_FICHA.email),
+    telefono: textoOpcional(datos.telefono, 'telefono', LIMITES_FICHA.telefono),
+    documento: validarDocumento(datos.documento),
+    contactoEmergencia: validarContactoEmergencia(datos.contactoEmergencia),
+    representante,
+    fechaIngreso: validarFechaIngreso(datos.fechaIngreso, now),
     avisosActivos: datos.avisosActivos ?? true,
     activo: datos.activo ?? true,
-    notas: datos.notas ?? '',
+    notas: textoOpcional(datos.notas, 'notas internas', LIMITES_FICHA.notas) ?? '',
     creadoPor: uid,
     creadoEn: Timestamp.fromDate(now),
   }
@@ -402,55 +540,66 @@ export async function crearAlumno(db, tenantId, datos = {}, opciones = {}) {
 
 /**
  * Actualiza una ficha de alumno (merge). Soft delete: `{ activo: false }`.
- * Recalcula `nombreBusqueda` si cambia el nombre. Solo los campos del
- * whitelist se incluyen en la actualización (el resto se ignora).
- * Si el tipo resultante es "menor", exige tutor.nombre no vacío.
+ * Recalcula los campos del buscador si cambia el nombre o los apellidos.
+ * Solo los campos del whitelist se incluyen en la actualización.
+ * Si el tipo resultante es "menor", el representante es obligatorio; si pasa a
+ * "adulto", el representante se limpia.
  */
 export async function actualizarAlumno(db, tenantId, alumnoId, cambios = {}, opciones = {}) {
   const { uid = null, now = new Date() } = opciones
-  if (cambios.tipo !== undefined) validarTipoAlumno(cambios.tipo)
-  if (cambios.nivel !== undefined) validarNivel(cambios.nivel)
+  const ref = refAlumno(db, tenantId, alumnoId)
+  const snap = await getDoc(ref)
+  const actual = snap.exists() ? snap.data() : {}
+  const efectivo = (campo) => (cambios[campo] !== undefined ? cambios[campo] : actual[campo])
 
-  // Si se envía un tutor en los cambios, validar que tenga nombre cuando el
-  // tipo resultante sea "menor" (ya sea el tipo que viene en cambios o el
-  // actual que no se está tocando — lo comprobamos solo con lo que tenemos).
-  if (cambios.tutor !== undefined || cambios.tipo === 'menor') {
-    // Necesitamos saber el tipo definitivo. Si cambios.tipo no viene,
-    // leemos el documento para conocer el tipo actual.
-    let tipoEfectivo = cambios.tipo
-    if (!tipoEfectivo) {
-      const snap = await getDoc(refAlumno(db, tenantId, alumnoId))
-      tipoEfectivo = snap.exists() ? snap.data().tipo : 'adulto'
-    }
-    if (tipoEfectivo === 'menor') {
-      const tutorNuevo = cambios.tutor
-      if (tutorNuevo !== undefined) {
-        const tutorNombre = String(tutorNuevo?.nombre ?? '').trim()
-        if (!tutorNombre) throw new FichaInvalidaError('Un alumno menor necesita un tutor con nombre')
-      }
-    }
-  }
+  const tipoEfectivo = efectivo('tipo') ?? 'adulto'
+  validarTipoAlumno(tipoEfectivo)
+  validarNivel(cambios.nivel !== undefined ? cambios.nivel : actual.nivel)
 
-  // Whitelist de campos permitidos en una actualización de alumno.
-  const CAMPOS_ALUMNO = [
-    'tipo', 'nombre', 'nivel', 'email', 'telefono', 'documento',
-    'tutor', 'sedes', 'avisosActivos', 'activo', 'notas',
-  ]
   const update = {}
-  for (const campo of CAMPOS_ALUMNO) {
-    if (cambios[campo] !== undefined) update[campo] = cambios[campo]
+  if (cambios.tipo !== undefined) update.tipo = tipoEfectivo
+  if (cambios.nombre !== undefined || cambios.apellidos !== undefined) {
+    const nombre = exigirNombre(efectivo('nombre'), 'El alumno necesita un nombre')
+    const apellidos = exigirNombre(efectivo('apellidos'), 'El alumno necesita apellidos')
+    update.nombre = nombre
+    update.apellidos = apellidos
+    Object.assign(update, camposBusqueda({ nombre, apellidos }))
+  }
+  if (cambios.nivel !== undefined) update.nivel = cambios.nivel ?? null
+  if (cambios.email !== undefined) {
+    update.email = textoOpcional(cambios.email, 'email', LIMITES_FICHA.email)
+  }
+  if (cambios.telefono !== undefined) {
+    update.telefono = textoOpcional(cambios.telefono, 'telefono', LIMITES_FICHA.telefono)
+  }
+  if (cambios.documento !== undefined) update.documento = validarDocumento(cambios.documento)
+  if (cambios.contactoEmergencia !== undefined) {
+    update.contactoEmergencia = validarContactoEmergencia(cambios.contactoEmergencia)
+  }
+  if (cambios.fechaIngreso !== undefined) {
+    update.fechaIngreso = validarFechaIngreso(cambios.fechaIngreso, now)
+  }
+  if (cambios.avisosActivos !== undefined) update.avisosActivos = Boolean(cambios.avisosActivos)
+  if (cambios.activo !== undefined) update.activo = Boolean(cambios.activo)
+  if (cambios.notas !== undefined) {
+    update.notas = textoOpcional(cambios.notas, 'notas internas', LIMITES_FICHA.notas) ?? ''
   }
 
-  if (cambios.nombre !== undefined) {
-    const nombre = String(cambios.nombre ?? '').trim()
-    if (!nombre) throw new FichaInvalidaError('El alumno necesita nombre')
-    update.nombre = nombre
-    update.nombreBusqueda = normalizarBusqueda(nombre)
+  if (tipoEfectivo === 'menor') {
+    // Un menor siempre necesita representante, aunque los cambios no lo traigan.
+    if (cambios.representante !== undefined || cambios.tipo !== undefined) {
+      update.representante = validarRepresentante(efectivo('representante'))
+    } else if (actual.representante == null) {
+      update.representante = validarRepresentante(null)
+    }
+  } else if (cambios.tipo !== undefined) {
+    update.representante = null
   }
+
   update.actualizadoPor = uid
   update.actualizadoEn = Timestamp.fromDate(now)
 
-  await updateDoc(refAlumno(db, tenantId, alumnoId), update)
+  await updateDoc(ref, update)
   return { alumnoId }
 }
 
@@ -461,44 +610,65 @@ export async function getAlumno(db, tenantId, alumnoId) {
 }
 
 /**
- * Busca alumnos ACTIVOS por prefijo de nombre, sin tildes ni mayúsculas
- * (campo `nombreBusqueda`). Acotado por tenant + limit (10 por defecto): el
- * picker nunca carga toda la colección. Usa el índice `alumnos: activo +
- * nombreBusqueda` de firestore.indexes.json.
+ * Busca alumnos ACTIVOS por prefijo de nombre O de apellido, sin tildes ni
+ * mayúsculas. Los campos normalizados son `busquedaNombre` ("nombre apellidos")
+ * y `busquedaApellido` ("apellidos nombre"): corren dos consultas de prefijo en
+ * paralelo, se mezclan sin duplicados y se cortan a `limite` (10 por defecto).
+ * Exige al menos 2 letras para no barrer la colección. Acotado por tenant +
+ * activo + límite. Índices: `alumnos: activo + busquedaNombre` y
+ * `alumnos: activo + busquedaApellido` (firestore.indexes.json).
  */
 export async function buscarAlumnos(db, tenantId, texto, opciones = {}) {
   const { limite = 10 } = opciones
   const prefijo = normalizarBusqueda(texto)
-  if (!prefijo) return []
+  if (prefijo.length < 2) return []
 
-  const q = query(
-    collection(db, 'academias', tenantId, 'alumnos'),
-    where('activo', '==', true),
-    where('nombreBusqueda', '>=', prefijo),
-    where('nombreBusqueda', '<=', `${prefijo}\uf8ff`),
-    orderBy('nombreBusqueda'),
-    limit(limite),
-  )
-  const snap = await getDocs(q)
-  return snap.docs.map((d) => ({ id: d.id, ...d.data() }))
+  const coleccion = collection(db, 'academias', tenantId, 'alumnos')
+  const porCampo = (campo) =>
+    query(
+      coleccion,
+      where('activo', '==', true),
+      where(campo, '>=', prefijo),
+      where(campo, '<=', `${prefijo}\uf8ff`),
+      orderBy(campo),
+      limit(limite),
+    )
+
+  const [porNombre, porApellido] = await Promise.all([
+    getDocs(porCampo('busquedaNombre')),
+    getDocs(porCampo('busquedaApellido')),
+  ])
+
+  const encontrados = new Map()
+  for (const snap of [...porNombre.docs, ...porApellido.docs]) {
+    if (encontrados.has(snap.id)) continue
+    encontrados.set(snap.id, { id: snap.id, ...snap.data() })
+    if (encontrados.size >= limite) break
+  }
+  return [...encontrados.values()]
 }
 
 /**
- * Crea una ficha de profesor. La tarifa por hora queda SIN DEFINIR: no se
- * escribe ningún campo de tarifa (tampoco `tarifaHoraCentavos`).
+ * Crea una ficha de profesor. `nombre` y `apellidos` son obligatorios y
+ * recortados. `sedes` es la lista de sedes donde dicta (solo esas clases lo
+ * pueden asignar). La tarifa por hora queda SIN DEFINIR: no se escribe ningún
+ * campo de tarifa (tampoco `tarifaHoraCentavos`).
  * Solo los campos del whitelist se persisten.
  */
 export async function crearProfesor(db, tenantId, datos = {}, opciones = {}) {
   const { uid = null, now = new Date(), profesorId = null } = opciones
-  const nombre = String(datos.nombre ?? '').trim()
-  if (!nombre) throw new FichaInvalidaError('El profesor necesita nombre')
+  const nombre = exigirNombre(datos.nombre, 'El profesor necesita un nombre')
+  const apellidos = exigirNombre(datos.apellidos, 'El profesor necesita apellidos')
 
   // Whitelist: solo los campos conocidos del modelo se persisten.
   const profesor = {
     nombre,
-    telefono: datos.telefono ?? null,
-    email: datos.email ?? null,
-    sedes: datos.sedes ?? [],
+    apellidos,
+    telefono: textoOpcional(datos.telefono, 'telefono', LIMITES_FICHA.telefono),
+    email: textoOpcional(datos.email, 'email', LIMITES_FICHA.email),
+    documento: validarDocumento(datos.documento),
+    sedes: Array.isArray(datos.sedes) ? [...datos.sedes] : [],
+    notas: textoOpcional(datos.notas, 'notas internas', LIMITES_FICHA.notas) ?? '',
     activo: datos.activo ?? true,
     creadoPor: uid,
     creadoEn: Timestamp.fromDate(now),
@@ -517,17 +687,25 @@ export async function crearProfesor(db, tenantId, datos = {}, opciones = {}) {
  */
 export async function actualizarProfesor(db, tenantId, profesorId, cambios = {}, opciones = {}) {
   const { uid = null, now = new Date() } = opciones
-  // Whitelist de campos permitidos en una actualización de profesor.
-  const CAMPOS_PROFESOR = ['nombre', 'telefono', 'email', 'sedes', 'activo']
   const update = {}
-  for (const campo of CAMPOS_PROFESOR) {
-    if (cambios[campo] !== undefined) update[campo] = cambios[campo]
-  }
   if (cambios.nombre !== undefined) {
-    const nombre = String(cambios.nombre ?? '').trim()
-    if (!nombre) throw new FichaInvalidaError('El profesor necesita nombre')
-    update.nombre = nombre
+    update.nombre = exigirNombre(cambios.nombre, 'El profesor necesita un nombre')
   }
+  if (cambios.apellidos !== undefined) {
+    update.apellidos = exigirNombre(cambios.apellidos, 'El profesor necesita apellidos')
+  }
+  if (cambios.telefono !== undefined) {
+    update.telefono = textoOpcional(cambios.telefono, 'telefono', LIMITES_FICHA.telefono)
+  }
+  if (cambios.email !== undefined) {
+    update.email = textoOpcional(cambios.email, 'email', LIMITES_FICHA.email)
+  }
+  if (cambios.documento !== undefined) update.documento = validarDocumento(cambios.documento)
+  if (cambios.sedes !== undefined) update.sedes = Array.isArray(cambios.sedes) ? [...cambios.sedes] : []
+  if (cambios.notas !== undefined) {
+    update.notas = textoOpcional(cambios.notas, 'notas internas', LIMITES_FICHA.notas) ?? ''
+  }
+  if (cambios.activo !== undefined) update.activo = Boolean(cambios.activo)
   update.actualizadoPor = uid
   update.actualizadoEn = Timestamp.fromDate(now)
   await updateDoc(refProfesor(db, tenantId, profesorId), update)
@@ -607,6 +785,11 @@ export async function crearClase(db, tenantId, datos, opciones = {}) {
     if (!snapProfesor.exists() || snapProfesor.data().activo === false) {
       throw new ClaseInvalidaError(`El profesor "${datos.profesorId}" no existe o no está activo`)
     }
+    if (!(snapProfesor.data().sedes ?? []).includes(datos.sedeId)) {
+      throw new ClaseInvalidaError(
+        `El profesor "${datos.profesorId}" no está asignado a la sede "${datos.sedeId}"`,
+      )
+    }
 
     const snapsBloque = await Promise.all(
       bloques.map((b) => tx.get(refBloque(db, tenantId, b.id))),
@@ -639,7 +822,7 @@ export async function crearClase(db, tenantId, datos, opciones = {}) {
       sedeNombre: snapSede.data().nombre ?? null,
       canchaId: datos.canchaId,
       profesorId: datos.profesorId,
-      profesorNombre: snapProfesor.data().nombre ?? null,
+      profesorNombre: nombreCompleto(snapProfesor.data()),
       fecha: datos.fecha,
       horaInicio: datos.horaInicio,
       horaFin: datos.horaFin,
@@ -777,6 +960,24 @@ export async function reprogramarClase(db, tenantId, claseId, nuevoCambio = {}, 
     )
     if (ocupado) throw new SolapamientoError(ocupado)
 
+    // El profesor de la clase tiene que existir, estar activo y estar asignado
+    // a la sede de la clase. Los nombres denormalizados salen del documento.
+    const [snapSede, snapProfesor] = await Promise.all([
+      tx.get(doc(db, 'academias', tenantId, 'sedes', futura.sedeId)),
+      tx.get(refProfesor(db, tenantId, futura.profesorId)),
+    ])
+    if (!snapSede.exists() || snapSede.data().activa === false) {
+      throw new ClaseInvalidaError(`La sede "${futura.sedeId}" no existe o no está activa`)
+    }
+    if (!snapProfesor.exists() || snapProfesor.data().activo === false) {
+      throw new ClaseInvalidaError(`El profesor "${futura.profesorId}" no existe o no está activo`)
+    }
+    if (!(snapProfesor.data().sedes ?? []).includes(futura.sedeId)) {
+      throw new ClaseInvalidaError(
+        `El profesor "${futura.profesorId}" no está asignado a la sede "${futura.sedeId}"`,
+      )
+    }
+
     // Asignación de alumnos: si cambia la lista se valida (existen, activos,
     // sin duplicados, dentro del cupo); si solo cambia el cupo, se revisa que
     // los ya asignados sigan entrando. Lecturas antes de cualquier escritura.
@@ -821,10 +1022,8 @@ export async function reprogramarClase(db, tenantId, claseId, nuevoCambio = {}, 
     }
     for (const clave of [
       'sedeId',
-      'sedeNombre',
       'canchaId',
       'profesorId',
-      'profesorNombre',
       'fecha',
       'horaInicio',
       'horaFin',
@@ -833,6 +1032,9 @@ export async function reprogramarClase(db, tenantId, claseId, nuevoCambio = {}, 
     ]) {
       if (nuevoCambio[clave] !== undefined) cambios[clave] = nuevoCambio[clave]
     }
+    // Los nombres SIEMPRE salen del documento, no del cliente.
+    cambios.sedeNombre = snapSede.data().nombre ?? null
+    cambios.profesorNombre = nombreCompleto(snapProfesor.data())
     if (asignacion) {
       cambios.alumnos = asignacion.alumnos
       cambios.alumnoNombres = asignacion.alumnoNombres

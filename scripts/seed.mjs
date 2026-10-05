@@ -9,7 +9,7 @@
  * Uso:  npm run seed        (o  node scripts/seed.mjs)
  */
 
-import { bloquesDeClase, normalizarBusqueda, resolverAsignacion } from '../src/firebase/db.js'
+import { bloquesDeClase, camposBusqueda, nombreCompleto, resolverAsignacion } from '../src/firebase/db.js'
 
 const PROJECT_ID = process.env.FIREBASE_PROJECT_ID ?? 'academia-padel-jdm'
 const EMULATOR_HOST = process.env.EMULATOR_HOST ?? '127.0.0.1'
@@ -149,16 +149,17 @@ async function crearClaseEnSeed(datos) {
 
 /*
  * Usuarios de Auth del tenant de ensayo. Por ahora SOLO el administrador tiene
- * acceso. profe@, alumno@ y tutor@ se conservan como usuarios NEGATIVOS: tienen
- * membresía con su rol, pero las reglas les niegan toda lectura/escritura salvo
- * su propia membresía. Profesor y alumno son fichas (records), no cuentas: ya
- * no se enlazan con `profesorId`/`alumnoId` en la membresía.
+ * acceso. profe@, alumno@ y representante@ se conservan como usuarios
+ * NEGATIVOS: tienen membresía con su rol, pero las reglas les niegan toda
+ * lectura/escritura salvo su propia membresía. Profesor y alumno son fichas
+ * (records), no cuentas: ya no se enlazan con `profesorId`/`alumnoId` en la
+ * membresía.
  */
 const USUARIOS = [
   { email: 'admin@ensayo.test', password: 'ensayo1234', nombre: 'Ana Administradora', rol: 'administrador' },
   { email: 'profe@ensayo.test', password: 'ensayo1234', nombre: 'Pablo Profesor', rol: 'profesor' },
   { email: 'alumno@ensayo.test', password: 'ensayo1234', nombre: 'Aldo Adulto', rol: 'alumno_adulto' },
-  { email: 'tutor@ensayo.test', password: 'ensayo1234', nombre: 'Teresa Tutora', rol: 'alumno_menor' },
+  { email: 'representante@ensayo.test', password: 'ensayo1234', nombre: 'Teresa Representante', rol: 'alumno_menor' },
 ]
 
 const SEDES = [
@@ -169,21 +170,57 @@ const SEDES = [
 ]
 
 /*
- * Fichas de alumno de ensayo: un adulto, un menor con tutor y una inactiva
- * (que el seed NUNCA asigna: `resolverAsignacion` la rechaza). Los datos de
- * contacto son solo del administrador (ver firestore.rules).
+ * Fichas de profesor de ensayo. `sedes` son las sedes donde dicta: p1 cubre las
+ * sedes que usan las clases sembradas (traki) y p2 NO está en traki, para poder
+ * ejercitar el rechazo "profesor no asignado a la sede".
+ * La tarifa por hora queda SIN DEFINIR: no se escribe ningún campo de tarifa.
+ */
+const PROFESORES = [
+  {
+    id: 'p1',
+    nombre: 'Pablo',
+    apellidos: 'Profesor',
+    email: 'profe@ensayo.test',
+    telefono: '+58 000 000 0011',
+    documento: { tipo: 'cedula', numero: 'V-00000011' },
+    sedes: ['traki', 'boleita'],
+    notas: '',
+    activo: true,
+  },
+  {
+    id: 'p2',
+    nombre: 'Paola',
+    apellidos: 'Profesora',
+    email: 'paola@ensayo.test',
+    telefono: '+58 000 000 0012',
+    documento: { tipo: 'pasaporte', numero: 'P-00000012' },
+    sedes: ['santa-rosa', 'capital'],
+    notas: '',
+    activo: true,
+  },
+]
+
+const PROFESORES_POR_ID = Object.fromEntries(PROFESORES.map((p) => [p.id, p]))
+
+/*
+ * Fichas de alumno de ensayo: un adulto, un menor con representante y una
+ * inactiva (que el seed NUNCA asigna: `resolverAsignacion` la rechaza). Los
+ * datos de contacto son solo del administrador (ver firestore.rules), y los
+ * teléfonos/documentos son claramente falsos.
  */
 const ALUMNOS = [
   {
     id: 'a1',
     tipo: 'adulto',
-    nombre: 'Aldo Adulto',
-    documento: 'V-10000001',
+    nombre: 'Aldo',
+    apellidos: 'Adulto',
+    nivel: '4a',
     email: 'alumno@ensayo.test',
-    telefono: '+58 414 000 0001',
-    tutor: null,
-    sedes: ['traki'],
-    nivel: 'intermedio',
+    telefono: '+58 000 000 0001',
+    documento: { tipo: 'cedula', numero: 'V-00000001' },
+    contactoEmergencia: { nombre: 'Elsa Emergencia', telefono: '+58 000 000 0009' },
+    representante: null,
+    fechaIngreso: diaRelativo(-120),
     avisosActivos: true,
     activo: true,
     notas: '',
@@ -191,19 +228,20 @@ const ALUMNOS = [
   {
     id: 'a2',
     tipo: 'menor',
-    nombre: 'Marta Menor',
-    documento: 'V-20000002',
-    email: 'tutor@ensayo.test',
-    telefono: '+58 414 000 0002',
-    tutor: {
-      nombre: 'Teresa Tutora',
-      documento: 'V-30000003',
-      telefono: '+58 414 000 0003',
-      email: 'tutor@ensayo.test',
-      parentesco: 'madre',
-    },
-    sedes: ['traki', 'boleita'],
+    nombre: 'Marta',
+    apellidos: 'Menor',
     nivel: 'principiante',
+    email: null,
+    telefono: null,
+    documento: null,
+    contactoEmergencia: null,
+    representante: {
+      nombre: 'Teresa',
+      apellidos: 'Representante',
+      email: 'representante@ensayo.test',
+      telefono: '+58 000 000 0003',
+    },
+    fechaIngreso: diaRelativo(-60),
     avisosActivos: true,
     activo: true,
     notas: '',
@@ -211,13 +249,15 @@ const ALUMNOS = [
   {
     id: 'a3',
     tipo: 'adulto',
-    nombre: 'Nadia Inactiva',
-    documento: 'V-40000004',
+    nombre: 'Nadia',
+    apellidos: 'Inactiva',
+    nivel: null,
     email: null,
     telefono: null,
-    tutor: null,
-    sedes: [],
-    nivel: null,
+    documento: null,
+    contactoEmergencia: null,
+    representante: null,
+    fechaIngreso: diaRelativo(-200),
     avisosActivos: false,
     activo: false,
     notas: 'Ficha de ensayo inactiva (no se asigna)',
@@ -268,26 +308,16 @@ async function main() {
   console.log(`· ${SEDES.length} sedes y sus canchas`)
 
   // La tarifa por hora queda SIN DEFINIR: no se escribe ningún campo de tarifa.
-  await setDoc(`${tenant}/profesores/p1`, {
-    nombre: 'Pablo Profesor',
-    email: 'profe@ensayo.test',
-    telefono: '+58 412 000 0001',
-    sedes: ['traki', 'boleita'],
-    activo: true,
-  })
-  await setDoc(`${tenant}/profesores/p2`, {
-    nombre: 'Paola Profesora',
-    email: 'paola@ensayo.test',
-    telefono: '+58 412 000 0002',
-    sedes: ['santa-rosa', 'capital'],
-    activo: true,
-  })
+  for (const profesor of PROFESORES) {
+    const { id, ...ficha } = profesor
+    await setDoc(`${tenant}/profesores/${id}`, ficha)
+  }
 
   for (const alumno of ALUMNOS) {
     const { id, ...ficha } = alumno
     await setDoc(`${tenant}/alumnos/${id}`, {
       ...ficha,
-      nombreBusqueda: normalizarBusqueda(ficha.nombre),
+      ...camposBusqueda(ficha),
     })
   }
 
@@ -297,7 +327,7 @@ async function main() {
     sedeNombre: 'Traki',
     canchaId: 'c1',
     profesorId: 'p1',
-    profesorNombre: 'Pablo Profesor',
+    profesorNombre: nombreCompleto(PROFESORES_POR_ID.p1),
     fecha: diaRelativo(1),
     horaInicio: '18:00',
     horaFin: '19:00',
@@ -315,7 +345,7 @@ async function main() {
     sedeNombre: 'Traki',
     canchaId: 'c1',
     profesorId: 'p1',
-    profesorNombre: 'Pablo Profesor',
+    profesorNombre: nombreCompleto(PROFESORES_POR_ID.p1),
     fecha: diaRelativo(-1),
     horaInicio: '18:00',
     horaFin: '19:00',
