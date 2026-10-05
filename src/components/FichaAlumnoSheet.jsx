@@ -1,4 +1,4 @@
-import { useState } from 'react'
+import { useState, useRef } from 'react'
 import { useAuth } from '../context/AuthContext'
 import { db } from '../firebase/config'
 import { actualizarAlumno, crearAlumno } from '../firebase/db'
@@ -44,7 +44,9 @@ export default function FichaAlumnoSheet({ tenantId, alumno = null, onClose, onS
   const { user } = useAuth()
   const [form, setForm] = useState(() => formDeAlumno(alumno))
   const [error, setError] = useState('')
+  const [errorTutor, setErrorTutor] = useState('')
   const [enviando, setEnviando] = useState(false)
+  const tutorNombreRef = useRef(null)
 
   const set = (campo, valor) => setForm((prev) => ({ ...prev, [campo]: valor }))
   const setTutor = (campo, valor) =>
@@ -53,6 +55,14 @@ export default function FichaAlumnoSheet({ tenantId, alumno = null, onClose, onS
   async function enviar(event) {
     event.preventDefault()
     setError('')
+    setErrorTutor('')
+
+    if (form.tipo === 'menor' && !form.tutor.nombre.trim()) {
+      setErrorTutor('Escribe el nombre del tutor')
+      tutorNombreRef.current?.focus()
+      return
+    }
+
     setEnviando(true)
     try {
       const datos = {
@@ -65,7 +75,7 @@ export default function FichaAlumnoSheet({ tenantId, alumno = null, onClose, onS
       }
       if (form.tipo === 'menor') {
         datos.tutor = {
-          nombre: form.tutor.nombre,
+          nombre: form.tutor.nombre.trim(),
           email: form.tutor.email || null,
           telefono: form.tutor.telefono || null,
         }
@@ -180,9 +190,19 @@ export default function FichaAlumnoSheet({ tenantId, alumno = null, onClose, onS
                 className="form__input"
                 id="fa-tutor-nombre"
                 value={form.tutor.nombre}
-                onChange={(event) => setTutor('nombre', event.target.value)}
+                onChange={(event) => {
+                  setTutor('nombre', event.target.value)
+                  if (errorTutor) setErrorTutor('')
+                }}
                 required
+                aria-invalid={!!errorTutor}
+                ref={tutorNombreRef}
               />
+              {errorTutor ? (
+                <p className="alert alert--error" role="alert">
+                  {errorTutor}
+                </p>
+              ) : null}
             </div>
             <div className="form__field">
               <label className="form__label" htmlFor="fa-tutor-email">
