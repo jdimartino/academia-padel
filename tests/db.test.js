@@ -44,31 +44,41 @@ const PROJECT_ID = 'academia-padel-jdm'
 const T1 = 't1'
 const ADMIN = 'uid-admin-t1'
 const ALUMNO = 'uid-alumno-t1'
-const FECHA = '2026-10-05'
-/** Momento local después de que termina la clase de ensayo (horaFin 19:30). */
-const DESPUES_DEL_FIN = new Date(2026, 9, 5, 20, 0, 0)
+/*
+ * Fecha de ensayo FUTURA: el "ahora" inyectado de las reservas queda fijo una
+ * hora antes de las 18:00 locales (Caracas) de ese día, así la regla "no se
+ * reserva en el pasado" nunca rompe la suite dependa de cuándo se corra.
+ */
+const FECHA = '2026-11-15'
+const AHORA_RESERVA = new Date(2026, 10, 15, 17, 0, 0)
+/** Momento local después de que termina la clase de ensayo (horaFin 19:00). */
+const DESPUES_DEL_FIN = new Date(2026, 10, 15, 20, 0, 0)
 
 let env
 let adminDb
 let alumnoDb
 
-const clase = (extra = {}) => ({
-  sedeId: 'traki',
-  sedeNombre: 'Traki',
-  canchaId: 'c1',
-  profesorId: 'p1',
-  profesorNombre: 'Pablo Profesor',
-  fecha: FECHA,
-  horaInicio: '18:00',
-  horaFin: '19:30',
-  cupo: 4,
-  alumnos: ['a1'],
-  alumnoNombres: ['Aldo Adulto'],
-  ...extra,
-})
+/** Clase base de ensayo: 18:00-19:00 (una hora en punto, 1 h) con a1. */
+function clase(extra = {}) {
+  return {
+    sedeId: 'traki',
+    sedeNombre: 'Traki',
+    canchaId: 'c1',
+    profesorId: 'p1',
+    profesorNombre: 'Pablo Profesor',
+    fecha: FECHA,
+    horaInicio: '18:00',
+    horaFin: '19:00',
+    cupo: 4,
+    alumnos: ['a1'],
+    alumnoNombres: ['Aldo Adulto'],
+    ...extra,
+  }
+}
 
 /** Reserva como administrador y devuelve el resultado de crearClase. */
-const reservar = (extra) => crearClase(adminDb, T1, clase(extra), { uid: ADMIN })
+const reservar = (extra) =>
+  crearClase(adminDb, T1, clase(extra), { uid: ADMIN, ahora: AHORA_RESERVA })
 
 /** El bloque existe o no, leído con el cliente admin. */
 const bloque = (bloqueId) => getDoc(doc(adminDb, 'academias', T1, 'bloques', bloqueId))
@@ -156,27 +166,28 @@ beforeEach(async () => {
 })
 
 describe('ids deterministas', () => {
-  it('una clase de 90 minutos ocupa 3 bloques de cancha + 3 de profesor', () => {
-    const bloques = bloquesDeClase(clase())
-    assert.equal(bloques.length, 6)
+  it('una clase de 2 horas ocupa 2 bloques de cancha + 2 de profesor (1 por hora)', () => {
+    const bloques = bloquesDeClase(clase({ horaFin: '20:00' }))
+    assert.equal(bloques.length, 4)
     assert.deepEqual(
       bloques.filter((b) => b.data.tipo === 'cancha').map((b) => b.id),
-      [`traki_c1_${FECHA}_1800`, `traki_c1_${FECHA}_1830`, `traki_c1_${FECHA}_1900`],
+      [`traki_c1_${FECHA}_1800`, `traki_c1_${FECHA}_1900`],
     )
     assert.deepEqual(
       bloques.filter((b) => b.data.tipo === 'profesor').map((b) => b.id),
-      [`prof_p1_${FECHA}_1800`, `prof_p1_${FECHA}_1830`, `prof_p1_${FECHA}_1900`],
+      [`prof_p1_${FECHA}_1800`, `prof_p1_${FECHA}_1900`],
     )
   })
 
-  it('la granularidad es de 30 minutos', () => {
-    assert.equal(MINUTOS_BLOQUE, 30)
+  it('la granularidad es de 60 minutos', () => {
+    assert.equal(MINUTOS_BLOQUE, 60)
   })
 })
 
 describe('crearClase', () => {
-  it('horario libre → ALLOW: crea la clase y sus 6 bloques', async () => {
+  it('horario libre → ALLOW: crea la clase y sus 2 bloques', async () => {
     const { claseId, bloques } = await reservar()
+    assert.equal(bloques.length, 2)
 
     const creada = await getClase(adminDb, T1, claseId)
     assert.equal(creada.estado, 'reservada')
@@ -204,13 +215,21 @@ describe('crearClase', () => {
     )
   })
 
-  it('solapamiento PARCIAL (empieza antes de que termine la otra y sigue después) → DENY', async () => {
-    await reservar() // 18:00-19:30
-    await assert.rejects(() => reservar({ horaInicio: '19:00', horaFin: '20:00' }), SolapamientoError)
+  it('solapamiento PARCIAL (una clase de 2 h que arranca antes y pisa la de 1 h) → DENY', async () => {
+    await reservar() // c1 / p1, 18:00-19:00
+    await assert.rejects(
+      () => reservar({ horaInicio: '17:00', horaFin: '19:00' }),
+      SolapamientoError,
+    )
   })
 
-  it('hora de inicio fuera de la grilla de 30 min → DENY (si no, se escaparía del bloqueo)', async () => {
-    await assert.rejects(() => reservar({ horaInicio: '19:15', horaFin: '20:15' }), /múltiplo de 30 minutos/)
+  it('franjas ADYACENTES (17:00-18:00 junto a 18:00-19:00) → ALLOW en la misma cancha', async () => {
+    await reservar({ horaInicio: '17:00', horaFin: '18:00' })
+    assert.ok((await reservar({ horaInicio: '18:00', horaFin: '19:00' })).claseId)
+  })
+
+  it('hora de inicio a la media hora → DENY (solo se reserva en punto)', async () => {
+    await assert.rejects(() => reservar({ horaInicio: '19:30', horaFin: '20:30' }), /en punto|múltiplo de 60/)
   })
 
   it('solapamiento con el mismo horario pero otro profesor → DENY (la cancha manda)', async () => {
@@ -221,13 +240,13 @@ describe('crearClase', () => {
   it('solapamiento a otro horario pero con el mismo profesor → DENY (el profesor manda)', async () => {
     await reservar()
     await assert.rejects(
-      () => reservar({ canchaId: 'c2', horaInicio: '19:00', horaFin: '20:30' }),
+      () => reservar({ canchaId: 'c2', horaInicio: '18:00', horaFin: '20:00' }),
       SolapamientoError,
     )
   })
 
   it('mismo profesor en DOS canchas al MISMO horario → DENY por el bloque de profesor', async () => {
-    await reservar() // p1 en c1, 18:00-19:30
+    await reservar() // p1 en c1, 18:00-19:00
     await assert.rejects(
       () => reservar({ canchaId: 'c2' }),
       (error) => {
@@ -237,16 +256,13 @@ describe('crearClase', () => {
         return true
       },
     )
-    // La cancha c2 sigue libre: no quedó nada escrito.
-    assert.equal((await bloque(`traki_c2_${FECHA}_1800`)).exists(), false)
   })
 
-  it('mismo profesor en bloques ADYACENTES y otra cancha → ALLOW', async () => {
-    await reservar() // p1, 18:00-19:30
-    const segunda = await reservar({ canchaId: 'c2', horaInicio: '19:30', horaFin: '21:00' })
+  it('profesor liberado: en la misma franja se puede reservar en otra cancha', async () => {
+    await reservar() // p1, 18:00-19:00
+    const segunda = await reservar({ canchaId: 'c2', profesorId: 'p2' })
     assert.ok(segunda.claseId)
   })
-
   it('categoria inválida → DENY antes de escribir nada', async () => {
     await assert.rejects(() => reservar({ categoria: '8a' }), /Categoría inválida/)
     assert.equal((await bloque(`traki_c1_${FECHA}_1800`)).exists(), false)
@@ -264,13 +280,13 @@ describe('crearClase', () => {
 
   it('horario ADYACENTE (empieza justo al terminar) → ALLOW', async () => {
     await reservar()
-    const segunda = await reservar({ horaInicio: '19:30', horaFin: '21:00' })
+    const segunda = await reservar({ horaInicio: '19:00', horaFin: '21:00' })
     assert.ok(segunda.claseId)
   })
 
   it('misma cancha y misma franja pero otro día → ALLOW', async () => {
     await reservar()
-    assert.ok((await reservar({ fecha: '2026-10-06' })).claseId)
+    assert.ok((await reservar({ fecha: '2026-11-16' })).claseId)
   })
 
   it('misma franja, otra cancha y otro profesor → ALLOW', async () => {
@@ -278,16 +294,66 @@ describe('crearClase', () => {
     assert.ok((await reservar({ canchaId: 'c2', profesorId: 'p2' })).claseId)
   })
 
-  it('duración que no es múltiplo de 30 → DENY antes de escribir nada', async () => {
+  it('duración de 90 minutos → DENY (solo 1 h o 2 h)', async () => {
     await assert.rejects(
-      () => reservar({ horaInicio: '18:00', horaFin: '18:45' }),
-      /múltiplo de 30 minutos/,
+      () => reservar({ horaInicio: '18:00', horaFin: '19:30' }),
+      /duración|1 h o 2 h|hora en punto/i,
     )
   })
 
   it('alumno_adulto intenta reservar → DENY por las reglas y no queda nada escrito', async () => {
-    await assert.rejects(() => crearClase(alumnoDb, T1, clase(), { uid: ALUMNO }))
+    await assert.rejects(() =>
+      crearClase(alumnoDb, T1, clase(), { uid: ALUMNO, ahora: AHORA_RESERVA }),
+    )
     assert.equal((await bloque(`traki_c1_${FECHA}_1800`)).exists(), false)
+  })
+
+  it('clase sin ningún alumno → DENY (toda reserva exige al menos 1)', async () => {
+    await assert.rejects(() => reservar({ alumnos: [] }), /al menos un alumno/i)
+    assert.equal((await bloque(`traki_c1_${FECHA}_1800`)).exists(), false)
+  })
+
+  it('2 horas: 18:00-20:00 → ALLOW y ocupa 4 bloques', async () => {
+    const { bloques } = await reservar({ horaFin: '20:00' })
+    assert.equal(bloques.length, 4)
+  })
+
+  it('inicio a las 22:00 con 1 h → ALLOW (termina 23:00)', async () => {
+    assert.ok((await reservar({ horaInicio: '22:00', horaFin: '23:00' })).claseId)
+  })
+
+  it('inicio a las 22:00 con 2 h → DENY (terminaría 00:00)', async () => {
+    await assert.rejects(
+      () => reservar({ horaInicio: '22:00', horaFin: '24:00' }),
+      /23:00|terminar|válida/i,
+    )
+  })
+
+  it('inicio a las 21:00 con 2 h → ALLOW (termina 23:00)', async () => {
+    assert.ok((await reservar({ horaInicio: '21:00', horaFin: '23:00' })).claseId)
+  })
+
+  it('inicio antes de las 07:00 → DENY', async () => {
+    await assert.rejects(() => reservar({ horaInicio: '06:00', horaFin: '07:00' }), /07:00|franja/i)
+  })
+
+  it('inicio en una hora del pasado (mismo día) → DENY', async () => {
+    // El "ahora" inyectado es 17:00; una clase a las 16:00 ya empezó.
+    await assert.rejects(
+      () => reservar({ horaInicio: '16:00', horaFin: '17:00' }),
+      /pasado|ya empezó|ya comenzó/i,
+    )
+  })
+
+  it('inicio en un día pasado → DENY', async () => {
+    await assert.rejects(
+      () => reservar({ fecha: '2026-11-14' }),
+      /pasado|ya empezó|ya comenzó/i,
+    )
+  })
+
+  it('inicio exactamente en el "ahora" inyectado → ALLOW (el borde no es pasado)', async () => {
+    assert.ok((await reservar({ horaInicio: '17:00', horaFin: '18:00' })).claseId)
   })
 })
 
@@ -348,7 +414,7 @@ describe('cancelarClase', () => {
   it('cancelar libera también los bloques del profesor', async () => {
     const { claseId, bloques } = await reservar()
     const deProfesor = bloques.filter((id) => id.startsWith('prof_'))
-    assert.equal(deProfesor.length, 3)
+    assert.equal(deProfesor.length, 1)
 
     await cancelarClase(adminDb, T1, claseId, { uid: ADMIN })
 
@@ -373,19 +439,19 @@ describe('cancelarClase', () => {
 
 describe('reprogramarClase', () => {
   it('mueve la clase, libera los bloques viejos y ocupa los nuevos', async () => {
-    const { claseId, bloques } = await reservar() // c1 / p1 / 18:00-19:30
+    const { claseId, bloques } = await reservar() // c1 / p1 / 18:00-19:00
 
     await reprogramarClase(
       adminDb,
       T1,
       claseId,
-      { canchaId: 'c2', fecha: '2026-10-06' },
+      { canchaId: 'c2', fecha: '2026-11-16' },
       { uid: ADMIN },
     )
 
     const movida = await getClase(adminDb, T1, claseId)
     assert.equal(movida.canchaId, 'c2')
-    assert.equal(movida.fecha, '2026-10-06')
+    assert.equal(movida.fecha, '2026-11-16')
 
     for (const bloqueId of bloques) {
       assert.equal((await bloque(bloqueId)).exists(), false, `bloque viejo ${bloqueId}`)
@@ -393,7 +459,7 @@ describe('reprogramarClase', () => {
     for (const bloqueId of movida.bloques) {
       assert.ok((await bloque(bloqueId)).exists(), `bloque nuevo ${bloqueId}`)
     }
-    assert.equal((await bloque('traki_c2_2026-10-06_1800')).exists(), true)
+    assert.equal((await bloque('traki_c2_2026-11-16_1800')).exists(), true)
   })
 
   it('si se superpone con otra clase, falla y deja la original intacta', async () => {
@@ -414,7 +480,7 @@ describe('reprogramarClase', () => {
   })
 
   it('mover una clase sobre sus propios bloques → ALLOW (no se choca consigo misma)', async () => {
-    const { claseId } = await reservar() // c1 / p1 / 18:00-19:30
+    const { claseId } = await reservar() // c1 / p1 / 18:00-19:00
 
     // Cambia solo el profesor: los bloques de cancha siguen siendo de la clase.
     await reprogramarClase(adminDb, T1, claseId, { profesorId: 'p2' }, { uid: ADMIN })
@@ -430,6 +496,38 @@ describe('reprogramarClase', () => {
     await assert.rejects(
       () => reprogramarClase(adminDb, T1, 'no-existe', { canchaId: 'c2' }, { uid: ADMIN }),
       /no existe/,
+    )
+  })
+
+  it('reprogramar a un horario del pasado (mismo día) → DENY', async () => {
+    const { claseId } = await reservar()
+    await assert.rejects(
+      () => reprogramarClase(adminDb, T1, claseId, { horaInicio: '16:00', horaFin: '17:00' }, { uid: ADMIN, ahora: AHORA_RESERVA }),
+      /pasado|ya empezó|ya comenzó/i,
+    )
+  })
+
+  it('reprogramar a una duración de 90 minutos → DENY', async () => {
+    const { claseId } = await reservar()
+    await assert.rejects(
+      () => reprogramarClase(adminDb, T1, claseId, { horaFin: '19:30' }, { uid: ADMIN, ahora: AHORA_RESERVA }),
+      /duración|1 h o 2 h|en punto/i,
+    )
+  })
+
+  it('reprogramar a un inicio de media hora → DENY', async () => {
+    const { claseId } = await reservar()
+    await assert.rejects(
+      () => reprogramarClase(adminDb, T1, claseId, { horaInicio: '18:30', horaFin: '19:30' }, { uid: ADMIN, ahora: AHORA_RESERVA }),
+      /en punto|múltiplo de 60/i,
+    )
+  })
+
+  it('reprogramar a las 22:00 con 2 h → DENY (terminaría 00:00)', async () => {
+    const { claseId } = await reservar()
+    await assert.rejects(
+      () => reprogramarClase(adminDb, T1, claseId, { horaInicio: '22:00', horaFin: '24:00' }, { uid: ADMIN, ahora: AHORA_RESERVA }),
+      /23:00|terminar|válida/i,
     )
   })
 })
@@ -476,8 +574,40 @@ describe('asignación de alumnos', () => {
   })
 
   it('asignarAlumnos con un alumno inactivo → DENY', async () => {
-    const { claseId } = await reservar({ alumnos: [] })
+    const { claseId } = await reservar({ alumnos: ['a1'] })
     await assert.rejects(() => asignarAlumnos(adminDb, T1, claseId, ['a3'], { uid: ADMIN }), /no está activo/)
+  })
+
+  it('asignarAlumnos no puede dejar la clase sin alumnos (lista vacía) → DENY', async () => {
+    const { claseId } = await reservar({ alumnos: ['a1'] })
+    await assert.rejects(
+      () => asignarAlumnos(adminDb, T1, claseId, [], { uid: ADMIN }),
+      /al menos un alumno/i,
+    )
+    // El estado queda intacto.
+    assert.deepEqual((await getClase(adminDb, T1, claseId)).alumnos, ['a1'])
+  })
+
+  it('asignarAlumnos de 2 a 1 alumno → ALLOW (sigue habiendo uno)', async () => {
+    const { claseId } = await reservar({ alumnos: ['a1', 'a2'] })
+    await asignarAlumnos(adminDb, T1, claseId, ['a2'], { uid: ADMIN })
+    assert.deepEqual((await getClase(adminDb, T1, claseId)).alumnos, ['a2'])
+  })
+
+  it('reprogramarClase no puede dejar la clase sin alumnos → DENY', async () => {
+    const { claseId } = await reservar({ alumnos: ['a1'] })
+    await assert.rejects(
+      () => reprogramarClase(adminDb, T1, claseId, { alumnos: [] }, { uid: ADMIN }),
+      /al menos un alumno/i,
+    )
+  })
+
+  it('reprogramarClase con un alumno inactivo → DENY', async () => {
+    const { claseId } = await reservar({ alumnos: ['a1'] })
+    await assert.rejects(
+      () => reprogramarClase(adminDb, T1, claseId, { alumnos: ['a3'] }, { uid: ADMIN }),
+      /no está activo/,
+    )
   })
 
   it('asignarAlumnos en una clase cerrada → DENY', async () => {
@@ -1122,7 +1252,7 @@ describe('carreras', () => {
     assert.ok(perdedoras[0].reason instanceof SolapamientoError)
 
     const creada = await getClase(adminDb, T1, ganadoras[0].value.claseId)
-    assert.equal(creada.bloques.length, 6)
+    assert.equal(creada.bloques.length, 2)
   })
 })
 
@@ -1203,7 +1333,7 @@ describe('[A2] reprogramarClase: guardia de estado', () => {
 
   it('reprogramar solo borra bloques propios', async () => {
     const { claseId } = await reservar({
-      fecha: '2025-01-01',
+      fecha: '2026-11-17',
       horaInicio: '10:00',
       horaFin: '11:00',
     })
@@ -1219,8 +1349,8 @@ describe('[A2] reprogramarClase: guardia de estado', () => {
       adminDb,
       T1,
       claseId,
-      { fecha: '2025-01-02', horaInicio: '15:00', horaFin: '16:00' },
-      { uid: ADMIN }
+      { fecha: '2026-11-18', horaInicio: '15:00', horaFin: '16:00' },
+      { uid: ADMIN, ahora: AHORA_RESERVA }
     )
 
     // El bloque viejo robado no debe ser borrado
@@ -1248,9 +1378,9 @@ describe('[A3] registrarAsistencia: guardia de estado y hora', () => {
   })
 
   it('no se puede cerrar clase que todavía no empezó (ahora < horaFin)', async () => {
-    // Clase el FECHA a las 18:00-19:30; simulamos que son las 17:00.
+    // Clase el FECHA a las 18:00-19:00; simulamos que son las 17:00.
     const { claseId } = await reservar({ alumnos: ['a1'] })
-    const antesDeEmpezar = new Date('2026-10-05T17:00:00')
+    const antesDeEmpezar = new Date(2026, 10, 15, 17, 0, 0)
     await assert.rejects(
       () =>
         registrarAsistencia(
@@ -1274,7 +1404,7 @@ describe('[B1] cupo: validación de entero 1-4', () => {
   it('cupo 0 → DENY', async () => {
     // Para que no falle por asignar alumnos > cupo, no enviamos alumnos.
     await assert.rejects(
-      () => reservar({ cupo: 0, alumnos: [] }),
+      () => reservar({ cupo: 0, alumnos: ['a1'] }),
       (err) => {
         assert.ok(err instanceof ClaseInvalidaError)
         assert.match(err.message, /cupo debe estar entre 1 y/)
@@ -1289,7 +1419,7 @@ describe('[B1] cupo: validación de entero 1-4', () => {
 
   it('cupo string numérico → DENY', async () => {
     await assert.rejects(
-      () => reservar({ cupo: '2', alumnos: [] }),
+      () => reservar({ cupo: '2', alumnos: ['a1'] }),
       (err) => {
         assert.ok(err instanceof ClaseInvalidaError)
         assert.match(err.message, /cupo debe ser un entero/)
@@ -1303,7 +1433,7 @@ describe('[B1] cupo: validación de entero 1-4', () => {
   })
 
   it('cupo 4 (máximo) → ALLOW', async () => {
-    const { claseId } = await reservar({ cupo: 4, alumnos: [] })
+    const { claseId } = await reservar({ cupo: 4, alumnos: ['a1'] })
     assert.equal((await getClase(adminDb, T1, claseId)).cupo, 4)
   })
 

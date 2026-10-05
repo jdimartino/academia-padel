@@ -36,8 +36,23 @@ import {
 } from 'firebase/firestore'
 import { CATEGORIAS } from '../lib/agenda.js'
 
-/** Granularidad de la ocupación: 30 minutos. Ver docs/modelo-datos.md §4.1. */
-export const MINUTOS_BLOQUE = 30
+/**
+ * Granularidad de la ocupación: 60 minutos (un bloque por hora en punto).
+ * Ver docs/modelo-datos.md §4.1.
+ */
+export const MINUTOS_BLOQUE = 60
+
+/*
+ * Reglas de horario de una clase (se aplican en la capa de datos, no solo en el
+ * formulario):
+ * - arranca en una hora en punto dentro de la franja 07:00-23:00;
+ * - dura 1 h o 2 h exactas;
+ * - si arranca a las 22:00 solo puede durar 1 h, así ninguna clase termina
+ *   después de las 23:00.
+ */
+export const HORA_APERTURA = 7 * 60
+export const HORA_CIERRE = 23 * 60
+export const DURACIONES_VALIDAS = [60, 120]
 
 /** Categorías válidas de una clase. Ver docs/modelo-datos.md §4. */
 export { CATEGORIAS }
@@ -210,6 +225,34 @@ function hhmmId(minutos) {
   return aHoraHHmm(minutos).replace(':', '')
 }
 
+/**
+ * Traduce una fecha "YYYY-MM-DD" + hora "HH:mm" (hora LOCAL del negocio,
+ * Caracas) al instante absoluto del reloj. Se usan las partes locales del
+ * Date, nunca `toISOString()`: con Caracas (UTC-4) UTC adelantaría el día.
+ */
+export function instanteLocal(fecha, hora) {
+  if (!RE_FECHA.test(fecha ?? '')) {
+    throw new ClaseInvalidaError(`Fecha inválida "${fecha}", se espera "YYYY-MM-DD"`)
+  }
+  const [y, m, d] = fecha.split('-').map(Number)
+  const minutos = aMinutos(hora)
+  const instante = new Date(y, m - 1, d, 0, 0, 0, 0)
+  instante.setMinutes(minutos)
+  return instante
+}
+
+/**
+ * Valida que una clase no arranque en el pasado, comparando contra `ahora`
+ * (inyectable). El borde exacto (`inicio === ahora`) SÍ se admite.
+ */
+export function validarInicioNoPasado(fecha, horaInicio, ahora) {
+  if (instanteLocal(fecha, horaInicio).getTime() < ahora.getTime()) {
+    throw new ClaseInvalidaError(
+      `No se puede reservar una clase que ya empezó (${fecha} ${horaInicio})`,
+    )
+  }
+}
+
 function bloqueCanchaId({ sedeId, canchaId, fecha, minuto }) {
   return `${sedeId}_${canchaId}_${fecha}_${hhmmId(minuto)}`
 }
@@ -233,20 +276,27 @@ export function bloquesDeClase({ sedeId, canchaId, profesorId, fecha, horaInicio
 
   const inicio = aMinutos(horaInicio)
   const fin = aMinutos(horaFin)
-  if (fin <= inicio) {
-    throw new ClaseInvalidaError(`horaFin (${horaFin}) debe ser posterior a horaInicio (${horaInicio})`)
-  }
-  if (inicio % MINUTOS_BLOQUE !== 0) {
-    // Sin esto, una clase que arranca a las 19:15 bloquearía bloques 19:15/19:45
-    // y no chocaría con una que ocupa 18:00-19:30, aunque en la realidad se
-    // pisan de 19:15 a 19:30.
+  const duracion = fin - inicio
+  if (fin <= inicio || !DURACIONES_VALIDAS.includes(duracion)) {
     throw new ClaseInvalidaError(
-      `horaInicio debe caer en un múltiplo de ${MINUTOS_BLOQUE} minutos (recibido "${horaInicio}")`,
+      `La duración debe ser 1 h o 2 h (${horaInicio}-${horaFin})`,
     )
   }
-  if ((fin - inicio) % MINUTOS_BLOQUE !== 0) {
+  if (inicio % 60 !== 0) {
+    // Solo horas EN PUNTO: con bloques de 60 min, un inicio a las 19:30 ocuparía
+    // un bloque con ID de las 19:00 y se saldría de la rejilla.
     throw new ClaseInvalidaError(
-      `La duración debe ser múltiplo de ${MINUTOS_BLOQUE} minutos (${horaInicio}-${horaFin})`,
+      `horaInicio debe ser una hora en punto (recibido "${horaInicio}")`,
+    )
+  }
+  if (inicio < HORA_APERTURA) {
+    throw new ClaseInvalidaError(
+      `La clase no puede empezar antes de ${aHoraHHmm(HORA_APERTURA)} (recibido "${horaInicio}")`,
+    )
+  }
+  if (fin > HORA_CIERRE) {
+    throw new ClaseInvalidaError(
+      `La clase no puede terminar después de ${aHoraHHmm(HORA_CIERRE)} (${horaInicio}-${horaFin})`,
     )
   }
 
@@ -274,14 +324,18 @@ export function bloquesDeClase({ sedeId, canchaId, profesorId, fecha, horaInicio
  * transacción, y el seed con las fichas que acaba de escribir. Así el seed
  * asigna por el mismo camino que la app.
  *
- * Reglas: sin duplicados, todos existen, todos activos, cantidad <= cupo. Un
- * cupo <= 1 es Individual (ver docs/modelo-datos.md §4).
+ * Reglas: al menos 1 alumno, sin duplicados, todos existen, todos activos
+ * (`activo === false` se rechaza) y cantidad <= cupo. Un cupo <= 1 es Individual
+ * (ver docs/modelo-datos.md §4).
  */
 export function resolverAsignacion(alumnoIds, alumnosPorId, cupo) {
   if (!Array.isArray(alumnoIds)) {
     throw new ClaseInvalidaError('alumnos debe ser un arreglo de IDs')
   }
   const limite = Number.isFinite(cupo) ? cupo : 0
+  if (alumnoIds.length < 1) {
+    throw new ClaseInvalidaError('La clase necesita al menos un alumno asignado')
+  }
   if (new Set(alumnoIds).size !== alumnoIds.length) {
     throw new ClaseInvalidaError('No se admiten alumnos duplicados en una clase')
   }
@@ -825,7 +879,7 @@ export async function getClasesDeSedePorFecha(db, tenantId, sedeId, fecha) {
 /* --------------------------------------------------------------------- */
 
 /**
- * Crea una clase y ocupa todos sus bloques de 30 minutos (cancha + profesor) en
+ * Crea una clase y ocupa todos sus bloques de 60 minutos (cancha + profesor) en
  * UNA transacción. Si algún bloque ya existe, aborta con `SolapamientoError` y
  * no escribe nada.
  *
@@ -833,7 +887,8 @@ export async function getClasesDeSedePorFecha(db, tenantId, sedeId, fecha) {
  * Las series fijas (`tipo: 'fija'`) NO están implementadas: sin definir.
  */
 export async function crearClase(db, tenantId, datos, opciones = {}) {
-  const { uid = null, now = new Date(), claseId = null } = opciones
+  const { uid = null, ahora = new Date(), claseId = null } = opciones
+  const now = opciones.now ?? ahora
 
   if (datos.tipo && datos.tipo !== 'variable') {
     throw new ClaseInvalidaError(
@@ -842,8 +897,10 @@ export async function crearClase(db, tenantId, datos, opciones = {}) {
   }
   validarCategoria(datos.categoria)
   validarCupo(datos.cupo)
-
+  // El horario se valida fuera de la transacción (es puro) y también el
+  // "no reservar en el pasado", que depende del reloj inyectado.
   const bloques = bloquesDeClase(datos)
+  validarInicioNoPasado(datos.fecha, datos.horaInicio, ahora)
   const claseRef = claseId
     ? refClase(db, tenantId, claseId)
     : doc(collection(db, 'academias', tenantId, 'clases'))
@@ -1002,7 +1059,8 @@ export async function cancelarClase(db, tenantId, claseId, opciones = {}) {
  * canchaId, sedeId, profesorId, …). Los que no vengan se conservan.
  */
 export async function reprogramarClase(db, tenantId, claseId, nuevoCambio = {}, opciones = {}) {
-  const { uid = null, now = new Date() } = opciones
+  const { uid = null, ahora = new Date() } = opciones
+  const now = opciones.now ?? ahora
   const claseRef = refClase(db, tenantId, claseId)
 
   if (nuevoCambio.tipo && nuevoCambio.tipo !== 'variable') {
@@ -1012,6 +1070,14 @@ export async function reprogramarClase(db, tenantId, claseId, nuevoCambio = {}, 
   }
   validarCategoria(nuevoCambio.categoria)
   if (nuevoCambio.cupo !== undefined) validarCupo(nuevoCambio.cupo)
+  // La lista de alumnos no puede quedar vacía: una clase reprogramada sigue
+  // necesitando al menos un alumno.
+  if (nuevoCambio.alumnos !== undefined) {
+    const ids = Array.isArray(nuevoCambio.alumnos) ? nuevoCambio.alumnos : []
+    if (ids.length < 1) {
+      throw new ClaseInvalidaError('La clase necesita al menos un alumno asignado')
+    }
+  }
 
   await runTransaction(db, async (tx) => {
     const snap = await tx.get(claseRef)
@@ -1036,7 +1102,9 @@ export async function reprogramarClase(db, tenantId, claseId, nuevoCambio = {}, 
       horaInicio: campo('horaInicio'),
       horaFin: campo('horaFin'),
     }
+    // Horario (puro) y "no se reprograma al pasado" (reloj inyectado).
     const bloquesNuevos = bloquesDeClase(futura)
+    validarInicioNoPasado(futura.fecha, futura.horaInicio, ahora)
     const bloquesViejos = datos.bloques ?? []
 
     // Todas las lecturas antes de cualquier escritura.
@@ -1146,7 +1214,8 @@ export async function reprogramarClase(db, tenantId, claseId, nuevoCambio = {}, 
  * bloquea en la transacción ni genera bloques de alumno (fuera de alcance).
  */
 export async function asignarAlumnos(db, tenantId, claseId, alumnoIds, opciones = {}) {
-  const { uid = null, now = new Date() } = opciones
+  const { uid = null, ahora = new Date() } = opciones
+  const now = opciones.now ?? ahora
   const claseRef = refClase(db, tenantId, claseId)
   const ids = Array.isArray(alumnoIds) ? alumnoIds : []
 
@@ -1158,6 +1227,11 @@ export async function asignarAlumnos(db, tenantId, claseId, alumnoIds, opciones 
       throw new ClaseInvalidaError(
         `Solo se asignan alumnos a una clase "reservada" (estado "${datos.estado}")`,
       )
+    }
+    // Una clase reservada no puede quedarse sin alumnos: quitar al último se
+    // rechaza igual que crear una reserva sin ninguno.
+    if (ids.length < 1) {
+      throw new ClaseInvalidaError('La clase necesita al menos un alumno asignado')
     }
 
     const snapsAlumno = await Promise.all(ids.map((id) => tx.get(refAlumno(db, tenantId, id))))
@@ -1284,7 +1358,7 @@ export async function getMiMembresia(db, tenantId, uid) {
 }
 
 /**
- * Estado de ocupación de un bloque concreto de 30 minutos. Útil para pintar la
+ * Estado de ocupación de un bloque concreto de 60 minutos. Útil para pintar la
  * grilla de la agenda sin traer todas las clases del día. 1 lectura.
  */
 export async function getBloque(db, tenantId, bloqueId) {

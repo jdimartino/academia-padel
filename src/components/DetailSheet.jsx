@@ -3,7 +3,7 @@ import { useAuth } from '../context/AuthContext'
 import { db } from '../firebase/config'
 import { asignarAlumnos, cancelarClase, registrarAsistencia } from '../firebase/db'
 import { CloseIcon } from './Icons'
-import { aHoraHHmm, estadoDe, rangoClase, tituloClase } from '../lib/agenda'
+import { estadoDe, tituloClase } from '../lib/agenda'
 import { formatearFechaLarga } from '../lib/fechas'
 import SelectorAlumnos from './SelectorAlumnos'
 
@@ -14,14 +14,6 @@ const OPCIONES_ASISTENCIA = [
   { valor: 'ausente_avisada', label: 'Ausente avisada' },
   { valor: 'ausente_sin_aviso', label: 'Ausente sin aviso' },
 ]
-
-function slotsDeClase(clase) {
-  const rango = rangoClase(clase)
-  if (!rango) return []
-  const slots = []
-  for (let m = rango.inicio; m < rango.fin; m += 30) slots.push(aHoraHHmm(m))
-  return slots
-}
 
 /** Empareja IDs de alumnos con sus nombres denormalizados. */
 function alumnosDeClase(clase) {
@@ -153,7 +145,7 @@ export default function DetailSheet({
         <div className="sheet__fila">
           <dt>Horario</dt>
           <dd>
-            {clase.horaInicio}–{clase.horaFin}
+            {clase.horaInicio} - {clase.horaFin}
           </dd>
         </div>
         <div className="sheet__fila">
@@ -167,17 +159,6 @@ export default function DetailSheet({
           </dd>
         </div>
       </dl>
-
-      <div className="sheet__slots">
-        <h3 className="sheet__subtitulo">Bloques de 30 min</h3>
-        <ul className="chips-slots">
-          {slotsDeClase(clase).map((slot) => (
-            <li key={slot} className="chip-slot">
-              {slot}
-            </li>
-          ))}
-        </ul>
-      </div>
 
       {puedeAsignar ? (
         <div className="sheet__slots">

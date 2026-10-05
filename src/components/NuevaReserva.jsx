@@ -4,28 +4,20 @@ import { db } from '../firebase/config'
 import { crearClase, getProfesores, nombreCompleto, reprogramarClase } from '../firebase/db'
 import {
   CATEGORIAS,
-  HORA_MAX,
-  HORA_MIN,
+  HORA_CIERRE_CLASE,
   aHoraHHmm,
   aMinutos,
   etiquetaCategoria,
+  opcionesDeInicio,
 } from '../lib/agenda'
 import { formatearFechaLarga } from '../lib/fechas'
 import { CloseIcon } from './Icons'
 import SelectorAlumnos from './SelectorAlumnos'
 
-const DURACIONES = [60, 90]
+const DURACIONES = [60, 120]
 const MODALIDADES = ['Grupal', 'Individual']
-
-function opcionesDeHora() {
-  const opciones = []
-  for (let minuto = HORA_MIN * 60; minuto <= HORA_MAX * 60 - 30; minuto += 30) {
-    opciones.push(aHoraHHmm(minuto))
-  }
-  return opciones
-}
-
-const HORAS = opcionesDeHora()
+/** Cierre de la jornada: ninguna clase puede terminar después de las 23:00. */
+const FIN_ULTIMO = HORA_CIERRE_CLASE * 60
 
 /*
  * Formulario de reserva. Con `clase` hace de reprogramación (prefill + update
@@ -88,6 +80,15 @@ export default function NuevaReserva({
   const fin = inicio + duracion
   const cupo = modalidad === 'Individual' ? 1 : 4
   const profesor = profesores?.find((p) => p.id === profesorId) ?? null
+  // Solo horas en punto que, con la duración elegida, terminen a más tardar 23:00.
+  const horas = opcionesDeInicio(duracion)
+
+  // Al acortar la duración, la hora elegida podría quedar fuera de la lista.
+  useEffect(() => {
+    setHoraInicio((hora) => (horas.includes(hora) ? hora : (horas[horas.length - 1] ?? hora)))
+    // `horas` se recalcula con la duración; solo interesa cuando cambia.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [duracion])
 
   // Al cambiar de modalidad la selección no puede quedar por encima del cupo.
   function elegirModalidad(opcion) {
@@ -98,15 +99,9 @@ export default function NuevaReserva({
   // Al reprogramar, la propia clase no cuenta como conflicto consigo misma.
   const otrasClases = esEdicion ? clases.filter((c) => c.id !== clase.id) : clases
 
-  const slots = useMemo(() => {
-    const lista = []
-    for (let minuto = inicio; minuto < fin; minuto += 30) lista.push(aHoraHHmm(minuto))
-    return lista
-  }, [inicio, fin])
-
   const problemas = useMemo(() => {
     const lista = []
-    if (fin > HORA_MAX * 60) lista.push('La clase no puede terminar después de las 21:00.')
+    if (fin > FIN_ULTIMO) lista.push('La clase no puede terminar después de las 23:00.')
 
     const solapan = (otra) => {
       const ci = aMinutos(otra.horaInicio)
@@ -230,7 +225,7 @@ export default function NuevaReserva({
             value={horaInicio}
             onChange={(e) => setHoraInicio(e.target.value)}
           >
-            {HORAS.map((hora) => (
+            {horas.map((hora) => (
               <option key={hora} value={hora}>
                 {hora}
               </option>
@@ -249,7 +244,7 @@ export default function NuevaReserva({
                 aria-pressed={minutos === duracion}
                 onClick={() => setDuracion(minutos)}
               >
-                {minutos} min
+                {minutos / 60} h
               </button>
             ))}
           </div>
@@ -324,17 +319,6 @@ export default function NuevaReserva({
           horaInicio={horaInicio}
           horaFin={aHoraHHmm(fin)}
         />
-
-        <div className="sheet__slots">
-          <h3 className="sheet__subtitulo">Bloques de 30 min</h3>
-          <ul className="chips-slots">
-            {slots.map((slot) => (
-              <li key={slot} className="chip-slot">
-                {slot}
-              </li>
-            ))}
-          </ul>
-        </div>
 
         <button className="btn" type="submit" disabled={!puedeEnviar}>
           {enviando ? 'Guardando…' : esEdicion ? 'Guardar cambios' : 'Reservar clase'}

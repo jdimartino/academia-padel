@@ -11,9 +11,34 @@ import {
   estaSinCerrar,
   etiquetaCategoria,
   modalidadDeClase,
+  opcionesDeInicio,
   tituloClase,
 } from '../src/lib/agenda.js'
 import { aISO, hoyISO } from '../src/lib/fechas.js'
+
+describe('horas de inicio de una reserva', () => {
+  it('solo horas en punto, de 07:00 a 23:00 según la duración', () => {
+    const unaHora = opcionesDeInicio(60)
+    const dosHoras = opcionesDeInicio(120)
+
+    assert.equal(unaHora[0], '07:00')
+    assert.equal(dosHoras[0], '07:00')
+    // Última hora de inicio: 22:00 con 1 h y 21:00 con 2 h (cierre 23:00).
+    assert.equal(unaHora[unaHora.length - 1], '22:00')
+    assert.equal(dosHoras[dosHoras.length - 1], '21:00')
+    // Solo en punto: todos los valores terminan en ":00".
+    assert.ok(unaHora.every((hora) => hora.endsWith(':00')))
+    assert.ok(dosHoras.every((hora) => hora.endsWith(':00')))
+    // Ni 21:30 ni 22:00 con 2 h.
+    assert.ok(!unaHora.includes('21:30'))
+    assert.ok(!dosHoras.includes('22:00'))
+  })
+
+  it('sin duración válida no ofrece ninguna hora', () => {
+    assert.deepEqual(opcionesDeInicio(0), [])
+    assert.deepEqual(opcionesDeInicio(-60), [])
+  })
+})
 
 describe('fechas locales', () => {
   it('aISO usa las partes locales, no toISOString()', () => {

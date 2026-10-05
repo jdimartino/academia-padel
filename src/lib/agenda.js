@@ -137,6 +137,26 @@ export function horasDeFranja() {
   return horas
 }
 
+/*
+ * Horas de INICIO que admite una clase, según su duración (en minutos):
+ * solo horas en punto, desde las 07:00, y sin que la clase termine después de
+ * las 23:00. Es la misma regla que aplica la capa de datos (src/firebase/db.js:
+ * duración 1 h o 2 h, cierre 23:00); acá se usa para armar el selector del
+ * formulario. No confundir con la grilla de la agenda (HORA_MAX = 21), que es
+ * solo el rango que se dibuja.
+ */
+export const HORA_CIERRE_CLASE = 23
+
+export function opcionesDeInicio(duracion = 60) {
+  const opciones = []
+  const cierre = HORA_CIERRE_CLASE * 60
+  if (!Number.isFinite(duracion) || duracion <= 0) return opciones
+  for (let minuto = MIN_INICIO; minuto + duracion <= cierre; minuto += 60) {
+    opciones.push(aHoraHHmm(minuto))
+  }
+  return opciones
+}
+
 /** Líneas de fondo: cada 30 min, marcando cuáles son hora en punto. */
 export function lineasDeFranja() {
   const lineas = []

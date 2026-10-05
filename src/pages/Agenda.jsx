@@ -140,11 +140,16 @@ export default function Agenda() {
     setClaseEdit(null)
   }
 
-  function alCrear(claseId) {
+  /*
+   * Tras guardar una reserva (o una reprogramación) solo se cierra el formulario
+   * y se recargan los datos: la clase aparece en la grilla. NO se abre la hoja de
+   * detalle: la asistencia se registra más tarde, no al reservar. `onCreated`
+   * sigue recibiendo el id de la clase, pero acá ya no se usa para seleccionar.
+   */
+  function alCrear() {
     setMostrarForm(false)
     setClaseEdit(null)
-    // La hoja de detalle se abre sola sobre la clase recién reservada.
-    if (claseId) setClaseSelId(claseId)
+    setClaseSelId(null)
     recargar()
   }
 

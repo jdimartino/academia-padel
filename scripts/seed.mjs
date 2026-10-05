@@ -97,16 +97,21 @@ function diaRelativo(dias) {
 }
 
 /**
- * Crea una clase con sus bloques de 30 min, reutilizando el mismo cálculo puro
- * que usa `crearClase` en src/firebase/db.js. El seed escribe por REST con
- * token "owner" (único lugar autorizado a saltear reglas), así que no puede
- * llamar la transacción del SDK; reusa `bloquesDeClase` para que la clase sea
- * dueña de sus bloques igual que en la app.
+ * Crea una clase con sus bloques de 60 min (uno por hora en punto),
+ * reutilizando el mismo cálculo puro que usa `crearClase` en src/firebase/db.js.
+ * El seed escribe por REST con token "owner" (único lugar autorizado a saltear
+ * reglas), así que no puede llamar la transacción del SDK; reusa
+ * `bloquesDeClase` para que la clase sea dueña de sus bloques igual que en la
+ * app. Horario: arranque en punto, duración 1 h o 2 h, fin máximo 23:00.
  */
 async function crearClaseEnSeed(datos) {
   const bloques = bloquesDeClase(datos)
   const creadoEn = new Date()
   const cupo = datos.cupo ?? 4
+  // Ninguna clase del seed se siembra sin alumnos (misma regla que la app).
+  if (!(datos.alumnosIds ?? []).length) {
+    throw new Error(`La clase ${datos.id} del seed necesita al menos un alumno`)
+  }
   // Mismo camino de validación/denormalización que `asignarAlumnos` en la app:
   // el seed no puede correr la transacción (escribe por REST con token owner),
   // pero reusa `resolverAsignacion` con las fichas que acaba de escribir.
@@ -603,6 +608,28 @@ async function main() {
     ? ` (${ALUMNOS.length} base + ${ALUMNOS_EXTRA.length} extra por SEED_ALUMNOS_EXTRA)`
     : ''
   console.log(`· ${ALUMNOS_SEED.length} alumnos${extra}`)
+
+  /*
+   * Fixture de la regla "no se reserva en el pasado": una clase reservada de
+   * ayer. Sirve para ejercitar el rechazo sin fabricar fechas a mano en los
+   * tests de la app. Todas las clases del seed arrancan en hora en punto y
+   * duran 1 h o 2 h, con al menos un alumno.
+   */
+  await crearClaseEnSeed({
+    id: 'c0',
+    sedeId: 'traki',
+    sedeNombre: 'Traki',
+    canchaId: 'c2',
+    profesorId: 'p1',
+    profesorNombre: nombreCompleto(PROFESORES_POR_ID.p1),
+    fecha: diaRelativo(-1),
+    horaInicio: '09:00',
+    horaFin: '10:00',
+    cupo: 4,
+    categoria: '4a',
+    alumnosIds: ['a1'],
+    estado: 'reservada',
+  })
 
   await crearClaseEnSeed({
     id: 'c1',
