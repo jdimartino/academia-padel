@@ -7,7 +7,7 @@ const MESSAGES = {
   'auth/invalid-email': 'El correo no es válido.',
   'auth/user-not-found': 'El correo no es válido.',
   'auth/wrong-password': 'Correo o contraseña incorrectos.',
-  'auth/too-many-requests': 'Demasiados intentos. Probá de nuevo en unos minutos.',
+  'auth/too-many-requests': 'Demasiados intentos. Intenta de nuevo en unos minutos.',
   'auth/network-request-failed': 'Sin conexión a internet.',
 }
 
@@ -28,7 +28,7 @@ export default function Login() {
       await login(email, password)
       navigate(location.state?.from ?? '/', { replace: true })
     } catch (err) {
-      setError(MESSAGES[err.code] ?? 'No se pudo iniciar sesión. Probá de nuevo.')
+      setError(MESSAGES[err.code] ?? 'No se pudo iniciar sesión. Intenta de nuevo.')
     } finally {
       setSubmitting(false)
     }

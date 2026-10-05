@@ -3,7 +3,7 @@ import { useParams } from 'react-router-dom'
 import FichaProfesorSheet from '../components/FichaProfesorSheet'
 import PageChrome from '../components/PageChrome'
 import { db } from '../firebase/config'
-import { getProfesores } from '../firebase/db'
+import { getProfesores, nombreCompleto } from '../firebase/db'
 
 /*
  * Lista de profesores activos (getProfesores, acotado con limit 50) con alta y
@@ -64,7 +64,7 @@ export default function Profesores() {
                   className="ficha-item glass"
                   onClick={() => setEditando({ profesor })}
                 >
-                  <span className="ficha-item__nombre">{profesor.nombre}</span>
+                  <span className="ficha-item__nombre">{nombreCompleto(profesor)}</span>
                   <span className="ficha-item__meta">{profesor.telefono ?? 'Sin teléfono'}</span>
                 </button>
               </li>

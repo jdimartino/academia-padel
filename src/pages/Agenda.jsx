@@ -158,7 +158,7 @@ export default function Agenda() {
     return <EstadoMensaje titulo="Cargando…" />
   }
 
-  // Profesor, alumno y tutor son fichas, no usuarios: no tienen acceso.
+  // Profesor, alumno y representante son fichas, no usuarios: no tienen acceso.
   if (!esAdmin) {
     return <EstadoMensaje titulo="Esta cuenta no tiene acceso a esta academia" />
   }

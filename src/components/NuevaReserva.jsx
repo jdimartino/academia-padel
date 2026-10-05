@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useState } from 'react'
 import { useAuth } from '../context/AuthContext'
 import { db } from '../firebase/config'
-import { crearClase, getProfesores, reprogramarClase } from '../firebase/db'
+import { crearClase, getProfesores, nombreCompleto, reprogramarClase } from '../firebase/db'
 import {
   CATEGORIAS,
   HORA_MAX,
@@ -65,11 +65,14 @@ export default function NuevaReserva({
 
   useEffect(() => {
     let activo = true
-    getProfesores(db, tenantId)
+    // Solo los profesores asignados a la sede de la clase: la transacción de
+    // db.js rechaza a cualquier otro.
+    getProfesores(db, tenantId, { sedeId: sede?.id })
       .then((lista) => {
         if (!activo) return
         setProfesores(lista)
-        setProfesorId((prev) => prev ?? lista[0]?.id ?? null)
+        // Si el profesor actual no dicta en esta sede, se cae al primero.
+        setProfesorId((prev) => (lista.some((p) => p.id === prev) ? prev : (lista[0]?.id ?? null)))
       })
       .catch((err) => {
         if (!activo) return
@@ -79,7 +82,7 @@ export default function NuevaReserva({
     return () => {
       activo = false
     }
-  }, [tenantId])
+  }, [tenantId, sede?.id])
 
   const inicio = aMinutos(horaInicio) ?? 0
   const fin = inicio + duracion
@@ -124,7 +127,7 @@ export default function NuevaReserva({
       )
       if (profeOcupado) {
         lista.push(
-          `${profesor?.nombre ?? 'El profesor'} ya tiene clase de ${profeOcupado.horaInicio} a ${profeOcupado.horaFin}.`,
+          `${nombreCompleto(profesor) || 'El profesor'} ya tiene clase de ${profeOcupado.horaInicio} a ${profeOcupado.horaFin}.`,
         )
       }
     }
@@ -144,7 +147,7 @@ export default function NuevaReserva({
         sedeNombre: sede.nombre,
         canchaId,
         profesorId,
-        profesorNombre: profesor?.nombre ?? null,
+        profesorNombre: nombreCompleto(profesor) || null,
         fecha,
         horaInicio,
         horaFin: aHoraHHmm(fin),
@@ -293,7 +296,7 @@ export default function NuevaReserva({
           {profesores === null ? (
             <p className="aviso">Cargando profesores…</p>
           ) : profesores.length === 0 ? (
-            <p className="aviso">Esta academia no tiene profesores activos.</p>
+            <p className="aviso">No hay profesores asignados a esta sede.</p>
           ) : (
             <div className="chips-row">
               {profesores.map((profe) => (
@@ -304,7 +307,7 @@ export default function NuevaReserva({
                   aria-pressed={profe.id === profesorId}
                   onClick={() => setProfesorId(profe.id)}
                 >
-                  {profe.nombre}
+                  {nombreCompleto(profe)}
                 </button>
               ))}
             </div>

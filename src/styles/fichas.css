@@ -227,7 +227,7 @@
   accent-color: var(--accent);
 }
 
-.tutor-box {
+.representante-box {
   margin: 0;
   padding: 12px;
   border-radius: 14px;
@@ -238,8 +238,62 @@
   gap: 10px;
 }
 
-.tutor-box legend {
+.representante-box legend {
   padding: 0 6px;
+}
+
+/* Fichas: error inline debajo de cada campo. */
+.form__error {
+  margin: 0;
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--estado-cancelada-texto, #ffd7d7);
+}
+
+.contacto-box {
+  margin: 0;
+  padding: 12px;
+  border-radius: 14px;
+  border: 1px solid rgba(255, 255, 255, 0.18);
+  background: rgba(255, 255, 255, 0.06);
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.contacto-box legend {
+  padding: 0 6px;
+}
+
+.sedes-check {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+/*
+ * Los formularios de ficha son largos: en mobile scrollean dentro del sheet y en
+ * desktop quedan anclados a la altura del viewport con scroll interno (mismo
+ * criterio que el detalle de la Agenda), así Guardar/Cancelar siempre quedan a
+ * mano y el formulario no se corta.
+ */
+.sheet--ficha {
+  overflow-y: auto;
+}
+
+@media (min-width: 1024px) {
+  .sheet--ficha {
+    position: fixed;
+    top: 12px;
+    bottom: 12px;
+    left: auto;
+    right: 12px;
+    width: min(440px, calc(100vw - 24px));
+    max-height: none;
+  }
 }
 
 /* ============================================================

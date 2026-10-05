@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState } from 'react'
 import { db } from '../firebase/config'
-import { buscarAlumnos } from '../firebase/db'
+import { buscarAlumnos, nombreCompleto } from '../firebase/db'
 import { aMinutos } from '../lib/agenda'
 
 /** ¿Dos rangos "HH:mm" se solapan? Puro. */
@@ -39,7 +39,7 @@ export default function SelectorAlumnos({
     let activo = true
     const timer = setTimeout(() => {
       if (!activo) return
-      if (!q) {
+      if (q.length < 2) {
         setResultados([])
         setBuscando(false)
         setError('')
@@ -59,7 +59,7 @@ export default function SelectorAlumnos({
         .finally(() => {
           if (activo) setBuscando(false)
         })
-    }, 250)
+    }, 300)
     return () => {
       activo = false
       clearTimeout(timer)
@@ -90,7 +90,7 @@ export default function SelectorAlumnos({
 
   function agregar(alumno) {
     if (ids.has(alumno.id) || lleno) return
-    onChange([...seleccionados, { id: alumno.id, nombre: alumno.nombre }])
+    onChange([...seleccionados, { id: alumno.id, nombre: nombreCompleto(alumno) }])
     setTexto('')
     setResultados([])
   }
@@ -132,7 +132,7 @@ export default function SelectorAlumnos({
             className="form__input"
             type="search"
             value={texto}
-            placeholder="Buscar alumno por nombre…"
+            placeholder="Buscar por nombre o apellido..."
             onChange={(event) => setTexto(event.target.value)}
           />
           {buscando ? <p className="aviso">Buscando…</p> : null}
@@ -141,7 +141,10 @@ export default function SelectorAlumnos({
               {error}
             </p>
           ) : null}
-          {texto.trim() && !buscando && visibles.length === 0 ? (
+          {texto.trim().length > 0 && texto.trim().length < 2 ? (
+            <p className="aviso">Escribe al menos 2 letras para buscar.</p>
+          ) : null}
+          {texto.trim().length >= 2 && !buscando && visibles.length === 0 ? (
             <p className="aviso">Sin resultados.</p>
           ) : null}
           {visibles.length ? (
@@ -149,7 +152,7 @@ export default function SelectorAlumnos({
               {visibles.map((alumno) => (
                 <li key={alumno.id}>
                   <button type="button" className="sugerencia" onClick={() => agregar(alumno)}>
-                    <span>{alumno.nombre}</span>
+                    <span>{nombreCompleto(alumno)}</span>
                     <span className="sugerencia__meta">
                       {alumno.tipo === 'menor' ? 'Menor' : 'Adulto'}
                     </span>

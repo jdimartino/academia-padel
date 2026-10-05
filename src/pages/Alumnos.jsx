@@ -3,12 +3,13 @@ import { useParams } from 'react-router-dom'
 import FichaAlumnoSheet from '../components/FichaAlumnoSheet'
 import PageChrome from '../components/PageChrome'
 import { db } from '../firebase/config'
-import { buscarAlumnos } from '../firebase/db'
+import { buscarAlumnos, nombreCompleto } from '../firebase/db'
 import { etiquetaCategoria } from '../lib/agenda'
 
 /*
- * Buscador de alumnos. NO carga la colección completa: cada tecleo consulta
- * `buscarAlumnos` (prefijo, activos, limit 10). El alta/edición va en el sheet.
+ * Buscador de alumnos. NO carga la colección completa: cada tecleo (con debounce
+ * de 300 ms) consulta `buscarAlumnos` (prefijo de nombre o apellido, activos,
+ * mínimo 2 letras, limit 10). El alta/edición va en el sheet.
  */
 export default function Alumnos() {
   const { academia } = useParams()
@@ -25,7 +26,7 @@ export default function Alumnos() {
     let activo = true
     const timer = setTimeout(() => {
       if (!activo) return
-      if (!query) {
+      if (query.length < 2) {
         setResultados([])
         setCargando(false)
         setError('')
@@ -45,7 +46,7 @@ export default function Alumnos() {
         .finally(() => {
           if (activo) setCargando(false)
         })
-    }, 250)
+    }, 300)
     return () => {
       activo = false
       clearTimeout(timer)
@@ -60,8 +61,8 @@ export default function Alumnos() {
             className="form__input"
             type="search"
             value={texto}
-            placeholder="Buscar alumno por nombre…"
-            aria-label="Buscar alumno"
+            placeholder="Buscar por nombre o apellido..."
+            aria-label="Buscar alumno por nombre o apellido"
             onChange={(event) => setTexto(event.target.value)}
           />
           <button type="button" className="btn-cta" onClick={() => setEditando({})}>
@@ -76,10 +77,10 @@ export default function Alumnos() {
         ) : null}
 
         {cargando ? <p className="aviso glass">Buscando…</p> : null}
-        {!cargando && !query ? (
-          <p className="aviso glass">Escribí un nombre para buscar.</p>
+        {!cargando && query.length < 2 ? (
+          <p className="aviso glass">Escribe al menos 2 letras para buscar.</p>
         ) : null}
-        {!cargando && query && resultados.length === 0 ? (
+        {!cargando && query.length >= 2 && resultados.length === 0 ? (
           <p className="aviso glass">Sin resultados.</p>
         ) : null}
 
@@ -92,7 +93,7 @@ export default function Alumnos() {
                   className="ficha-item glass"
                   onClick={() => setEditando({ alumno })}
                 >
-                  <span className="ficha-item__nombre">{alumno.nombre}</span>
+                  <span className="ficha-item__nombre">{nombreCompleto(alumno)}</span>
                   <span className="ficha-item__meta">
                     {alumno.tipo === 'menor' ? 'Menor' : 'Adulto'}
                     {alumno.nivel ? ` · ${etiquetaCategoria(alumno.nivel)}` : ''}

@@ -2,7 +2,7 @@
  * Pruebas de las Security Rules contra el emulador de Firestore.
  *
  * ACCESO POR AHORA: solo `administrador` opera. Profesor, alumno adulto, alumno
- * menor y tutor son FICHAS (records), no usuarios con acceso: todos sus casos
+ * menor y representante son FICHAS (records), no usuarios con acceso: todos sus casos
  * son DENY. La única lectura permitida a un no-admin es su propia membresía
  * (arranque de sesión + descubrimiento de tenants).
  *
@@ -41,13 +41,13 @@ const T2 = 't2'
 
 // Uidos de los usuarios de prueba. No se crean en Auth: `authenticatedContext`
 // alcanza para que las reglas vean request.auth.uid.
-// Profesor, alumno y tutor se conservan como usuarios NEGATIVOS: tienen su
+// Profesor, alumno y representante se conservan como usuarios NEGATIVOS: tienen su
 // membresía con su rol, pero ninguna concesión de acceso.
 const UID = {
   adminT1: 'uid-admin-t1',
   profT1: 'uid-prof-t1',
   alumnoT1: 'uid-alumno-t1',
-  tutorT1: 'uid-tutor-t1',
+  representanteT1: 'uid-representante-t1',
   inactivoT1: 'uid-inactivo-t1',
   dual: 'uid-dual',
   adminT2: 'uid-admin-t2',
@@ -143,10 +143,10 @@ before(async () => {
     await setDoc(doc(db, 'academias', T1, 'alumnos', 'a2'), {
       tipo: 'menor',
       nombre: 'Marta Menor',
-      email: 'tutor@ensayo.test',
-      tutor: {
-        nombre: 'Teresa Tutora',
-        email: 'tutor@ensayo.test',
+      email: 'representante@ensayo.test',
+      representante: {
+        nombre: 'Teresa Representante',
+        email: 'representante@ensayo.test',
         telefono: '+58 414 000 0003',
         parentesco: 'madre',
       },
@@ -168,7 +168,7 @@ before(async () => {
     await setDoc(doc(db, 'academias', T1, 'miembros', UID.adminT1), membresia(UID.adminT1, 'administrador'))
     await setDoc(doc(db, 'academias', T1, 'miembros', UID.profT1), membresia(UID.profT1, 'profesor'))
     await setDoc(doc(db, 'academias', T1, 'miembros', UID.alumnoT1), membresia(UID.alumnoT1, 'alumno_adulto'))
-    await setDoc(doc(db, 'academias', T1, 'miembros', UID.tutorT1), membresia(UID.tutorT1, 'alumno_menor'))
+    await setDoc(doc(db, 'academias', T1, 'miembros', UID.representanteT1), membresia(UID.representanteT1, 'alumno_menor'))
     await setDoc(doc(db, 'academias', T1, 'miembros', UID.inactivoT1), membresia(UID.inactivoT1, 'administrador', { activo: false }))
     // Pertenece a las dos academias: sirve para probar el descubrimiento.
     await setDoc(doc(db, 'academias', T1, 'miembros', UID.dual), membresia(UID.dual, 'administrador'))
@@ -224,8 +224,8 @@ describe('2. Admin permite, no-admin deniega al crear clases', () => {
     await assertFails(setDoc(doc(as(UID.alumnoT1), 'academias', T1, 'clases', 'nueva-alumno'), clase()))
   })
 
-  it('alumno_menor (tutor) de t1 CREA clase en t1 → DENY (rol alumno_menor, escritura)', async () => {
-    await assertFails(setDoc(doc(as(UID.tutorT1), 'academias', T1, 'clases', 'nueva-tutor'), clase()))
+  it('alumno_menor (representante) de t1 CREA clase en t1 → DENY (rol alumno_menor, escritura)', async () => {
+    await assertFails(setDoc(doc(as(UID.representanteT1), 'academias', T1, 'clases', 'nueva-representante'), clase()))
   })
 
   it('administrador de t2 CREA clase en t1 → DENY (otro tenant)', async () => {
@@ -278,7 +278,7 @@ describe('3. Profesor: sin acceso (ni lectura ni asistencia)', () => {
   })
 })
 
-describe('4. Alumno y tutor: fichas sin acceso', () => {
+describe('4. Alumno y representante: fichas sin acceso', () => {
   it('alumno_adulto de t1 LEE la ficha de un alumno → DENY (dato de contacto)', async () => {
     await assertFails(getDoc(doc(as(UID.alumnoT1), 'academias', T1, 'alumnos', 'a1')))
   })
@@ -307,12 +307,12 @@ describe('4. Alumno y tutor: fichas sin acceso', () => {
     await assertFails(getDoc(doc(as(UID.alumnoT1), 'academias', T2, 'alumnos', 'a1')))
   })
 
-  it('alumno_menor (tutor) de t1 LEE la ficha del menor a su cargo → DENY (dato de contacto)', async () => {
-    await assertFails(getDoc(doc(as(UID.tutorT1), 'academias', T1, 'alumnos', 'a2')))
+  it('alumno_menor (representante) de t1 LEE la ficha del menor a su cargo → DENY (dato de contacto)', async () => {
+    await assertFails(getDoc(doc(as(UID.representanteT1), 'academias', T1, 'alumnos', 'a2')))
   })
 
-  it('alumno_menor (tutor) de t1 LEE una clase de t1 → DENY (rol alumno_menor, lectura)', async () => {
-    await assertFails(getDoc(doc(as(UID.tutorT1), 'academias', T1, 'clases', 'c1')))
+  it('alumno_menor (representante) de t1 LEE una clase de t1 → DENY (rol alumno_menor, lectura)', async () => {
+    await assertFails(getDoc(doc(as(UID.representanteT1), 'academias', T1, 'clases', 'c1')))
   })
 })
 
@@ -335,8 +335,8 @@ describe('5. Descubrimiento: collectionGroup("miembros")', () => {
     assert.equal(snap.docs.length, 1)
   })
 
-  it('alumno_menor (tutor) LISTA sus propias membresías → ALLOW (única lectura de un no-admin)', async () => {
-    const q = query(collectionGroup(as(UID.tutorT1), 'miembros'), where('uid', '==', UID.tutorT1))
+  it('alumno_menor (representante) LISTA sus propias membresías → ALLOW (única lectura de un no-admin)', async () => {
+    const q = query(collectionGroup(as(UID.representanteT1), 'miembros'), where('uid', '==', UID.representanteT1))
     const snap = await assertSucceeds(getDocs(q))
     assert.equal(snap.docs.length, 1)
   })
