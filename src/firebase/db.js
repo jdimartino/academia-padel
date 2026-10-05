@@ -41,9 +41,6 @@ export const MINUTOS_BLOQUE = 30
 /** Categorías válidas de una clase. Ver docs/modelo-datos.md §4. */
 export { CATEGORIAS }
 
-/** Estados en los que la clase ya está cerrada y no admite más asistencia. */
-const ESTADOS_CERRADOS = ['pendiente_cobro', 'cobrada', 'cancelada']
-
 /** Cupo máximo de una clase según el modelo de datos (docs/modelo-datos.md §4). */
 export const CUPO_MAXIMO = 4
 
@@ -1096,9 +1093,12 @@ export async function asignarAlumnos(db, tenantId, claseId, alumnoIds, opciones 
  * por alumno asignado. La regla de negocio de la ausencia (recuperación o nota
  * de crédito) y la ventana de aviso están SIN DEFINIR: acá solo se registra.
  * Tampoco se generan cargos ni liquidación al profesor.
+ *
+ * `ahora` es el único reloj: se usa para el sello `registradoEn` y para validar
+ * que la clase ya terminó. Es inyectable para poder probarlo.
  */
 export async function registrarAsistencia(db, tenantId, claseId, asistencias, opciones = {}) {
-  const { uid = null, now = new Date(), ahora = new Date() } = opciones
+  const { uid = null, ahora = new Date() } = opciones
   if (!Array.isArray(asistencias)) {
     throw new ClaseInvalidaError('asistencias debe ser un arreglo')
   }
@@ -1114,7 +1114,7 @@ export async function registrarAsistencia(db, tenantId, claseId, asistencias, op
       estado: registro.estado,
       motivo: registro.motivo ?? null,
       registradoPor: uid,
-      registradoEn: Timestamp.fromDate(now),
+      registradoEn: Timestamp.fromDate(ahora),
     }
   })
   if (new Set(normalizadas.map((r) => r.alumnoId)).size !== normalizadas.length) {
@@ -1167,7 +1167,7 @@ export async function registrarAsistencia(db, tenantId, claseId, asistencias, op
       asistencias: normalizadas,
       estado: 'pendiente_cobro',
       actualizadoPor: uid,
-      actualizadoEn: Timestamp.fromDate(now),
+      actualizadoEn: Timestamp.fromDate(ahora),
     })
   })
 

@@ -122,7 +122,7 @@ async function sembrarBase(context) {
     busquedaApellido: 'menor marta',
     fechaIngreso: '2026-01-01',
     avisosActivos: true,
-    representante: { nombre: 'Teresa', apellidos: 'Tutora', email: null, telefono: null },
+    representante: { nombre: 'Teresa', apellidos: 'Representante', email: null, telefono: null },
     activo: true,
   })
   await db.doc(`academias/${T1}/alumnos/a3`).set({
@@ -596,7 +596,7 @@ describe('fichas', () => {
     nombre: 'Ángel',
     apellidos: 'Niño',
     tipo: 'menor',
-    representante: { nombre: 'Teresa', apellidos: 'Tutora' },
+    representante: { nombre: 'Teresa', apellidos: 'Representante' },
     ...extra,
   })
 
