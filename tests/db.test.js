@@ -735,6 +735,34 @@ describe('[A2] reprogramarClase: guardia de estado', () => {
       /reservada/,
     )
   })
+
+  it('reprogramar solo borra bloques propios', async () => {
+    const { claseId } = await reservar({
+      fecha: '2025-01-01',
+      horaInicio: '10:00',
+      horaFin: '11:00',
+    })
+    const claseOriginal = await getClase(adminDb, T1, claseId)
+    const bloqueRobadoId = claseOriginal.bloques[0]
+
+    // Mutar el bloque para dárselo a otra clase ("otra_clase")
+    const refBloque = doc(adminDb, 'academias', T1, 'bloques', bloqueRobadoId)
+    await setDoc(refBloque, { claseId: 'otra_clase', activo: true, id: bloqueRobadoId })
+
+    // Reprogramar suelta los bloques viejos
+    await reprogramarClase(
+      adminDb,
+      T1,
+      claseId,
+      { fecha: '2025-01-02', horaInicio: '15:00', horaFin: '16:00' },
+      { uid: ADMIN }
+    )
+
+    // El bloque viejo robado no debe ser borrado
+    const snapBloque = await getDoc(refBloque)
+    assert.equal(snapBloque.exists(), true)
+    assert.equal(snapBloque.data().claseId, 'otra_clase')
+  })
 })
 
 describe('[A3] registrarAsistencia: guardia de estado y hora', () => {

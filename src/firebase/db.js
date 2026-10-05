@@ -769,6 +769,9 @@ export async function reprogramarClase(db, tenantId, claseId, nuevoCambio = {}, 
     const snaps = await Promise.all(
       bloquesNuevos.map((b) => tx.get(refBloque(db, tenantId, b.id))),
     )
+    const snapsViejos = await Promise.all(
+      bloquesViejos.map((id) => tx.get(refBloque(db, tenantId, id)))
+    )
     const ocupado = bloquesNuevos.find(
       (b, i) => snaps[i].exists() && snaps[i].data().claseId !== claseId,
     )
@@ -794,8 +797,10 @@ export async function reprogramarClase(db, tenantId, claseId, nuevoCambio = {}, 
     }
 
     const idsNuevos = new Set(bloquesNuevos.map((b) => b.id))
-    for (const bloqueId of bloquesViejos) {
-      if (!idsNuevos.has(bloqueId)) tx.delete(refBloque(db, tenantId, bloqueId))
+    for (const [indice, bloqueId] of bloquesViejos.entries()) {
+      if (!idsNuevos.has(bloqueId) && snapsViejos[indice].exists() && snapsViejos[indice].data().claseId === claseId) {
+        tx.delete(refBloque(db, tenantId, bloqueId))
+      }
     }
     for (const [indice, bloque] of bloquesNuevos.entries()) {
       // Si ya existe y es de esta misma clase, no hace falta reescribirlo.
