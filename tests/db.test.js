@@ -744,8 +744,14 @@ describe('[A3] registrarAsistencia: guardia de estado y hora', () => {
     // La clase cancelada NO está en ESTADOS_CERRADOS, así el bug pasa el filtro actual.
     await assert.rejects(
       () => registrarAsistencia(adminDb, T1, claseId, [{ alumnoId: 'a1', estado: 'presente' }], { uid: ADMIN }),
-      /cancelada|reservada/,
+      (err) => {
+        assert.ok(err instanceof ClaseInvalidaError)
+        assert.match(err.message, /está cancelada y no se puede cerrar/)
+        return true
+      }
     )
+    const clase = await getClase(adminDb, T1, claseId)
+    assert.equal(clase.estado, 'cancelada')
   })
 
   it('no se puede cerrar clase que todavía no empezó (ahora < horaFin)', async () => {
@@ -773,7 +779,15 @@ describe('[A3] registrarAsistencia: guardia de estado y hora', () => {
 
 describe('[B1] cupo: validación de entero 1-4', () => {
   it('cupo 0 → DENY', async () => {
-    await assert.rejects(() => reservar({ cupo: 0 }), /cupo/)
+    // Para que no falle por asignar alumnos > cupo, no enviamos alumnos.
+    await assert.rejects(
+      () => reservar({ cupo: 0, alumnos: [] }),
+      (err) => {
+        assert.ok(err instanceof ClaseInvalidaError)
+        assert.match(err.message, /cupo debe estar entre 1 y/)
+        return true
+      }
+    )
   })
 
   it('cupo 5 → DENY (excede el máximo del modelo)', async () => {
@@ -781,7 +795,14 @@ describe('[B1] cupo: validación de entero 1-4', () => {
   })
 
   it('cupo string numérico → DENY', async () => {
-    await assert.rejects(() => reservar({ cupo: '2' }), /cupo/)
+    await assert.rejects(
+      () => reservar({ cupo: '2', alumnos: [] }),
+      (err) => {
+        assert.ok(err instanceof ClaseInvalidaError)
+        assert.match(err.message, /cupo debe ser un entero/)
+        return true
+      }
+    )
   })
 
   it('cupo 1.5 (no entero) → DENY', async () => {
