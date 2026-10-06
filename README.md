@@ -62,6 +62,16 @@ no tiene acceso a esta academia". Se conservan para probar los DENY.
 
 Emulator UI: http://127.0.0.1:4000
 
+### Atajo: todo en un comando (con datos persistentes)
+
+```bash
+npm run local              # emuladores + seed (si hace falta) + Vite
+npm run local -- --fresh   # borra .emulator-data, resiembra y arranca limpio
+```
+
+El primer arranque siembra solo. Los datos quedan en `.emulator-data/`: **cierra
+con Ctrl+C**, que es lo que los guarda antes de apagar todo.
+
 ### Atajo: sembrar sin dejar los emuladores levantados
 
 ```bash
