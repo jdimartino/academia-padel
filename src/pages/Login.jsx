@@ -1,7 +1,13 @@
 import { useState } from 'react'
 import { useLocation, useNavigate } from 'react-router-dom'
 import { useAuth } from '../context/AuthContext'
+import { useAvisos } from '../context/AvisosContext'
 
+/*
+ * Mensajes propios para los códigos de Auth conocidos: son errores esperados y
+ * su texto ya está escrito para el usuario, así que se muestran tal cual (sin
+ * referencia). Cualquier otro código cae al diálogo de error técnico.
+ */
 const MESSAGES = {
   'auth/invalid-credential': 'Correo o contraseña incorrectos.',
   'auth/invalid-email': 'El correo no es válido.',
@@ -13,22 +19,23 @@ const MESSAGES = {
 
 export default function Login() {
   const { login } = useAuth()
+  const { mostrarError, mostrarErrorTecnico } = useAvisos()
   const navigate = useNavigate()
   const location = useLocation()
   const [email, setEmail] = useState('')
   const [password, setPassword] = useState('')
-  const [error, setError] = useState('')
   const [submitting, setSubmitting] = useState(false)
 
   async function handleSubmit(event) {
     event.preventDefault()
-    setError('')
     setSubmitting(true)
     try {
       await login(email, password)
       navigate(location.state?.from ?? '/', { replace: true })
     } catch (err) {
-      setError(MESSAGES[err.code] ?? 'No se pudo iniciar sesión. Intenta de nuevo.')
+      const mensaje = MESSAGES[err?.code]
+      if (mensaje) mostrarError(mensaje)
+      else mostrarErrorTecnico('iniciar-sesion', err)
     } finally {
       setSubmitting(false)
     }
@@ -38,12 +45,6 @@ export default function Login() {
     <main className="page">
       <form className="form" onSubmit={handleSubmit} noValidate>
         <h1>Academia Pádel</h1>
-
-        {error ? (
-          <p className="alert alert--error" role="alert">
-            {error}
-          </p>
-        ) : null}
 
         <div className="form__field">
           <label className="form__label" htmlFor="email">

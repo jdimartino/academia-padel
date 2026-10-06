@@ -1,5 +1,6 @@
-import { useEffect, useMemo, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import { useAuth } from '../context/AuthContext'
+import { useAvisos } from '../context/AvisosContext'
 import { db } from '../firebase/config'
 import {
   crearClase,
@@ -16,7 +17,9 @@ import {
   formatHora12,
   opcionesDeInicio,
 } from '../lib/agenda'
+import { hayCambios } from '../lib/avisos'
 import { formatearFechaLarga } from '../lib/fechas'
+import useCierreSeguro from '../hooks/useCierreSeguro'
 import { CloseIcon } from './Icons'
 import SelectorAlumnos from './SelectorAlumnos'
 
@@ -64,8 +67,29 @@ export default function NuevaReserva({
     const nombres = clase?.alumnoNombres ?? []
     return ids.map((id, i) => ({ id, nombre: nombres[i] ?? id }))
   })
-  const [error, setError] = useState('')
+  // Error de la LECTURA de profesores: se queda en línea (no es una acción).
+  const [errorLectura, setErrorLectura] = useState('')
   const [enviando, setEnviando] = useState(false)
+  // Último profesor elegido a mano: el que llega por defecto con la lectura no
+  // cuenta como cambio del usuario.
+  const profesorElegido = useRef(null)
+  const { mostrarErrorTecnico, mostrarExito } = useAvisos()
+
+  /** Valores que definen los cambios sin guardar del formulario. */
+  function instantanea() {
+    return {
+      canchaId,
+      horaInicio,
+      duracion,
+      modalidad,
+      categoria,
+      profesorId,
+      alumnos: alumnosSel.map((alumno) => alumno.id),
+    }
+  }
+
+  // Foto de los valores iniciales, tomada al abrir el formulario.
+  const [inicial] = useState(instantanea)
 
   useEffect(() => {
     let activo = true
@@ -81,13 +105,12 @@ export default function NuevaReserva({
       .catch((err) => {
         if (!activo) return
         setProfesores([])
-        setError(err.message)
+        setErrorLectura(err.message)
       })
     return () => {
       activo = false
     }
   }, [tenantId, sede?.id])
-
   const inicio = aMinutos(horaInicio) ?? 0
   const fin = inicio + duracion
   const cupo = modalidad === 'Individual' ? 1 : 4
@@ -166,10 +189,23 @@ export default function NuevaReserva({
 
   const puedeEnviar = Boolean(canchaId && profesorId) && problemas.length === 0 && !enviando
 
+  /*
+   * Cambios sin guardar: la foto inicial (tomada al abrir) contra los valores
+   * actuales. El profesor por defecto que trae la lectura no es un cambio; el
+   * que elige el usuario sí.
+   */
+  const sucio = hayCambios(inicial, {
+    ...instantanea(),
+    profesorId: profesorElegido.current ?? inicial.profesorId,
+  })
+
+  // Escape (y el fondo, si lo hubiera) con cambios sin guardar pide confirmación.
+  useCierreSeguro({ sucio, onCerrar: onClose })
+
   async function enviar(event) {
     event.preventDefault()
     if (!puedeEnviar) return
-    setError('')
+    const accion = esEdicion ? 'reprogramar-clase' : 'reservar-clase'
     setEnviando(true)
     try {
       const datos = {
@@ -199,9 +235,10 @@ export default function NuevaReserva({
         const resultado = await crearClase(db, tenantId, datos, { uid: user?.uid ?? null })
         claseId = resultado.claseId
       }
+      mostrarExito(esEdicion ? 'Clase reprogramada' : 'Clase reservada')
       onCreated(claseId)
     } catch (err) {
-      setError(err.message)
+      mostrarErrorTecnico(accion, err)
     } finally {
       setEnviando(false)
     }
@@ -221,9 +258,9 @@ export default function NuevaReserva({
         </button>
       </header>
 
-      {error ? (
+      {errorLectura ? (
         <p className="alert alert--error" role="alert">
-          {error}
+          {errorLectura}
         </p>
       ) : null}
       {problemas.map((problema) => (
@@ -343,7 +380,10 @@ export default function NuevaReserva({
                   key={profe.id}
                   className={`chip-cancha${profe.id === profesorId ? ' is-sel' : ''}`}
                   aria-pressed={profe.id === profesorId}
-                  onClick={() => setProfesorId(profe.id)}
+                  onClick={() => {
+                    profesorElegido.current = profe.id
+                    setProfesorId(profe.id)
+                  }}
                 >
                   {nombreCompleto(profe)}
                 </button>

@@ -1,8 +1,11 @@
 import { useRef, useState } from 'react'
 import { useAuth } from '../context/AuthContext'
+import { useAvisos } from '../context/AvisosContext'
 import { db } from '../firebase/config'
-import { FichaInvalidaError, actualizarAlumno, crearAlumno } from '../firebase/db'
+import { actualizarAlumno, crearAlumno } from '../firebase/db'
+import useCierreSeguro from '../hooks/useCierreSeguro'
 import { CATEGORIAS, etiquetaCategoria } from '../lib/agenda'
+import { hayCambios } from '../lib/avisos'
 import { hoyISO } from '../lib/fechas'
 import { CloseIcon } from './Icons'
 
@@ -111,11 +114,16 @@ function validar(form) {
  */
 export default function FichaAlumnoSheet({ tenantId, alumno = null, onClose, onSaved }) {
   const { user } = useAuth()
+  const { mostrarErrorTecnico, mostrarExito } = useAvisos()
   const [form, setForm] = useState(() => formDeAlumno(alumno))
+  // Foto de los valores iniciales: base para detectar cambios sin guardar.
+  const [inicial] = useState(() => formDeAlumno(alumno))
   const [errores, setErrores] = useState({})
-  const [error, setError] = useState('')
   const [enviando, setEnviando] = useState(false)
   const campos = useRef({})
+
+  // Escape con cambios sin guardar: pregunta antes de cerrar.
+  useCierreSeguro({ sucio: hayCambios(inicial, form), onCerrar: onClose })
 
   const set = (campo, valor) => {
     setForm((prev) => ({ ...prev, [campo]: valor }))
@@ -139,7 +147,6 @@ export default function FichaAlumnoSheet({ tenantId, alumno = null, onClose, onS
 
   async function enviar(event) {
     event.preventDefault()
-    setError('')
     const erroresNuevos = validar(form)
     setErrores(erroresNuevos)
     if (Object.keys(erroresNuevos).length > 0) {
@@ -184,16 +191,14 @@ export default function FichaAlumnoSheet({ tenantId, alumno = null, onClose, onS
       const opciones = { uid: user?.uid ?? null }
       if (alumno) {
         await actualizarAlumno(db, tenantId, alumno.id, datos, opciones)
+        mostrarExito('Alumno guardado')
       } else {
         await crearAlumno(db, tenantId, datos, opciones)
+        mostrarExito('Alumno creado')
       }
       onSaved?.()
     } catch (err) {
-      setError(
-        err instanceof FichaInvalidaError
-          ? err.message
-          : 'No se pudo guardar la ficha. Intenta de nuevo.',
-      )
+      mostrarErrorTecnico('guardar-alumno', err)
     } finally {
       setEnviando(false)
     }
@@ -226,12 +231,6 @@ export default function FichaAlumnoSheet({ tenantId, alumno = null, onClose, onS
           <CloseIcon />
         </button>
       </header>
-
-      {error ? (
-        <p className="alert alert--error" role="alert">
-          {error}
-        </p>
-      ) : null}
 
       <form className="form" onSubmit={enviar} noValidate>
         <div className="form__field">

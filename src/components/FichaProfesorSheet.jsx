@@ -1,7 +1,10 @@
 import { useEffect, useRef, useState } from 'react'
 import { useAuth } from '../context/AuthContext'
+import { useAvisos } from '../context/AvisosContext'
 import { db } from '../firebase/config'
-import { FichaInvalidaError, actualizarProfesor, crearProfesor, getSedes } from '../firebase/db'
+import { actualizarProfesor, crearProfesor, getSedes } from '../firebase/db'
+import useCierreSeguro from '../hooks/useCierreSeguro'
+import { hayCambios } from '../lib/avisos'
 import { CloseIcon } from './Icons'
 
 const DOCUMENTOS = [
@@ -72,12 +75,17 @@ function validar(form) {
  */
 export default function FichaProfesorSheet({ tenantId, profesor = null, onClose, onSaved }) {
   const { user } = useAuth()
+  const { mostrarErrorTecnico, mostrarExito } = useAvisos()
   const [form, setForm] = useState(() => formDeProfesor(profesor))
+  // Foto de los valores iniciales: base para detectar cambios sin guardar.
+  const [inicial] = useState(() => formDeProfesor(profesor))
   const [sedes, setSedes] = useState([])
   const [errores, setErrores] = useState({})
-  const [error, setError] = useState('')
   const [enviando, setEnviando] = useState(false)
   const campos = useRef({})
+
+  // Escape con cambios sin guardar: pregunta antes de cerrar.
+  useCierreSeguro({ sucio: hayCambios(inicial, form), onCerrar: onClose })
 
   useEffect(() => {
     let activo = true
@@ -120,7 +128,6 @@ export default function FichaProfesorSheet({ tenantId, profesor = null, onClose,
 
   async function enviar(event) {
     event.preventDefault()
-    setError('')
     const erroresNuevos = validar(form)
     setErrores(erroresNuevos)
     if (Object.keys(erroresNuevos).length > 0) {
@@ -147,16 +154,14 @@ export default function FichaProfesorSheet({ tenantId, profesor = null, onClose,
       const opciones = { uid: user?.uid ?? null }
       if (profesor) {
         await actualizarProfesor(db, tenantId, profesor.id, datos, opciones)
+        mostrarExito('Profesor guardado')
       } else {
         await crearProfesor(db, tenantId, datos, opciones)
+        mostrarExito('Profesor creado')
       }
       onSaved?.()
     } catch (err) {
-      setError(
-        err instanceof FichaInvalidaError
-          ? err.message
-          : 'No se pudo guardar la ficha. Intenta de nuevo.',
-      )
+      mostrarErrorTecnico('guardar-profesor', err)
     } finally {
       setEnviando(false)
     }
@@ -189,12 +194,6 @@ export default function FichaProfesorSheet({ tenantId, profesor = null, onClose,
           <CloseIcon />
         </button>
       </header>
-
-      {error ? (
-        <p className="alert alert--error" role="alert">
-          {error}
-        </p>
-      ) : null}
 
       <form className="form" onSubmit={enviar} noValidate>
         <div className="form__field">

@@ -1,11 +1,16 @@
 import AppNav from './AppNav'
+import useCierreSeguro from '../hooks/useCierreSeguro'
 import { CloseIcon } from './Icons'
 
 /*
  * Menú de navegación para mobile: bottom sheet de vidrio con los mismos links
- * del sidebar. Se cierra al tocar el fondo o un link. Sin window.confirm/alert.
+ * del sidebar. Se cierra al tocar el fondo, con Escape o un link. No hay datos
+ * que perder, así que el cierre seguro es directo (sin confirmación).
+ * Sin window.confirm/alert.
  */
 export default function MenuMovil({ onClose }) {
+  useCierreSeguro({ sucio: false, onCerrar: onClose })
+
   return (
     <div className="menu-overlay" role="presentation" onClick={onClose}>
       <nav

@@ -1,6 +1,7 @@
 import { BrowserRouter, Route, Routes } from 'react-router-dom'
 import ProtectedRoute from './components/ProtectedRoute'
 import { AuthProvider } from './context/AuthContext'
+import { AvisosProvider } from './context/AvisosContext'
 import Agenda from './pages/Agenda'
 import Alumnos from './pages/Alumnos'
 import Configuracion from './pages/Configuracion'
@@ -12,49 +13,51 @@ export default function App() {
   return (
     <BrowserRouter>
       <AuthProvider>
-        <Routes>
-          <Route path="/login" element={<Login />} />
-          <Route
-            path="/:academia/agenda"
-            element={
-              <ProtectedRoute>
-                <Agenda />
-              </ProtectedRoute>
-            }
-          />
-          <Route
-            path="/:academia/alumnos"
-            element={
-              <ProtectedRoute>
-                <Alumnos />
-              </ProtectedRoute>
-            }
-          />
-          <Route
-            path="/:academia/profesores"
-            element={
-              <ProtectedRoute>
-                <Profesores />
-              </ProtectedRoute>
-            }
-          />
-          <Route
-            path="/:academia/configuracion"
-            element={
-              <ProtectedRoute>
-                <Configuracion />
-              </ProtectedRoute>
-            }
-          />
-          <Route
-            path="/"
-            element={
-              <ProtectedRoute>
-                <Home />
-              </ProtectedRoute>
-            }
-          />
-        </Routes>
+        <AvisosProvider>
+          <Routes>
+            <Route path="/login" element={<Login />} />
+            <Route
+              path="/:academia/agenda"
+              element={
+                <ProtectedRoute>
+                  <Agenda />
+                </ProtectedRoute>
+              }
+            />
+            <Route
+              path="/:academia/alumnos"
+              element={
+                <ProtectedRoute>
+                  <Alumnos />
+                </ProtectedRoute>
+              }
+            />
+            <Route
+              path="/:academia/profesores"
+              element={
+                <ProtectedRoute>
+                  <Profesores />
+                </ProtectedRoute>
+              }
+            />
+            <Route
+              path="/:academia/configuracion"
+              element={
+                <ProtectedRoute>
+                  <Configuracion />
+                </ProtectedRoute>
+              }
+            />
+            <Route
+              path="/"
+              element={
+                <ProtectedRoute>
+                  <Home />
+                </ProtectedRoute>
+              }
+            />
+          </Routes>
+        </AvisosProvider>
       </AuthProvider>
     </BrowserRouter>
   )

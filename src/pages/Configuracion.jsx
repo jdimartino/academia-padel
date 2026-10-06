@@ -2,6 +2,7 @@ import { useEffect, useState } from 'react'
 import { useParams } from 'react-router-dom'
 import PageChrome from '../components/PageChrome'
 import { useAuth } from '../context/AuthContext'
+import { useAvisos } from '../context/AvisosContext'
 import { db } from '../firebase/config'
 import {
   cambiarActivaCancha,
@@ -10,6 +11,7 @@ import {
   horarioDeSede,
   listarCanchas,
   nombreDeCancha,
+  normalizarNombreCancha,
   renombrarCancha,
   setSedeHorario,
 } from '../firebase/db'
@@ -27,31 +29,35 @@ const etiquetaHora = (hora) =>
 
 /*
  * Configuración de una sede: su horario (apertura y cierre en horas enteras) y
- * sus canchas (agregar, renombrar y activar/desactivar; nunca se borran). Los
- * errores van en rojo arriba del formulario, igual que en la reserva.
+ * sus canchas (agregar, renombrar y activar/desactivar; nunca se borran).
+ * Cada escritura avisa por diálogo si falla y por toast si sale bien.
  */
 function SedeCard({ tenantId, sede, canchas, onChanged }) {
   const { user } = useAuth()
+  const { mostrarErrorTecnico, mostrarExito } = useAvisos()
   const uid = user?.uid ?? null
   const horario = horarioDeSede(sede)
   const [apertura, setApertura] = useState(horario.apertura)
   const [cierre, setCierre] = useState(horario.cierre)
   const [nuevoNombre, setNuevoNombre] = useState('')
   const [renombres, setRenombres] = useState({})
-  const [error, setError] = useState('')
   const [enviando, setEnviando] = useState(false)
 
-  /** Corre una escritura de la sede y recarga; devuelve si salió bien. */
-  async function ejecutar(accion) {
-    setError('')
+  /**
+   * Corre una escritura de la sede y recarga. `accion` es la clave del aviso,
+   * `exito` el mensaje del toast (texto o función del resultado). Devuelve el
+   * resultado de la escritura, o null si falló.
+   */
+  async function ejecutar(accion, tarea, exito) {
     setEnviando(true)
     try {
-      await accion()
+      const resultado = await tarea()
+      mostrarExito(typeof exito === 'function' ? exito(resultado) : exito)
       onChanged()
-      return true
+      return resultado
     } catch (err) {
-      setError(err.message)
-      return false
+      mostrarErrorTecnico(accion, err)
+      return null
     } finally {
       setEnviando(false)
     }
@@ -59,31 +65,38 @@ function SedeCard({ tenantId, sede, canchas, onChanged }) {
 
   function guardarHorario(event) {
     event.preventDefault()
-    ejecutar(() =>
-      setSedeHorario(
-        db,
-        tenantId,
-        sede.id,
-        { apertura: Number(apertura), cierre: Number(cierre) },
-        { uid },
-      ),
+    ejecutar(
+      'guardar-horario',
+      () =>
+        setSedeHorario(
+          db,
+          tenantId,
+          sede.id,
+          { apertura: Number(apertura), cierre: Number(cierre) },
+          { uid },
+        ),
+      `Horario de ${sede.nombre} guardado`,
     )
   }
 
   async function agregarCancha(event) {
     event.preventDefault()
-    const ok = await ejecutar(() =>
-      crearCancha(db, tenantId, sede.id, { nombre: nuevoNombre }, { uid }),
+    const ok = await ejecutar(
+      'crear-cancha',
+      () => crearCancha(db, tenantId, sede.id, { nombre: nuevoNombre }, { uid }),
+      `${normalizarNombreCancha(nuevoNombre)} agregada`,
     )
     if (ok) setNuevoNombre('')
   }
 
   async function guardarNombre(cancha) {
     const valor = renombres[cancha.id] ?? nombreDeCancha(cancha, cancha.id)
-    const ok = await ejecutar(() =>
-      renombrarCancha(db, tenantId, sede.id, cancha.id, valor, { uid }),
+    const resultado = await ejecutar(
+      'renombrar-cancha',
+      () => renombrarCancha(db, tenantId, sede.id, cancha.id, valor, { uid }),
+      (guardado) => `Nombre guardado: ${guardado.nombre}`,
     )
-    if (ok) {
+    if (resultado) {
       setRenombres((prev) => {
         const siguiente = { ...prev }
         delete siguiente[cancha.id]
@@ -93,20 +106,18 @@ function SedeCard({ tenantId, sede, canchas, onChanged }) {
   }
 
   function alternarCancha(cancha) {
-    ejecutar(() =>
-      cambiarActivaCancha(db, tenantId, sede.id, cancha.id, cancha.activa === false, { uid }),
+    const nombre = nombreDeCancha(cancha, cancha.id)
+    const activar = cancha.activa === false
+    ejecutar(
+      activar ? 'activar-cancha' : 'desactivar-cancha',
+      () => cambiarActivaCancha(db, tenantId, sede.id, cancha.id, activar, { uid }),
+      `${nombre} ${activar ? 'activada' : 'desactivada'}`,
     )
   }
 
   return (
     <section className="representante-box" aria-label={`Sede ${sede.nombre}`}>
       <h2 className="form__label">{sede.nombre}</h2>
-
-      {error ? (
-        <p className="alert alert--error" role="alert">
-          {error}
-        </p>
-      ) : null}
 
       <form className="fichas__barra" onSubmit={guardarHorario}>
         <div className="form__field">
