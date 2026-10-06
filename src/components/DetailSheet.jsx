@@ -3,7 +3,7 @@ import { useAuth } from '../context/AuthContext'
 import { db } from '../firebase/config'
 import { asignarAlumnos, cancelarClase, registrarAsistencia } from '../firebase/db'
 import { CloseIcon } from './Icons'
-import { estadoDe, tituloClase } from '../lib/agenda'
+import { estadoDe, formatHora12, tituloClase } from '../lib/agenda'
 import { formatearFechaLarga } from '../lib/fechas'
 import SelectorAlumnos from './SelectorAlumnos'
 
@@ -145,7 +145,7 @@ export default function DetailSheet({
         <div className="sheet__fila">
           <dt>Horario</dt>
           <dd>
-            {clase.horaInicio} - {clase.horaFin}
+            {formatHora12(clase.horaInicio)} - {formatHora12(clase.horaFin)}
           </dd>
         </div>
         <div className="sheet__fila">

@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useState } from 'react'
 import { db } from '../firebase/config'
 import { buscarAlumnos, nombreCompleto } from '../firebase/db'
-import { aMinutos } from '../lib/agenda'
+import { aMinutos, formatHora12 } from '../lib/agenda'
 
 /** ¿Dos rangos "HH:mm" se solapan? Puro. */
 function solapanRango(ahoraInicio, ahoraFin, otraInicio, otraFin) {
@@ -81,7 +81,7 @@ export default function SelectorAlumnos({
       )
       if (choque) {
         lista.push(
-          `${alumno.nombre} ya tiene una clase de ${choque.horaInicio} a ${choque.horaFin}.`,
+          `${alumno.nombre} ya tiene una clase de ${formatHora12(choque.horaInicio)} a ${formatHora12(choque.horaFin)}.`,
         )
       }
     }

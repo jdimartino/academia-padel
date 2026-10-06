@@ -18,13 +18,16 @@ import {
   SolapamientoError,
   ClaseInvalidaError,
   FichaInvalidaError,
+  SedeInvalidaError,
   actualizarAlumno,
   actualizarProfesor,
   asignarAlumnos,
   bloquesDeClase,
   buscarAlumnos,
+  cambiarActivaCancha,
   cancelarClase,
   crearAlumno,
+  crearCancha,
   crearClase,
   crearProfesor,
   fechaHoyLocal,
@@ -33,11 +36,17 @@ import {
   getClase,
   getClasesDeSedePorFecha,
   getProfesores,
+  getSede,
   getSedes,
+  horarioDeSede,
   listarAlumnos,
+  listarCanchas,
   nombreCompleto,
+  nombreDeCancha,
   registrarAsistencia,
+  renombrarCancha,
   reprogramarClase,
+  setSedeHorario,
 } from '../src/firebase/db.js'
 
 const PROJECT_ID = 'academia-padel-jdm'
@@ -334,7 +343,11 @@ describe('crearClase', () => {
   })
 
   it('inicio antes de las 07:00 → DENY', async () => {
-    await assert.rejects(() => reservar({ horaInicio: '06:00', horaFin: '07:00' }), /07:00|franja/i)
+    // El mensaje muestra la hora en 12 h ("7:00 AM"), aunque el dato sea 24 h.
+    await assert.rejects(
+      () => reservar({ horaInicio: '06:00', horaFin: '07:00' }),
+      /7:00 AM|empezar antes/i,
+    )
   })
 
   it('inicio en una hora del pasado (mismo día) → DENY', async () => {
@@ -1613,5 +1626,674 @@ describe('[B4] getSedes y getProfesores: filtro activo en la query', () => {
   it('getProfesores ordena por apellidos y después nombre', async () => {
     const nombres = (await getProfesores(adminDb, T1)).map((p) => nombreCompleto(p))
     assert.deepEqual(nombres, ['Pedro Pérez', 'Pablo Profesor', 'Sofía Solo Boleita'])
+  })
+})
+
+/* --------------------------------------------------------------------- */
+/* [A3] Configuración por sede: canchas y horario                         */
+/* --------------------------------------------------------------------- */
+
+describe('[A3] canchas: crear, renombrar y unicidad', () => {
+  it('crearCancha recorta el nombre, la numera y nace activa', async () => {
+    const { canchaId } = await crearCancha(adminDb, T1, 'traki', { nombre: '  Cancha 3  ' }, { uid: ADMIN })
+    const nueva = (await listarCanchas(adminDb, T1, 'traki')).find((c) => c.id === canchaId)
+    assert.equal(nombreDeCancha(nueva, nueva.id), 'Cancha 3')
+    assert.equal(nueva.activa, true)
+    assert.ok(Number.isInteger(nueva.numero) && nueva.numero >= 1)
+  })
+
+  it('crearCancha con nombre vacío o solo espacios → SedeInvalidaError', async () => {
+    await assert.rejects(
+      () => crearCancha(adminDb, T1, 'traki', { nombre: '   ' }, { uid: ADMIN }),
+      (error) => error instanceof SedeInvalidaError && /nombre/.test(error.message),
+    )
+  })
+
+  it('crearCancha con un nombre ya usado (otra caja/espacios) → SedeInvalidaError', async () => {
+    await assert.rejects(
+      () => crearCancha(adminDb, T1, 'traki', { nombre: '  cancha 1 ' }, { uid: ADMIN }),
+      (error) => error instanceof SedeInvalidaError && /Ya hay/.test(error.message),
+    )
+    assert.equal((await listarCanchas(adminDb, T1, 'traki')).length, 2)
+  })
+
+  it('renombrarCancha normaliza y acepta el propio nombre con otra caja', async () => {
+    await renombrarCancha(adminDb, T1, 'traki', 'c1', '  Central  ', { uid: ADMIN })
+    const canchas = await listarCanchas(adminDb, T1, 'traki')
+    assert.equal(nombreDeCancha(canchas.find((c) => c.id === 'c1')), 'Central')
+    // El mismo nombre de la propia cancha no es conflicto y queda normalizado.
+    await renombrarCancha(adminDb, T1, 'traki', 'c1', 'CENTRAL', { uid: ADMIN })
+    const guardada = (await listarCanchas(adminDb, T1, 'traki')).find((c) => c.id === 'c1')
+    assert.equal(guardada.nombre, 'Central')
+  })
+
+  it('renombrarCancha con el nombre de OTRA cancha → SedeInvalidaError', async () => {
+    await assert.rejects(
+      () => renombrarCancha(adminDb, T1, 'traki', 'c1', 'Cancha 2', { uid: ADMIN }),
+      SedeInvalidaError,
+    )
+  })
+
+  it('renombrarCancha inexistente → SedeInvalidaError', async () => {
+    await assert.rejects(
+      () => renombrarCancha(adminDb, T1, 'traki', 'no-existe', 'Otra', { uid: ADMIN }),
+      SedeInvalidaError,
+    )
+  })
+})
+
+/*
+ * [B1] Reproducción de la falla de QA: "Cancha 5" y después "cancha 5" se
+ * aceptaban. La unicidad del nombre debe ignorar caja, espacios de más y
+ * acentos, y las canchas inactivas también cuentan.
+ */
+describe('[B1] canchas: nombre duplicado (caja, espacios y acentos)', () => {
+  const MENSAJE_DUPLICADO = (error) =>
+    error instanceof SedeInvalidaError && /Ya hay una cancha llamada/.test(error.message)
+
+  beforeEach(async () => {
+    await crearCancha(adminDb, T1, 'traki', { nombre: 'Cancha 5' }, { uid: ADMIN })
+    const { canchaId } = await crearCancha(
+      adminDb,
+      T1,
+      'traki',
+      { nombre: 'Panorámica' },
+      { uid: ADMIN },
+    )
+    await cambiarActivaCancha(adminDb, T1, 'traki', canchaId, false, { uid: ADMIN })
+  })
+
+  it('crearCancha con el MISMO nombre en otra caja → SedeInvalidaError (reproduce QA)', async () => {
+    await assert.rejects(
+      () => crearCancha(adminDb, T1, 'traki', { nombre: 'cancha 5' }, { uid: ADMIN }),
+      SedeInvalidaError,
+    )
+    // La cancha nueva NO se creó: siguen 4 (c1, c2, Cancha 5, Panorámica).
+    assert.equal((await listarCanchas(adminDb, T1, 'traki')).length, 4)
+  })
+
+  it('crearCancha ignorando espacios de más al inicio, al final y en medio → DENY', async () => {
+    await assert.rejects(
+      () => crearCancha(adminDb, T1, 'traki', { nombre: '  cancha   5  ' }, { uid: ADMIN }),
+      SedeInvalidaError,
+    )
+  })
+
+  it('crearCancha ignorando acentos y caja ("panoramica" vs "Panorámica") → DENY', async () => {
+    await assert.rejects(
+      () => crearCancha(adminDb, T1, 'traki', { nombre: 'panoramica' }, { uid: ADMIN }),
+      MENSAJE_DUPLICADO,
+    )
+  })
+
+  it('una cancha INACTIVA también cuenta para el duplicado', async () => {
+    // "Panorámica" quedó inactiva en el beforeEach.
+    await assert.rejects(
+      () => crearCancha(adminDb, T1, 'traki', { nombre: 'PANORAMICA' }, { uid: ADMIN }),
+      SedeInvalidaError,
+    )
+  })
+
+  it('renombrarCancha aplica la misma regla (caja, espacios y acentos) → DENY', async () => {
+    const { canchaId } = await crearCancha(adminDb, T1, 'traki', { nombre: 'Auxiliar' }, { uid: ADMIN })
+    await assert.rejects(
+      () => renombrarCancha(adminDb, T1, 'traki', canchaId, '  CAncha   5 ', { uid: ADMIN }),
+      SedeInvalidaError,
+    )
+    await assert.rejects(
+      () => renombrarCancha(adminDb, T1, 'traki', canchaId, 'PANORAMICA', { uid: ADMIN }),
+      SedeInvalidaError,
+    )
+    // El documento quedó intacto.
+    const sinCambios = (await listarCanchas(adminDb, T1, 'traki')).find((c) => c.id === canchaId)
+    assert.equal(sinCambios.nombre, 'Auxiliar')
+  })
+
+  it('renombrarCancha al PROPIO nombre con otra caja, espacios o acentos → ALLOW', async () => {
+    // Se renombra "Panorámica" (inactiva) a "  PANORAMICA  ": es su propio
+    // nombre, así que se acepta y se guarda normalizado. El acento no se
+    // agrega: la normalización nunca toca los acentos.
+    const propia = (await listarCanchas(adminDb, T1, 'traki')).find((c) => c.nombre === 'Panorámica')
+    await renombrarCancha(adminDb, T1, 'traki', propia.id, '  PANORAMICA  ', { uid: ADMIN })
+    const guardada = (await listarCanchas(adminDb, T1, 'traki')).find((c) => c.id === propia.id)
+    assert.equal(guardada.nombre, 'Panoramica')
+  })
+
+  it('renombrarCancha al propio nombre con espacios de más en medio → ALLOW', async () => {
+    const { canchaId } = await crearCancha(adminDb, T1, 'traki', { nombre: 'Cancha 9' }, { uid: ADMIN })
+    await renombrarCancha(adminDb, T1, 'traki', canchaId, 'Cancha   9', { uid: ADMIN })
+    const guardada = (await listarCanchas(adminDb, T1, 'traki')).find((c) => c.id === canchaId)
+    assert.equal(guardada.nombre, 'Cancha 9')
+  })
+})
+
+/*
+ * [B1] Nombre normalizado automáticamente: se guarda con espacios colapsados,
+ * letras separadas de los dígitos y caja arreglada. El duplicado se chequea
+ * DESPUÉS de normalizar, contra TODAS las canchas de la sede (activas e
+ * inactivas), comparando sin acentos.
+ */
+describe('[B1] canchas: nombre normalizado al crear y renombrar', () => {
+  const MENSAJE_DUPLICADO = (nombreExistente) => (error) =>
+    error instanceof SedeInvalidaError &&
+    error.message === `Ya hay una cancha llamada "${nombreExistente}"`
+
+  it('"cancha 6" sobre "Cancha 6" existente → DENY con el mensaje nuevo', async () => {
+    await crearCancha(adminDb, T1, 'traki', { nombre: 'Cancha 6' }, { uid: ADMIN })
+    await assert.rejects(
+      () => crearCancha(adminDb, T1, 'traki', { nombre: 'cancha 6' }, { uid: ADMIN }),
+      MENSAJE_DUPLICADO('Cancha 6'),
+    )
+    // La cancha nueva NO se creó: siguen 3 (c1, c2, Cancha 6).
+    assert.equal((await listarCanchas(adminDb, T1, 'traki')).length, 3)
+  })
+
+  it('"CANCHA6" sobre "Cancha 6" existente (letras pegadas a dígitos) → DENY', async () => {
+    await crearCancha(adminDb, T1, 'traki', { nombre: 'Cancha 6' }, { uid: ADMIN })
+    await assert.rejects(
+      () => crearCancha(adminDb, T1, 'traki', { nombre: 'CANCHA6' }, { uid: ADMIN }),
+      MENSAJE_DUPLICADO('Cancha 6'),
+    )
+  })
+
+  it('el nombre GUARDADO es el normalizado ("CANCHA6" → "Cancha 6")', async () => {
+    const { canchaId } = await crearCancha(adminDb, T1, 'traki', { nombre: 'CANCHA6' }, { uid: ADMIN })
+    const nueva = (await listarCanchas(adminDb, T1, 'traki')).find((c) => c.id === canchaId)
+    assert.equal(nueva.nombre, 'Cancha 6')
+  })
+
+  it('renombrarCancha al propio nombre en otra caja/espacios → ALLOW y normalizado', async () => {
+    const { canchaId } = await crearCancha(adminDb, T1, 'traki', { nombre: 'CANCHA6' }, { uid: ADMIN })
+    await renombrarCancha(adminDb, T1, 'traki', canchaId, '  cancha   6 ', { uid: ADMIN })
+    const guardada = (await listarCanchas(adminDb, T1, 'traki')).find((c) => c.id === canchaId)
+    assert.equal(guardada.nombre, 'Cancha 6')
+  })
+
+  it('renombrarCancha al nombre de OTRA cancha → DENY con el nombre existente', async () => {
+    await crearCancha(adminDb, T1, 'traki', { nombre: 'CANCHA6' }, { uid: ADMIN })
+    await assert.rejects(
+      () => renombrarCancha(adminDb, T1, 'traki', 'c1', 'cancha6', { uid: ADMIN }),
+      MENSAJE_DUPLICADO('Cancha 6'),
+    )
+    assert.equal(nombreDeCancha((await listarCanchas(adminDb, T1, 'traki')).find((c) => c.id === 'c1')), 'Cancha 1')
+  })
+
+  it('una cancha INACTIVA también bloquea el nombre nuevo', async () => {
+    const { canchaId } = await crearCancha(adminDb, T1, 'traki', { nombre: 'Panorámica' }, { uid: ADMIN })
+    await cambiarActivaCancha(adminDb, T1, 'traki', canchaId, false, { uid: ADMIN })
+    await assert.rejects(
+      () => crearCancha(adminDb, T1, 'traki', { nombre: 'PANORAMICA' }, { uid: ADMIN }),
+      MENSAJE_DUPLICADO('Panorámica'),
+    )
+    await assert.rejects(
+      () => renombrarCancha(adminDb, T1, 'traki', 'c1', 'panoramica', { uid: ADMIN }),
+      MENSAJE_DUPLICADO('Panorámica'),
+    )
+  })
+
+  it('"Panoramica" vs "Panorámica" (acentos) → DENY', async () => {
+    await crearCancha(adminDb, T1, 'traki', { nombre: 'Panorámica' }, { uid: ADMIN })
+    await assert.rejects(
+      () => crearCancha(adminDb, T1, 'traki', { nombre: 'Panoramica' }, { uid: ADMIN }),
+      MENSAJE_DUPLICADO('Panorámica'),
+    )
+    // El nombre guardado conserva el acento original: no se agrega ni se quita.
+    const guardada = (await listarCanchas(adminDb, T1, 'traki')).find((c) => c.nombre === 'Panorámica')
+    assert.ok(guardada)
+  })
+})
+
+/*
+ * [B1] Regresión del bug reportado a mano: "CANCHA6" se veía guardado como
+ * "Cancha6". La regla "letra + dígito → un espacio" tiene que aplicarse SIEMPRE,
+ * sea cual sea la caja del texto, y tanto al crear como al renombrar. Estos
+ * casos pasan por las funciones REALES (crearCancha / renombrarCancha) y leen el
+ * nombre ya escrito en Firestore.
+ */
+describe('[B1] canchas: letra pegada a dígito en cualquier caja (regresión)', () => {
+  const CASOS = [
+    ['CANCHA6', 'Cancha 6'],
+    ['cancha6', 'Cancha 6'],
+    ['Cancha6', 'Cancha 6'],
+    ['CANCHA6A', 'Cancha 6A'],
+    ['Cancha6A', 'Cancha 6A'],
+    ['Cancha 6A', 'Cancha 6A'],
+    ['6cancha', '6cancha'],
+    ['Central Sur', 'Central Sur'],
+  ]
+
+  /** Nombre tal como quedó guardado después de crear la cancha. */
+  async function crearYLeer(nombre) {
+    const { canchaId } = await crearCancha(adminDb, T1, 'traki', { nombre }, { uid: ADMIN })
+    const guardada = (await listarCanchas(adminDb, T1, 'traki')).find((c) => c.id === canchaId)
+    return guardada.nombre
+  }
+
+  /** Nombre tal como quedó guardado después de renombrar la cancha. */
+  async function renombrarYLeer(canchaId, nombre) {
+    const { nombre: devuelto } = await renombrarCancha(adminDb, T1, 'traki', canchaId, nombre, {
+      uid: ADMIN,
+    })
+    const guardada = (await listarCanchas(adminDb, T1, 'traki')).find((c) => c.id === canchaId)
+    assert.equal(devuelto, guardada.nombre, 'lo devuelto y lo guardado deben coincidir')
+    return guardada.nombre
+  }
+
+  for (const [entrada, esperado] of CASOS) {
+    it(`crearCancha "${entrada}" → guarda "${esperado}"`, async () => {
+      assert.equal(await crearYLeer(entrada), esperado)
+    })
+  }
+
+  it('renombrarCancha aplica la MISMA regla a las mismas entradas', async () => {
+    const { canchaId } = await crearCancha(adminDb, T1, 'traki', { nombre: 'Auxiliar' }, { uid: ADMIN })
+    for (const [entrada, esperado] of CASOS) {
+      assert.equal(await renombrarYLeer(canchaId, entrada), esperado, `entrada: ${entrada}`)
+    }
+  })
+
+  it('un carácter INVISIBLE entre letra y dígito no deja el nombre pegado ("Cancha6")', async () => {
+    // ZWSP, ZWNJ, ZWJ, word joiner y soft hyphen: al pegar el nombre desde otro
+    // lado se cuelan y el nombre quedaba "Cancha6" sin el espacio de la regla 2.
+    const invisibles = ['\u200b', '\u200c', '\u200d', '\u2060', '\u00ad']
+    for (const [i, invisible] of invisibles.entries()) {
+      const numero = 7 + i
+      assert.equal(
+        await crearYLeer(`Cancha${invisible}${numero}`),
+        `Cancha ${numero}`,
+        `crear con ${JSON.stringify(invisible)}`,
+      )
+    }
+    const { canchaId } = await crearCancha(adminDb, T1, 'traki', { nombre: 'Auxiliar' }, { uid: ADMIN })
+    assert.equal(await renombrarYLeer(canchaId, 'CANCHA\u200b6'), 'Cancha 6', 'renombrar con ZWSP')
+  })
+})
+
+describe('[A3] canchas: desactivar y reactivar (nunca borrar)', () => {
+  it('desactivar la saca de getCanchas pero sigue en listarCanchas', async () => {
+    await cambiarActivaCancha(adminDb, T1, 'traki', 'c1', false, { uid: ADMIN })
+
+    const activas = await getCanchas(adminDb, T1, 'traki')
+    assert.ok(!activas.some((c) => c.id === 'c1'), 'c1 no debe estar en la agenda')
+
+    const todas = await listarCanchas(adminDb, T1, 'traki')
+    const c1 = todas.find((c) => c.id === 'c1')
+    assert.ok(c1, 'el documento de c1 NO se borra')
+    assert.equal(c1.activa, false)
+  })
+
+  it('reactivar la devuelve a getCanchas', async () => {
+    await cambiarActivaCancha(adminDb, T1, 'traki', 'c1', false, { uid: ADMIN })
+    await cambiarActivaCancha(adminDb, T1, 'traki', 'c1', true, { uid: ADMIN })
+    assert.ok((await getCanchas(adminDb, T1, 'traki')).some((c) => c.id === 'c1'))
+  })
+
+  it('desactivar una cancha inexistente → SedeInvalidaError', async () => {
+    await assert.rejects(
+      () => cambiarActivaCancha(adminDb, T1, 'traki', 'no-existe', false, { uid: ADMIN }),
+      SedeInvalidaError,
+    )
+  })
+
+  it('una cancha sin el campo activa cuenta como activa (fallback)', async () => {
+    await setDoc(doc(adminDb, 'academias', T1, 'sedes', 'traki', 'canchas', 'c3'), {
+      nombre: 'Cancha 3',
+    })
+    assert.ok((await getCanchas(adminDb, T1, 'traki')).some((c) => c.id === 'c3'))
+  })
+})
+
+/*
+ * Desactivar una cancha con clases PENDIENTES (no canceladas y cuyo fin todavía
+ * no pasó, comparado contra el reloj inyectado `ahora` en hora local) se
+ * rechaza con un mensaje en español que dice cuántas son. Una clase que termina
+ * EXACTAMENTE en `ahora` ya terminó, y una clase terminada no bloquea aunque
+ * siga sin cerrar o sin cobrar. Reactivar siempre se permite.
+ */
+describe('[A3] desactivar una cancha con clases pendientes', () => {
+  const desactivar = (ahora) =>
+    cambiarActivaCancha(adminDb, T1, 'traki', 'c1', false, { uid: ADMIN, ahora })
+
+  /** Estado guardado de la cancha c1 (para verificar que un rechazo no escribe). */
+  const canchaC1 = async () =>
+    (await listarCanchas(adminDb, T1, 'traki')).find((c) => c.id === 'c1')
+
+  it('una clase futura → rechaza con el nombre y la cantidad', async () => {
+    await reservar() // c1, 18:00-19:00
+    await assert.rejects(
+      () => desactivar(AHORA_RESERVA),
+      (error) =>
+        error instanceof SedeInvalidaError &&
+        error.message ===
+          'No se puede desactivar Cancha 1: tiene 1 clase pendiente. Cancélalas o muévelas a otra cancha primero.',
+    )
+    // El rechazo no escribió nada: la cancha sigue activa.
+    assert.equal((await canchaC1()).activa, true)
+  })
+
+  it('varias clases pendientes → mensaje en plural con la cantidad', async () => {
+    await reservar({ horaInicio: '18:00', horaFin: '19:00' })
+    await reservar({ horaInicio: '20:00', horaFin: '21:00' })
+    await assert.rejects(
+      () => desactivar(AHORA_RESERVA),
+      (error) =>
+        error instanceof SedeInvalidaError &&
+        error.message.startsWith('No se puede desactivar Cancha 1: tiene 2 clases pendientes.'),
+    )
+    assert.equal((await canchaC1()).activa, true)
+  })
+
+  it('una clase más tarde HOY que todavía no terminó → rechaza', async () => {
+    await reservar() // 18:00-19:00 del día de ensayo
+    const hoyAM = new Date(2026, 10, 15, 10, 0, 0)
+    await assert.rejects(
+      () => desactivar(hoyAM),
+      (error) => error instanceof SedeInvalidaError && /tiene 1 clase pendiente/.test(error.message),
+    )
+  })
+
+  it('solo clases canceladas → se desactiva', async () => {
+    const { claseId } = await reservar()
+    await cancelarClase(adminDb, T1, claseId, { uid: ADMIN })
+    assert.equal((await desactivar(AHORA_RESERVA)).activa, false)
+  })
+
+  it('solo clases ya terminadas (aunque sigan sin cerrar o sin cobrar) → se desactiva', async () => {
+    await reservar() // 18:00-19:00, queda "reservada": sin cerrar
+    await setDoc(doc(adminDb, 'academias', T1, 'clases', 'cobro'), {
+      ...clase({ horaInicio: '17:00', horaFin: '18:00' }),
+      estado: 'pendiente_cobro',
+      bloques: [],
+    })
+    assert.equal((await desactivar(DESPUES_DEL_FIN)).activa, false)
+  })
+
+  it('una clase que termina EXACTAMENTE en `ahora` ya terminó → se desactiva', async () => {
+    await reservar() // 18:00-19:00
+    const finExacto = new Date(2026, 10, 15, 19, 0, 0)
+    assert.equal((await desactivar(finExacto)).activa, false)
+  })
+
+  it('las clases de OTRA cancha se ignoran', async () => {
+    await reservar({ canchaId: 'c2', profesorId: 'p2' })
+    assert.equal((await desactivar(AHORA_RESERVA)).activa, false)
+  })
+
+  it('reactivar SIEMPRE se permite, aunque haya clases pendientes', async () => {
+    await reservar() // con la cancha activa
+    await setDoc(
+      doc(adminDb, 'academias', T1, 'sedes', 'traki', 'canchas', 'c1'),
+      { activa: false },
+      { merge: true },
+    )
+    const { activa } = await cambiarActivaCancha(adminDb, T1, 'traki', 'c1', true, {
+      uid: ADMIN,
+      ahora: AHORA_RESERVA,
+    })
+    assert.equal(activa, true)
+    assert.equal((await canchaC1()).activa, true)
+  })
+})
+
+describe('[A3] horario de sede: validación y guardado', () => {
+  it('horarioDeSede cae al default si falta o está corrupto', () => {
+    assert.deepEqual(horarioDeSede({}), { apertura: 7, cierre: 23 })
+    assert.deepEqual(horarioDeSede(undefined), { apertura: 7, cierre: 23 })
+    assert.deepEqual(horarioDeSede({ horario: { apertura: 8, cierre: 20 } }), {
+      apertura: 8,
+      cierre: 20,
+    })
+    assert.deepEqual(horarioDeSede({ horario: { apertura: '8', cierre: 20 } }), {
+      apertura: 7,
+      cierre: 23,
+    })
+    assert.deepEqual(horarioDeSede({ horario: { apertura: 20, cierre: 8 } }), {
+      apertura: 7,
+      cierre: 23,
+    })
+  })
+
+  it('rechaza horas no enteras, fuera de 0-24 o con cierre <= apertura', async () => {
+    const invalidos = [
+      { apertura: -1, cierre: 23 },
+      { apertura: 7, cierre: 25 },
+      { apertura: 7, cierre: 7 },
+      { apertura: 8, cierre: 7 },
+      { apertura: 7.5, cierre: 23 },
+      { apertura: '7', cierre: 23 },
+    ]
+    for (const horario of invalidos) {
+      await assert.rejects(
+        () => setSedeHorario(adminDb, T1, 'traki', horario, { uid: ADMIN }),
+        SedeInvalidaError,
+        `debía rechazar ${JSON.stringify(horario)}`,
+      )
+    }
+  })
+
+  it('guarda el horario y getSede lo devuelve', async () => {
+    const { horario } = await setSedeHorario(
+      adminDb,
+      T1,
+      'traki',
+      { apertura: 0, cierre: 24 },
+      { uid: ADMIN, ahora: AHORA_RESERVA },
+    )
+    assert.deepEqual(horario, { apertura: 0, cierre: 24 })
+    assert.deepEqual((await getSede(adminDb, T1, 'traki')).horario, { apertura: 0, cierre: 24 })
+  })
+
+  it('setSedeHorario en una sede inexistente → SedeInvalidaError', async () => {
+    await assert.rejects(
+      () => setSedeHorario(adminDb, T1, 'no-existe', { apertura: 8, cierre: 20 }, { uid: ADMIN }),
+      (error) => error instanceof SedeInvalidaError && /no existe/.test(error.message),
+    )
+  })
+})
+
+describe('[A3] horario de sede vs clases futuras', () => {
+  it('rechaza el horario que deja clases futuras fuera, diciendo cuántas', async () => {
+    await reservar({ horaInicio: '22:00', horaFin: '23:00' })
+    await reservar({ canchaId: 'c2', profesorId: 'p2', horaInicio: '22:00', horaFin: '23:00' })
+
+    await assert.rejects(
+      () =>
+        setSedeHorario(
+          adminDb,
+          T1,
+          'traki',
+          { apertura: 7, cierre: 22 },
+          { uid: ADMIN, ahora: AHORA_RESERVA },
+        ),
+      (error) => error instanceof SedeInvalidaError && /2 clase/.test(error.message),
+    )
+    // No se guardó nada: la sede sigue sin horario (default).
+    assert.equal((await getSede(adminDb, T1, 'traki')).horario, undefined)
+  })
+
+  it('rechaza un horario que abre más tarde que una clase futura', async () => {
+    await reservar() // 18:00-19:00
+    await assert.rejects(
+      () =>
+        setSedeHorario(
+          adminDb,
+          T1,
+          'traki',
+          { apertura: 20, cierre: 23 },
+          { uid: ADMIN, ahora: AHORA_RESERVA },
+        ),
+      (error) => error instanceof SedeInvalidaError && /1 clase/.test(error.message),
+    )
+  })
+
+  it('ignora las clases canceladas y las de fechas pasadas', async () => {
+    const { claseId } = await reservar({ horaInicio: '22:00', horaFin: '23:00' })
+    await cancelarClase(adminDb, T1, claseId, { uid: ADMIN })
+    // Clase pasada escrita a mano (una reserva en el pasado no es válida).
+    await setDoc(doc(adminDb, 'academias', T1, 'clases', 'pasada'), {
+      ...clase({ fecha: '2026-11-14', horaInicio: '22:00', horaFin: '23:00' }),
+      estado: 'reservada',
+      bloques: [],
+    })
+
+    const { horario } = await setSedeHorario(
+      adminDb,
+      T1,
+      'traki',
+      { apertura: 7, cierre: 22 },
+      { uid: ADMIN, ahora: AHORA_RESERVA },
+    )
+    assert.deepEqual(horario, { apertura: 7, cierre: 22 })
+  })
+})
+
+describe('[A3] reserva y reprogramación usan el horario de la sede', () => {
+  /** Madrugada del día de ensayo: sirve para probar franjas fuera de 07-23. */
+  const AHORA_MADRUGADA = new Date(2026, 10, 15, 5, 0, 0)
+
+  it('sin horario, la sede usa el default 07:00-23:00', async () => {
+    assert.equal((await getSede(adminDb, T1, 'traki')).horario, undefined)
+    assert.ok((await reservar({ horaInicio: '22:00', horaFin: '23:00' })).claseId)
+    await assert.rejects(
+      () =>
+        crearClase(adminDb, T1, clase({ horaInicio: '06:00', horaFin: '07:00' }), {
+          uid: ADMIN,
+          ahora: AHORA_MADRUGADA,
+        }),
+      /07:00|empezar antes/,
+    )
+  })
+
+  it('con la sede abierta a las 06:00, la reserva de 06:00 se acepta', async () => {
+    await setSedeHorario(
+      adminDb,
+      T1,
+      'traki',
+      { apertura: 6, cierre: 24 },
+      { uid: ADMIN, ahora: AHORA_MADRUGADA },
+    )
+    const { claseId } = await crearClase(
+      adminDb,
+      T1,
+      clase({ horaInicio: '06:00', horaFin: '07:00' }),
+      { uid: ADMIN, ahora: AHORA_MADRUGADA },
+    )
+    assert.ok(claseId)
+  })
+
+  it('rechaza una reserva antes de la apertura de la sede', async () => {
+    await setSedeHorario(
+      adminDb,
+      T1,
+      'traki',
+      { apertura: 19, cierre: 23 },
+      { uid: ADMIN, ahora: AHORA_RESERVA },
+    )
+    await assert.rejects(
+      () => reservar({ horaInicio: '18:00', horaFin: '19:00' }),
+      /19:00|empezar antes/,
+    )
+  })
+
+  it('rechaza una reserva que termina después del cierre de la sede', async () => {
+    await setSedeHorario(
+      adminDb,
+      T1,
+      'traki',
+      { apertura: 7, cierre: 22 },
+      { uid: ADMIN, ahora: AHORA_RESERVA },
+    )
+    await assert.rejects(
+      () => reservar({ horaInicio: '22:00', horaFin: '23:00' }),
+      /22:00|terminar/,
+    )
+  })
+
+  it('permite reservar justo dentro del horario de la sede', async () => {
+    await setSedeHorario(
+      adminDb,
+      T1,
+      'traki',
+      { apertura: 18, cierre: 23 },
+      { uid: ADMIN, ahora: AHORA_RESERVA },
+    )
+    assert.ok((await reservar({ horaInicio: '18:00', horaFin: '19:00' })).claseId)
+    assert.ok(
+      (
+        await reservar({
+          canchaId: 'c2',
+          profesorId: 'p2',
+          horaInicio: '22:00',
+          horaFin: '23:00',
+        })
+      ).claseId,
+    )
+  })
+
+  it('la reprogramación usa el horario de la sede destino', async () => {
+    const { claseId } = await reservar() // 18:00-19:00
+    await setSedeHorario(
+      adminDb,
+      T1,
+      'traki',
+      { apertura: 7, cierre: 22 },
+      { uid: ADMIN, ahora: AHORA_RESERVA },
+    )
+    await assert.rejects(
+      () =>
+        reprogramarClase(
+          adminDb,
+          T1,
+          claseId,
+          { horaInicio: '22:00', horaFin: '23:00' },
+          { uid: ADMIN, ahora: AHORA_RESERVA },
+        ),
+      /22:00|terminar/,
+    )
+    // La clase original queda intacta.
+    assert.equal((await getClase(adminDb, T1, claseId)).horaInicio, '18:00')
+  })
+})
+
+describe('[A3] cancha inactiva: rechaza reservas nuevas y reprogramaciones', () => {
+  it('crearClase en una cancha inactiva → DENY', async () => {
+    await cambiarActivaCancha(adminDb, T1, 'traki', 'c1', false, { uid: ADMIN })
+    await assert.rejects(
+      () => reservar(),
+      (error) => error instanceof ClaseInvalidaError && /cancha/.test(error.message),
+    )
+    assert.equal((await bloque(`traki_c1_${FECHA}_1800`)).exists(), false)
+  })
+
+  it('reprogramar HACIA una cancha inactiva → DENY y la clase queda intacta', async () => {
+    const { claseId, bloques } = await reservar() // c1
+    await cambiarActivaCancha(adminDb, T1, 'traki', 'c2', false, { uid: ADMIN })
+
+    await assert.rejects(
+      () =>
+        reprogramarClase(adminDb, T1, claseId, { canchaId: 'c2' }, { uid: ADMIN, ahora: AHORA_RESERVA }),
+      (error) => error instanceof ClaseInvalidaError && /cancha/.test(error.message),
+    )
+    const original = await getClase(adminDb, T1, claseId)
+    assert.equal(original.canchaId, 'c1')
+    assert.deepEqual(original.bloques, bloques)
+  })
+
+  it('desactivar una cancha NO toca las clases que ya la usan', async () => {
+    const { claseId, bloques } = await reservar() // c1
+    // Se desactiva con el reloj DESPUÉS del fin de la clase: con una clase
+    // pendiente la desactivación se rechaza (ver el describe de más abajo).
+    await cambiarActivaCancha(adminDb, T1, 'traki', 'c1', false, {
+      uid: ADMIN,
+      ahora: DESPUES_DEL_FIN,
+    })
+
+    const claseGuardada = await getClase(adminDb, T1, claseId)
+    assert.equal(claseGuardada.estado, 'reservada')
+    assert.equal(claseGuardada.canchaId, 'c1')
+    assert.deepEqual(claseGuardada.bloques, bloques)
+    for (const bloqueId of bloques) {
+      assert.ok((await bloque(bloqueId)).exists(), `bloque ${bloqueId} intacto`)
+    }
   })
 })

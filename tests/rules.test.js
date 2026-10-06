@@ -490,3 +490,125 @@ describe('7. Membresías: quién puede escribirlas y para quién', () => {
     )
   })
 })
+
+describe('8. Sedes y canchas: solo admin y validación de campos', () => {
+  const cancha = (extra = {}) => ({ nombre: 'Cancha reglas', numero: 1, activa: true, ...extra })
+  const canchaRef = (db, canchaId) => doc(db, 'academias', T1, 'sedes', 'traki', 'canchas', canchaId)
+
+  it('administrador de t1 CREA una cancha válida → ALLOW', async () => {
+    await assertSucceeds(setDoc(canchaRef(as(UID.adminT1), 'rc-allow'), cancha()))
+  })
+
+  it('administrador de t1 ACTUALIZA una cancha (nombre y activa) → ALLOW', async () => {
+    await assertSucceeds(setDoc(canchaRef(as(UID.adminT1), 'rc-upd'), cancha()))
+    await assertSucceeds(
+      updateDoc(canchaRef(as(UID.adminT1), 'rc-upd'), { nombre: 'Cancha 9', activa: false }),
+    )
+  })
+
+  it('administrador de t1 CREA una cancha con nombre vacío → DENY', async () => {
+    await assertFails(setDoc(canchaRef(as(UID.adminT1), 'rc-vacio'), cancha({ nombre: '' })))
+  })
+
+  it('administrador de t1 CREA una cancha con nombre de solo espacios → DENY', async () => {
+    await assertFails(setDoc(canchaRef(as(UID.adminT1), 'rc-espacios'), cancha({ nombre: '   ' })))
+  })
+
+  it('administrador de t1 CREA una cancha sin nombre → DENY', async () => {
+    const sinNombre = cancha()
+    delete sinNombre.nombre
+    await assertFails(setDoc(canchaRef(as(UID.adminT1), 'rc-sin-nombre'), sinNombre))
+  })
+
+  it('administrador de t1 CREA una cancha con activa no booleana → DENY', async () => {
+    await assertFails(
+      setDoc(canchaRef(as(UID.adminT1), 'rc-activa'), cancha({ activa: 'si' })),
+    )
+  })
+
+  it('administrador de t1 deja una cancha con nombre vacío al ACTUALIZAR → DENY', async () => {
+    await assertSucceeds(setDoc(canchaRef(as(UID.adminT1), 'rc-upd-vacio'), cancha()))
+    await assertFails(updateDoc(canchaRef(as(UID.adminT1), 'rc-upd-vacio'), { nombre: '  ' }))
+  })
+
+  it('profesor de t1 CREA una cancha en t1 → DENY (rol profesor)', async () => {
+    await assertFails(setDoc(canchaRef(as(UID.profT1), 'rc-profe'), cancha()))
+  })
+
+  it('alumno_adulto de t1 ACTUALIZA una cancha de t1 → DENY', async () => {
+    await assertFails(updateDoc(canchaRef(as(UID.alumnoT1), 'rc-allow'), { activa: false }))
+  })
+
+  it('administrador de t2 CREA una cancha en t1 → DENY (otro tenant)', async () => {
+    await assertFails(setDoc(canchaRef(as(UID.adminT2), 'rc-t2'), cancha()))
+  })
+
+  it('usuario NO autenticado LEE una cancha de t1 → DENY', async () => {
+    const anon = env.unauthenticatedContext().firestore()
+    await assertFails(getDoc(canchaRef(anon, 'rc-allow')))
+  })
+
+  it('administrador de t1 ACTUALIZA el horario de una sede con valores válidos → ALLOW', async () => {
+    await assertSucceeds(
+      updateDoc(doc(as(UID.adminT1), 'academias', T1, 'sedes', 'traki'), {
+        horario: { apertura: 8, cierre: 22 },
+      }),
+    )
+  })
+
+  it('administrador de t1 ACTUALIZA el horario con cierre <= apertura → DENY', async () => {
+    await assertFails(
+      updateDoc(doc(as(UID.adminT1), 'academias', T1, 'sedes', 'traki'), {
+        horario: { apertura: 22, cierre: 8 },
+      }),
+    )
+  })
+
+  it('administrador de t1 ACTUALIZA el horario con cierre igual a apertura → DENY', async () => {
+    await assertFails(
+      updateDoc(doc(as(UID.adminT1), 'academias', T1, 'sedes', 'traki'), {
+        horario: { apertura: 10, cierre: 10 },
+      }),
+    )
+  })
+
+  it('administrador de t1 ACTUALIZA el horario con una hora no entera → DENY', async () => {
+    await assertFails(
+      updateDoc(doc(as(UID.adminT1), 'academias', T1, 'sedes', 'traki'), {
+        horario: { apertura: 7.5, cierre: 23 },
+      }),
+    )
+  })
+
+  it('administrador de t1 ACTUALIZA el horario con una hora fuera de 0-24 → DENY', async () => {
+    await assertFails(
+      updateDoc(doc(as(UID.adminT1), 'academias', T1, 'sedes', 'traki'), {
+        horario: { apertura: 7, cierre: 25 },
+      }),
+    )
+  })
+
+  it('administrador de t1 ACTUALIZA el horario con campos extra → DENY', async () => {
+    await assertFails(
+      updateDoc(doc(as(UID.adminT1), 'academias', T1, 'sedes', 'traki'), {
+        horario: { apertura: 7, cierre: 23, extra: 1 },
+      }),
+    )
+  })
+
+  it('administrador de t1 ACTUALIZA una sede sin tocar el horario → ALLOW', async () => {
+    await assertSucceeds(
+      updateDoc(doc(as(UID.adminT1), 'academias', T1, 'sedes', 'traki'), {
+        direccion: 'Calle de ensayo',
+      }),
+    )
+  })
+
+  it('profesor de t1 ACTUALIZA el horario de la sede → DENY (rol profesor)', async () => {
+    await assertFails(
+      updateDoc(doc(as(UID.profT1), 'academias', T1, 'sedes', 'traki'), {
+        horario: { apertura: 8, cierre: 22 },
+      }),
+    )
+  })
+})

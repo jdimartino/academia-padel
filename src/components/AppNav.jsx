@@ -1,9 +1,9 @@
 import { NavLink, useParams } from 'react-router-dom'
 
 /*
- * Links de navegación (Agenda / Alumnos / Profesores) compartidos por el
- * sidebar de desktop y el menú bottom-sheet de mobile. El tenant sale de la
- * ruta (`/:academia/...`).
+ * Links de navegación (Agenda / Alumnos / Profesores / Configuración)
+ * compartidos por el sidebar de desktop y el menú bottom-sheet de mobile. El
+ * tenant sale de la ruta (`/:academia/...`).
  */
 export default function AppNav({ onNavigate }) {
   const { academia } = useParams()
@@ -11,6 +11,7 @@ export default function AppNav({ onNavigate }) {
     { to: `/${academia}/agenda`, label: 'Agenda' },
     { to: `/${academia}/alumnos`, label: 'Alumnos' },
     { to: `/${academia}/profesores`, label: 'Profesores' },
+    { to: `/${academia}/configuracion`, label: 'Configuración' },
   ]
 
   return (

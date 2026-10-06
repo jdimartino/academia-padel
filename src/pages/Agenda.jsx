@@ -284,7 +284,13 @@ export default function Agenda() {
 
           {aviso ? <Aviso>{aviso}</Aviso> : null}
 
-          <TimeGrid canchas={canchas} clases={clases} escala={1} onSelect={seleccionarClase} />
+          <TimeGrid
+            sede={sede}
+            canchas={canchas}
+            clases={clases}
+            escala={1}
+            onSelect={seleccionarClase}
+          />
 
           {claseSel ? (
             <DetailSheet

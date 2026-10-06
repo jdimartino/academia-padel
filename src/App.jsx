@@ -3,6 +3,7 @@ import ProtectedRoute from './components/ProtectedRoute'
 import { AuthProvider } from './context/AuthContext'
 import Agenda from './pages/Agenda'
 import Alumnos from './pages/Alumnos'
+import Configuracion from './pages/Configuracion'
 import Home from './pages/Home'
 import Login from './pages/Login'
 import Profesores from './pages/Profesores'
@@ -34,6 +35,14 @@ export default function App() {
             element={
               <ProtectedRoute>
                 <Profesores />
+              </ProtectedRoute>
+            }
+          />
+          <Route
+            path="/:academia/configuracion"
+            element={
+              <ProtectedRoute>
+                <Configuracion />
               </ProtectedRoute>
             }
           />

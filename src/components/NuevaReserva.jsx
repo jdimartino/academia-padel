@@ -1,13 +1,19 @@
 import { useEffect, useMemo, useState } from 'react'
 import { useAuth } from '../context/AuthContext'
 import { db } from '../firebase/config'
-import { crearClase, getProfesores, nombreCompleto, reprogramarClase } from '../firebase/db'
+import {
+  crearClase,
+  getProfesores,
+  horarioDeSede,
+  nombreCompleto,
+  reprogramarClase,
+} from '../firebase/db'
 import {
   CATEGORIAS,
-  HORA_CIERRE_CLASE,
   aHoraHHmm,
   aMinutos,
   etiquetaCategoria,
+  formatHora12,
   opcionesDeInicio,
 } from '../lib/agenda'
 import { formatearFechaLarga } from '../lib/fechas'
@@ -16,8 +22,6 @@ import SelectorAlumnos from './SelectorAlumnos'
 
 const DURACIONES = [60, 120]
 const MODALIDADES = ['Grupal', 'Individual']
-/** Cierre de la jornada: ninguna clase puede terminar después de las 23:00. */
-const FIN_ULTIMO = HORA_CIERRE_CLASE * 60
 
 /*
  * Formulario de reserva. Con `clase` hace de reprogramación (prefill + update
@@ -29,7 +33,7 @@ const FIN_ULTIMO = HORA_CIERRE_CLASE * 60
 export default function NuevaReserva({
   tenantId,
   sede,
-  canchas,
+  canchas = [],
   fecha,
   clases,
   clase = null,
@@ -38,8 +42,16 @@ export default function NuevaReserva({
 }) {
   const { user } = useAuth()
   const esEdicion = Boolean(clase)
+  // Franja de la sede: el formulario solo ofrece horas dentro de su horario.
+  const horario = useMemo(() => horarioDeSede(sede), [sede])
+  const horas60 = opcionesDeInicio(60, horario)
   const [canchaId, setCanchaId] = useState(clase?.canchaId ?? canchas[0]?.id ?? null)
-  const [horaInicio, setHoraInicio] = useState(clase?.horaInicio ?? '18:00')
+  const [horaInicio, setHoraInicio] = useState(() => {
+    if (clase?.horaInicio) return clase.horaInicio
+    // Default histórico 18:00; si la sede abre/cierra antes, la última hora útil.
+    if (horas60.includes('18:00')) return '18:00'
+    return horas60[horas60.length - 1] ?? '07:00'
+  })
   const [duracion, setDuracion] = useState(
     clase ? (aMinutos(clase.horaFin) ?? 0) - (aMinutos(clase.horaInicio) ?? 0) : 60,
   )
@@ -80,15 +92,33 @@ export default function NuevaReserva({
   const fin = inicio + duracion
   const cupo = modalidad === 'Individual' ? 1 : 4
   const profesor = profesores?.find((p) => p.id === profesorId) ?? null
-  // Solo horas en punto que, con la duración elegida, terminen a más tardar 23:00.
-  const horas = opcionesDeInicio(duracion)
+  // Solo horas en punto dentro del horario de la sede y según la duración.
+  const horas = opcionesDeInicio(duracion, horario)
 
-  // Al acortar la duración, la hora elegida podría quedar fuera de la lista.
+  /*
+   * Opciones del selector de cancha: solo las ACTIVAS (la sede puede tener N).
+   * Si al reprogramar la cancha actual quedó inactiva, se agrega igual para no
+   * cambiar en silencio la cancha de la clase: se ve preseleccionada y el
+   * guardado falla con el error de la transacción, como antes.
+   */
+  const canchasOpciones = useMemo(() => {
+    const activas = canchas.filter((cancha) => cancha.activa !== false)
+    if (canchaId && !activas.some((cancha) => cancha.id === canchaId)) {
+      const actual = canchas.find((cancha) => cancha.id === canchaId)
+      if (actual) return [...activas, actual]
+    }
+    return activas
+  }, [canchas, canchaId])
+  // Con la sede sin canchas activas no hay nada que elegir: no se puede guardar.
+  const sinCanchasActivas = !canchas.some((cancha) => cancha.activa !== false)
+
+  // Al acortar la duración (o cambiar la franja de la sede), la hora elegida
+  // podría quedar fuera de la lista.
   useEffect(() => {
     setHoraInicio((hora) => (horas.includes(hora) ? hora : (horas[horas.length - 1] ?? hora)))
-    // `horas` se recalcula con la duración; solo interesa cuando cambia.
+    // `horas` se recalcula con la duración y el horario; solo interesa cuando cambian.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [duracion])
+  }, [duracion, horario.apertura, horario.cierre])
 
   // Al cambiar de modalidad la selección no puede quedar por encima del cupo.
   function elegirModalidad(opcion) {
@@ -101,7 +131,12 @@ export default function NuevaReserva({
 
   const problemas = useMemo(() => {
     const lista = []
-    if (fin > FIN_ULTIMO) lista.push('La clase no puede terminar después de las 23:00.')
+    if (inicio < horario.apertura * 60) {
+      lista.push(`La clase no puede empezar antes de las ${formatHora12(horario.apertura)}.`)
+    }
+    if (fin > horario.cierre * 60) {
+      lista.push(`La clase no puede terminar después de las ${formatHora12(horario.cierre)}.`)
+    }
 
     const solapan = (otra) => {
       const ci = aMinutos(otra.horaInicio)
@@ -113,7 +148,7 @@ export default function NuevaReserva({
     )
     if (canchaOcupada) {
       lista.push(
-        `La cancha ya está ocupada de ${canchaOcupada.horaInicio} a ${canchaOcupada.horaFin}.`,
+        `La cancha ya está ocupada de ${formatHora12(canchaOcupada.horaInicio)} a ${formatHora12(canchaOcupada.horaFin)}.`,
       )
     }
     if (profesorId) {
@@ -122,12 +157,12 @@ export default function NuevaReserva({
       )
       if (profeOcupado) {
         lista.push(
-          `${nombreCompleto(profesor) || 'El profesor'} ya tiene clase de ${profeOcupado.horaInicio} a ${profeOcupado.horaFin}.`,
+          `${nombreCompleto(profesor) || 'El profesor'} ya tiene clase de ${formatHora12(profeOcupado.horaInicio)} a ${formatHora12(profeOcupado.horaFin)}.`,
         )
       }
     }
     return lista
-  }, [canchaId, fin, inicio, otrasClases, profesor, profesorId])
+  }, [canchaId, fin, inicio, otrasClases, profesor, profesorId, horario])
 
   const puedeEnviar = Boolean(canchaId && profesorId) && problemas.length === 0 && !enviando
 
@@ -199,20 +234,28 @@ export default function NuevaReserva({
 
       <form className="form" onSubmit={enviar}>
         <div className="form__field">
-          <span className="form__label">Cancha</span>
-          <div className="chips-row">
-            {canchas.map((cancha) => (
-              <button
-                type="button"
-                key={cancha.id}
-                className={`chip-cancha${cancha.id === canchaId ? ' is-sel' : ''}`}
-                aria-pressed={cancha.id === canchaId}
-                onClick={() => setCanchaId(cancha.id)}
-              >
+          <label className="form__label" htmlFor="nr-cancha">
+            Cancha
+          </label>
+          <select
+            className="form__input"
+            id="nr-cancha"
+            value={canchaId ?? ''}
+            disabled={sinCanchasActivas}
+            onChange={(e) => setCanchaId(e.target.value || null)}
+          >
+            {sinCanchasActivas ? <option value="">Sin canchas activas</option> : null}
+            {canchasOpciones.map((cancha) => (
+              <option key={cancha.id} value={cancha.id}>
                 {cancha.nombre}
-              </button>
+              </option>
             ))}
-          </div>
+          </select>
+          {sinCanchasActivas ? (
+            <p className="alert alert--error" role="alert">
+              Esta sede no tiene canchas activas. Actívalas en Configuración.
+            </p>
+          ) : null}
         </div>
 
         <div className="form__field">
@@ -227,7 +270,7 @@ export default function NuevaReserva({
           >
             {horas.map((hora) => (
               <option key={hora} value={hora}>
-                {hora}
+                {formatHora12(hora)}
               </option>
             ))}
           </select>

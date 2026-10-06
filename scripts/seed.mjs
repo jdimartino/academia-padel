@@ -167,11 +167,18 @@ const USUARIOS = [
   { email: 'representante@ensayo.test', password: 'ensayo1234', nombre: 'Teresa Representante', rol: 'alumno_menor' },
 ]
 
+/*
+ * Sedes del tenant de ensayo: 4 canchas ACTIVAS cada una y horario 07:00-23:00
+ * (el mismo default de la capa de datos). Las canchas se numeran c1..c4.
+ */
+const CANCHAS_POR_SEDE = 4
+const HORARIO_SEDE = { apertura: 7, cierre: 23 }
+
 const SEDES = [
-  { id: 'traki', nombre: 'Traki', canchas: 3 },
-  { id: 'boleita', nombre: 'Boleíta', canchas: 2 },
-  { id: 'santa-rosa', nombre: 'Santa Rosa', canchas: 2 },
-  { id: 'capital', nombre: 'Capital', canchas: 2 },
+  { id: 'traki', nombre: 'Traki' },
+  { id: 'boleita', nombre: 'Boleíta' },
+  { id: 'santa-rosa', nombre: 'Santa Rosa' },
+  { id: 'capital', nombre: 'Capital' },
 ]
 
 /*
@@ -579,8 +586,9 @@ async function main() {
       direccion: `Sede ${sede.nombre}`,
       activa: true,
       orden: SEDES.indexOf(sede),
+      horario: HORARIO_SEDE,
     })
-    for (let i = 1; i <= sede.canchas; i += 1) {
+    for (let i = 1; i <= CANCHAS_POR_SEDE; i += 1) {
       await setDoc(`${tenant}/sedes/${sede.id}/canchas/c${i}`, {
         nombre: `Cancha ${i}`,
         numero: i,
@@ -589,7 +597,7 @@ async function main() {
       })
     }
   }
-  console.log(`· ${SEDES.length} sedes y sus canchas`)
+  console.log(`· ${SEDES.length} sedes y ${CANCHAS_POR_SEDE} canchas activas cada una`)
 
   // La tarifa por hora queda SIN DEFINIR: no se escribe ningún campo de tarifa.
   for (const profesor of PROFESORES) {

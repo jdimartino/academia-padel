@@ -140,6 +140,11 @@ carga por su cuenta.
 | `direccion` | string | *sin definir formato* |
 | `activa` | bool | |
 | `orden` | number | Para ordenar en la UI |
+| `horario` | map | `{apertura, cierre}` en HORAS enteras 0-24, con `cierre > apertura`. Es la franja que usan la reserva y la reprogramación. Si falta (sedes viejas), `horarioDeSede` cae al default **07:00-23:00**. |
+
+`setSedeHorario(db, tenant, sedeId, {apertura, cierre})` valida el rango y
+rechaza el cambio si deja fuera a alguna clase FUTURA no cancelada (mensaje con
+la cantidad). Solo lo escribe el administrador (ver firestore.rules).
 
 ### `academias/{tenantId}/sedes/{sedeId}/canchas/{canchaId}`
 
@@ -148,10 +153,15 @@ del negocio).
 
 | Campo | Tipo | Nota |
 | --- | --- | --- |
-| `nombre` | string | "Cancha 1" … |
+| `nombre` | string | "Cancha 1" … Requerido, recortado, único en la sede (case-insensitive) y máx. 100 |
 | `numero` | number | |
 | `tipo` | string | `indoor` \| `outdoor` \| `otro` *sin definir catálogo* |
-| `activa` | bool | |
+| `activa` | bool | Si falta, la cancha cuenta como activa (fallback). Solo el admin la escribe |
+
+Las canchas **nunca se borran**: se desactivan (`activa: false`). Desactivada, la
+cancha no admite reservas nuevas ni reprogramaciones HACIA ella; las clases que
+ya la usan quedan intactas. Funciones: `crearCancha`, `renombrarCancha`,
+`cambiarActivaCancha` y, para la pantalla, `listarCanchas` (incluye inactivas).
 
 **Alternativa descartada:** guardar las canchas como array dentro de la sede.
 Se descarta porque la reserva cruza cancha + fecha y conviene poder indexarlas;

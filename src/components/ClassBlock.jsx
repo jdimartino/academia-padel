@@ -1,13 +1,25 @@
-import { MIN_INICIO, estadoDe, estaSinCerrar, iniciales, rangoClase, tituloClase } from '../lib/agenda'
+import {
+  estadoDe,
+  estaSinCerrar,
+  formatHora12,
+  iniciales,
+  rangoClase,
+  tituloClase,
+} from '../lib/agenda'
 
-export default function ClassBlock({ clase, escala, onSelect }) {
+/*
+ * `minutoInicio` es el primer minuto del rango que dibuja la grilla (el de la
+ * sede seleccionada, ver `rangoHorasAgenda`): posiciona el bloque dentro de esa
+ * franja, que ya no es fija.
+ */
+export default function ClassBlock({ clase, escala, minutoInicio, onSelect }) {
   const rango = rangoClase(clase)
   if (!rango) return null
 
   const estado = estadoDe(clase.estado)
   const alumnos = clase.alumnoNombres ?? []
   const sinCerrar = estaSinCerrar(clase)
-  const top = (rango.inicio - MIN_INICIO) * escala
+  const top = (rango.inicio - minutoInicio) * escala
   const alto = (rango.fin - rango.inicio) * escala
 
   return (
@@ -16,7 +28,7 @@ export default function ClassBlock({ clase, escala, onSelect }) {
       className={`bloque bloque--${estado.tono}${sinCerrar ? ' bloque--sin-cerrar' : ''}`}
       style={{ top: `${top}px`, height: `${alto}px` }}
       onClick={() => onSelect(clase)}
-      aria-label={`${tituloClase(clase)}, ${clase.horaInicio} a ${clase.horaFin}, ${estado.label}${sinCerrar ? ', sin cerrar' : ''}`}
+      aria-label={`${tituloClase(clase)}, ${formatHora12(clase.horaInicio)} a ${formatHora12(clase.horaFin)}, ${estado.label}${sinCerrar ? ', sin cerrar' : ''}`}
     >
       {sinCerrar ? (
         <span
@@ -27,7 +39,7 @@ export default function ClassBlock({ clase, escala, onSelect }) {
         />
       ) : null}
       <span className="bloque__hora">
-        {clase.horaInicio}–{clase.horaFin}
+        {formatHora12(clase.horaInicio)}–{formatHora12(clase.horaFin)}
       </span>
       <span className="bloque__estado">{estado.label.toUpperCase()}</span>
       <span className="bloque__titulo">{tituloClase(clase)}</span>

@@ -1,10 +1,20 @@
+import { useMemo } from 'react'
 import ClassBlock from './ClassBlock'
-import { DURACION_MIN, MIN_INICIO, horasDeFranja, lineasDeFranja } from '../lib/agenda'
+import { formatHora12, horasDeFranja, lineasDeFranja, rangoHorasAgenda } from '../lib/agenda'
 
-export default function TimeGrid({ canchas, clases, escala, onSelect }) {
-  const alto = DURACION_MIN * escala
-  const lineas = lineasDeFranja()
-  const horas = horasDeFranja()
+export default function TimeGrid({ sede, canchas, clases, escala, onSelect }) {
+  /*
+   * Rango vertical de la grilla: sale del horario de la sede SELECCIONADA
+   * (`sede.horario`, con el default 07-23 si falta) y se agranda para incluir
+   * cualquier clase no cancelada que quede fuera, así una clase guardada nunca
+   * se dibuja fuera de la grilla (ver `rangoHorasAgenda`). Se recalcula al
+   * cambiar de sede o de día/semana. Ya no es la franja fija 07-21.
+   */
+  const rango = useMemo(() => rangoHorasAgenda(sede?.horario, clases), [sede, clases])
+  const minutoInicio = rango.horaInicio * 60
+  const alto = (rango.horaFin - rango.horaInicio) * 60 * escala
+  const lineas = lineasDeFranja(rango)
+  const horas = horasDeFranja(rango)
 
   return (
     <section className="grid-panel glass" aria-label="Grilla horaria">
@@ -28,9 +38,9 @@ export default function TimeGrid({ canchas, clases, escala, onSelect }) {
               <span
                 key={h}
                 className="grid__hora"
-                style={{ top: `${(h * 60 - MIN_INICIO) * escala}px` }}
+                style={{ top: `${(h * 60 - minutoInicio) * escala}px` }}
               >
-                {String(h).padStart(2, '0')}:00
+                {formatHora12(h)}
               </span>
             ))}
           </div>
@@ -41,7 +51,7 @@ export default function TimeGrid({ canchas, clases, escala, onSelect }) {
                 <span
                   key={linea.minuto}
                   className={`grid__linea${linea.horaEntera ? ' is-hora' : ''}`}
-                  style={{ top: `${(linea.minuto - MIN_INICIO) * escala}px` }}
+                  style={{ top: `${(linea.minuto - minutoInicio) * escala}px` }}
                 />
               ))}
               {clases
@@ -51,6 +61,7 @@ export default function TimeGrid({ canchas, clases, escala, onSelect }) {
                     key={clase.id}
                     clase={clase}
                     escala={escala}
+                    minutoInicio={minutoInicio}
                     onSelect={onSelect}
                   />
                 ))}

@@ -105,6 +105,7 @@ export default function AgendaMobile({
       <div className="m-grid">
         {canchaSel ? (
           <TimeGrid
+            sede={sede}
             canchas={[canchaSel]}
             clases={clases}
             escala={1.1}

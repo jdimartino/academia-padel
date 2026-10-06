@@ -46,6 +46,39 @@ service cloud.firestore {
       return rol(tenantId) == 'administrador';
     }
 
+    // --- Configuración de sedes y canchas ---------------------------------
+    // El horario de una sede es {apertura, cierre} en HORAS enteras 0-24, con
+    // cierre > apertura. Ausente = default 07:00-23:00 de la capa de datos.
+    function horarioValido(horario) {
+      return horario == null
+        || (horario is map
+            && horario.keys().hasOnly(['apertura', 'cierre'])
+            && horario.apertura is int
+            && horario.cierre is int
+            && horario.apertura >= 0
+            && horario.apertura <= 24
+            && horario.cierre >= 0
+            && horario.cierre <= 24
+            && horario.cierre > horario.apertura);
+    }
+
+    function horarioDe(data) {
+      return data.keys().hasAny(['horario']) ? data.horario : null;
+    }
+
+    // Nombre de cancha: string no vacío (al menos un carácter que no sea
+    // espacio) y con el mismo tope de largo de la capa de datos.
+    function nombreCanchaValido(nombre) {
+      return nombre is string
+        && nombre.size() <= 100
+        && nombre.matches('.*[^ ].*');
+    }
+
+    function canchaValida(data) {
+      return nombreCanchaValido(data.nombre)
+        && (!data.keys().hasAny(['activa']) || data.activa is bool);
+    }
+
     match /academias/{tenantId} {
       allow read, write: if esAdmin(tenantId);
 
@@ -60,10 +93,19 @@ service cloud.firestore {
       }
 
       match /sedes/{sedeId} {
-        allow read, write: if esAdmin(tenantId);
+        allow read: if esAdmin(tenantId);
+        // El admin es el único que escribe; si trae `horario`, se valida el
+        // rango (las sedes sin horario siguen permitidas: usan el default).
+        allow create, update: if esAdmin(tenantId)
+          && horarioValido(horarioDe(request.resource.data));
+        allow delete: if esAdmin(tenantId);
 
         match /canchas/{canchaId} {
-          allow read, write: if esAdmin(tenantId);
+          allow read: if esAdmin(tenantId);
+          // Nombre no vacío y `activa` booleana; las canchas se desactivan, no
+          // se borran, pero el borrado del admin se deja como estaba.
+          allow create, update: if esAdmin(tenantId) && canchaValida(request.resource.data);
+          allow delete: if esAdmin(tenantId);
         }
       }
 

@@ -34,7 +34,7 @@ import {
   updateDoc,
   where,
 } from 'firebase/firestore'
-import { CATEGORIAS } from '../lib/agenda.js'
+import { CATEGORIAS, HORARIO_DEFAULT, formatHora12, horarioDeSede } from '../lib/agenda.js'
 
 /**
  * Granularidad de la ocupación: 60 minutos (un bloque por hora en punto).
@@ -45,17 +45,40 @@ export const MINUTOS_BLOQUE = 60
 /*
  * Reglas de horario de una clase (se aplican en la capa de datos, no solo en el
  * formulario):
- * - arranca en una hora en punto dentro de la franja 07:00-23:00;
+ * - arranca en una hora en punto dentro de la franja de la SEDE;
  * - dura 1 h o 2 h exactas;
- * - si arranca a las 22:00 solo puede durar 1 h, así ninguna clase termina
- *   después de las 23:00.
+ * - no puede terminar después del cierre de la SEDE, así que la última hora de
+ *   inicio depende de la duración.
+ *
+ * La franja ya no es global: cada sede tiene `horario {apertura, cierre}` en
+ * horas enteras. HORARIO_DEFAULT es el fallback 07:00-23:00 para las sedes que
+ * todavía no tienen el campo (ver `horarioDeSede`). Las dos son puras y viven en
+ * src/lib/agenda.js; acá se reexportan para no romper a quien las importa de la
+ * capa de datos.
  */
-export const HORA_APERTURA = 7 * 60
-export const HORA_CIERRE = 23 * 60
+export const HORA_APERTURA = HORARIO_DEFAULT.apertura * 60
+export const HORA_CIERRE = HORARIO_DEFAULT.cierre * 60
 export const DURACIONES_VALIDAS = [60, 120]
 
+/** Tope de largo del nombre de una cancha (después de recortar). */
+export const LIMITE_NOMBRE_CANCHA = 100
+
+/**
+ * Tope de clases futuras que `setSedeHorario` revisa antes de aceptar un
+ * horario nuevo. Es una acción de configuración poco frecuente y la consulta
+ * queda acotada por tenant + sede + fecha.
+ */
+export const LIMITE_CLASES_HORARIO = 500
+
+/**
+ * Tope de clases que `cambiarActivaCancha` revisa antes de desactivar una
+ * cancha. Igual que `LIMITE_CLASES_HORARIO`: es una acción de configuración poco
+ * frecuente y la consulta queda acotada por tenant + cancha + fecha.
+ */
+export const LIMITE_CLASES_PENDIENTES = 500
+
 /** Categorías válidas de una clase. Ver docs/modelo-datos.md §4. */
-export { CATEGORIAS }
+export { CATEGORIAS, HORARIO_DEFAULT, horarioDeSede }
 
 /** Cupo máximo de una clase según el modelo de datos (docs/modelo-datos.md §4). */
 export const CUPO_MAXIMO = 4
@@ -191,6 +214,17 @@ export class FichaInvalidaError extends Error {
   }
 }
 
+/**
+ * Error de negocio: la configuración de una sede es inválida (horario fuera de
+ * rango, cancha sin nombre o repetida, horario que deja clases afuera, etc.).
+ */
+export class SedeInvalidaError extends Error {
+  constructor(mensaje) {
+    super(mensaje)
+    this.name = 'SedeInvalidaError'
+  }
+}
+
 /* --------------------------------------------------------------------- */
 /* Utilidades de tiempo (puras, sin Firestore)                             */
 /* --------------------------------------------------------------------- */
@@ -248,9 +282,173 @@ export function instanteLocal(fecha, hora) {
 export function validarInicioNoPasado(fecha, horaInicio, ahora) {
   if (instanteLocal(fecha, horaInicio).getTime() < ahora.getTime()) {
     throw new ClaseInvalidaError(
-      `No se puede reservar una clase que ya empezó (${fecha} ${horaInicio})`,
+      `No se puede reservar una clase que ya empezó (${fecha} ${formatHora12(horaInicio)})`,
     )
   }
+}
+
+/* --------------------------------------------------------------------- */
+/* Sedes y canchas: horario y configuración (helpers puros)                */
+/* --------------------------------------------------------------------- */
+
+/**
+ * Valida y normaliza un horario de sede: apertura y cierre enteros entre 0 y
+ * 24, con cierre > apertura. Devuelve `{apertura, cierre}`.
+ */
+export function validarHorario(horario) {
+  const apertura = horario?.apertura
+  const cierre = horario?.cierre
+  if (!Number.isInteger(apertura) || !Number.isInteger(cierre)) {
+    throw new SedeInvalidaError('La apertura y el cierre deben ser horas enteras')
+  }
+  if (apertura < 0 || apertura > 24 || cierre < 0 || cierre > 24) {
+    throw new SedeInvalidaError('La apertura y el cierre deben estar entre 0 y 24')
+  }
+  if (cierre <= apertura) {
+    throw new SedeInvalidaError('El cierre debe ser posterior a la apertura')
+  }
+  return { apertura, cierre }
+}
+
+/**
+ * Nombre visible de una cancha. Si el documento no tiene `nombre` (canchas
+ * viejas) se cae a "Cancha {numero}" y, en última instancia, al id.
+ */
+export function nombreDeCancha(cancha, canchaId = null) {
+  const nombre = String(cancha?.nombre ?? '').trim()
+  if (nombre) return nombre
+  if (cancha?.numero != null) return `Cancha ${cancha.numero}`
+  return String(canchaId ?? cancha?.id ?? '')
+}
+
+/**
+ * Conectores que quedan en minúscula dentro de un nombre, salvo que abran el
+ * nombre ("cancha de arriba" → "Cancha de Arriba").
+ */
+const CONECTORES_NOMBRE = new Set(['de', 'del', 'la', 'el', 'y'])
+
+/**
+ * Paso compartido por `normalizarNombreCancha` y `claveNombreCancha`: tira los
+ * caracteres INVISIBLES (formato Unicode: ZWSP, ZWNJ, ZWJ, word joiner, soft
+ * hyphen), recorta, colapsa los espacios repetidos y separa una LETRA seguida
+ * de un DÍGITO ("  CANCHA   6 " y "CANCHA6" → "CANCHA 6"). Un dígito seguido de
+ * letras no se toca: "Cancha 6A" y "6cancha" quedan como se escribieron.
+ *
+ * El orden importa: sacar los invisibles ANTES de separar, así un nombre
+ * pegado desde otro lado ("Cancha<ZWSP>6") también queda como "Cancha 6".
+ */
+function limpiarEspaciosYDigitos(nombre) {
+  return String(nombre ?? '')
+    .replace(/\p{Cf}/gu, '')
+    .trim()
+    .replace(/\s+/g, ' ')
+    .replace(/(\p{L})(\p{N})/gu, '$1 $2')
+}
+
+/**
+ * Nombre visible normalizado de una cancha: recorta, colapsa espacios, separa
+ * una letra pegada a un dígito y, si el nombre viene TODO en mayúsculas o TODO
+ * en minúsculas, pone inicial mayúscula en cada palabra (los conectores "de",
+ * "del", "la", "el" y "y" quedan en minúscula salvo en la primera palabra). Un
+ * nombre ya mezclado se respeta tal cual quedó tras los pasos anteriores.
+ *
+ * Un token que mezcla dígitos y letras ("6A", "6cancha") se respeta como se
+ * escribió, para no romper un sufijo en mayúscula; la excepción es el sufijo de
+ * UNA sola letra tras el número ("6a" → "6A"), típico nombre de cancha.
+ *
+ * Los acentos NUNCA se agregan ni se quitan: "PANORÁMICA" → "Panorámica" y
+ * "panoramica" → "Panoramica" se guardan distintos (solo el chequeo de
+ * duplicados los compara sin acentos, vía `claveNombreCancha`).
+ */
+export function normalizarNombreCancha(nombre) {
+  const texto = limpiarEspaciosYDigitos(nombre)
+  const letras = texto.match(/\p{L}/gu) ?? []
+  if (!letras.length) return texto
+  const enMayusculas = letras.every((letra) => letra === letra.toLocaleUpperCase('es'))
+  const enMinusculas = letras.every((letra) => letra === letra.toLocaleLowerCase('es'))
+  if (!enMayusculas && !enMinusculas) return texto
+  return texto
+    .split(' ')
+    .map((palabra, indice) => {
+      if (/\p{N}/u.test(palabra) && /\p{L}/u.test(palabra)) {
+        return /^\p{N}+\p{L}$/u.test(palabra) ? palabra.toLocaleUpperCase('es') : palabra
+      }
+      const enMinuscula = palabra.toLocaleLowerCase('es')
+      if (indice > 0 && CONECTORES_NOMBRE.has(enMinuscula)) return enMinuscula
+      return enMinuscula.charAt(0).toLocaleUpperCase('es') + enMinuscula.slice(1)
+    })
+    .join(' ')
+}
+
+/**
+ * Clave de unicidad de un nombre de cancha: sin acentos y en minúsculas, sobre
+ * el nombre ya limpiado (espacios colapsados y la letra pegada a un dígito ya
+ * separada). "Cancha 5", "cancha 5", "  CANCHA   5  ", "CANCHA5" y
+ * "Panorámica" / "panoramica" dan la misma clave; el nombre que se GUARDA no
+ * se toca (solo pasa por `normalizarNombreCancha`). Única fuente de verdad de
+ * la comparación: la usan tanto `crearCancha` como `renombrarCancha`, y las
+ * canchas inactivas cuentan.
+ */
+export function claveNombreCancha(nombre) {
+  return limpiarEspaciosYDigitos(nombre)
+    .normalize('NFD')
+    .replace(/[\u0300-\u036f]/g, '')
+    .toLowerCase()
+}
+
+/**
+ * Valida y normaliza el nombre de una cancha: primero se normaliza
+ * (`normalizarNombreCancha`), después no puede quedar vacío, tiene tope de
+ * largo y no puede repetirse dentro de la sede según `claveNombreCancha`
+ * (ignora caja, espacios de más, letras pegadas a dígitos y acentos).
+ * `canchas` son las canchas existentes —incluidas las inactivas— y `exceptoId`
+ * deja afuera a la que se está renombrando. Devuelve el nombre a guardar.
+ */
+export function validarNombreCancha(nombre, canchas = [], exceptoId = null) {
+  const texto = normalizarNombreCancha(nombre)
+  if (!texto) throw new SedeInvalidaError('La cancha necesita un nombre')
+  if (texto.length > LIMITE_NOMBRE_CANCHA) {
+    throw new SedeInvalidaError(
+      `El nombre de la cancha no puede superar ${LIMITE_NOMBRE_CANCHA} caracteres`,
+    )
+  }
+  const clave = claveNombreCancha(texto)
+  const repetida = canchas.find(
+    (cancha) =>
+      cancha.id !== exceptoId && claveNombreCancha(nombreDeCancha(cancha, cancha.id)) === clave,
+  )
+  if (repetida) {
+    throw new SedeInvalidaError(
+      `Ya hay una cancha llamada "${nombreDeCancha(repetida, repetida.id)}"`,
+    )
+  }
+  return texto
+}
+
+/**
+ * Valida que una franja de clase (horas "HH:mm") entre en el horario de la
+ * sede: arranca a la apertura o después y termina al cierre o antes.
+ */
+export function validarFranjaEnHorario(horaInicio, horaFin, horario = HORARIO_DEFAULT) {
+  const franja = horarioDeSede({ horario })
+  const inicio = aMinutos(horaInicio)
+  const fin = aMinutos(horaFin)
+  if (inicio < franja.apertura * 60) {
+    throw new ClaseInvalidaError(
+      `La clase no puede empezar antes de ${formatHora12(franja.apertura * 60)} (recibido ${formatHora12(horaInicio)})`,
+    )
+  }
+  if (fin > franja.cierre * 60) {
+    throw new ClaseInvalidaError(
+      `La clase no puede terminar después de ${formatHora12(franja.cierre * 60)} (${formatHora12(horaInicio)}-${formatHora12(horaFin)})`,
+    )
+  }
+  return franja
+}
+
+/** ¿El documento (sede, cancha, profesor) está activo? Campo ausente = activo. */
+function estaActivo(datos) {
+  return datos?.activa !== false && datos?.activo !== false
 }
 
 function bloqueCanchaId({ sedeId, canchaId, fecha, minuto }) {
@@ -265,8 +463,13 @@ function bloqueProfesorId({ profesorId, fecha, minuto }) {
  * Lista de bloques que ocupa una clase, en orden. Cada bloque trae su ID
  * determinista y los campos del documento. Función pura: no toca Firestore.
  * Se exporta para poder probar el cálculo sin base de datos.
+ *
+ * `horario` es la franja de la sede (`{apertura, cierre}` en horas enteras).
+ * Por defecto usa 07:00-23:00: los llamadores que tengan la sede le pasan el
+ * horario real (ver `horarioDeSede`).
  */
-export function bloquesDeClase({ sedeId, canchaId, profesorId, fecha, horaInicio, horaFin }) {
+export function bloquesDeClase(datos, horario = HORARIO_DEFAULT) {
+  const { sedeId, canchaId, profesorId, fecha, horaInicio, horaFin } = datos
   if (!RE_FECHA.test(fecha ?? '')) {
     throw new ClaseInvalidaError(`Fecha inválida "${fecha}", se espera "YYYY-MM-DD"`)
   }
@@ -279,26 +482,17 @@ export function bloquesDeClase({ sedeId, canchaId, profesorId, fecha, horaInicio
   const duracion = fin - inicio
   if (fin <= inicio || !DURACIONES_VALIDAS.includes(duracion)) {
     throw new ClaseInvalidaError(
-      `La duración debe ser 1 h o 2 h (${horaInicio}-${horaFin})`,
+      `La duración debe ser 1 h o 2 h (${formatHora12(horaInicio)}-${formatHora12(horaFin)})`,
     )
   }
   if (inicio % 60 !== 0) {
     // Solo horas EN PUNTO: con bloques de 60 min, un inicio a las 19:30 ocuparía
     // un bloque con ID de las 19:00 y se saldría de la rejilla.
     throw new ClaseInvalidaError(
-      `horaInicio debe ser una hora en punto (recibido "${horaInicio}")`,
+      `horaInicio debe ser una hora en punto (recibido ${formatHora12(horaInicio)})`,
     )
   }
-  if (inicio < HORA_APERTURA) {
-    throw new ClaseInvalidaError(
-      `La clase no puede empezar antes de ${aHoraHHmm(HORA_APERTURA)} (recibido "${horaInicio}")`,
-    )
-  }
-  if (fin > HORA_CIERRE) {
-    throw new ClaseInvalidaError(
-      `La clase no puede terminar después de ${aHoraHHmm(HORA_CIERRE)} (${horaInicio}-${horaFin})`,
-    )
-  }
+  validarFranjaEnHorario(horaInicio, horaFin, horario)
 
   const bloques = []
   for (let minuto = inicio; minuto < fin; minuto += MINUTOS_BLOQUE) {
@@ -364,6 +558,9 @@ const refBloque = (db, tenantId, bloqueId) => doc(db, 'academias', tenantId, 'bl
 const refAlumno = (db, tenantId, alumnoId) => doc(db, 'academias', tenantId, 'alumnos', alumnoId)
 const refProfesor = (db, tenantId, profesorId) =>
   doc(db, 'academias', tenantId, 'profesores', profesorId)
+const refSede = (db, tenantId, sedeId) => doc(db, 'academias', tenantId, 'sedes', sedeId)
+const refCancha = (db, tenantId, sedeId, canchaId) =>
+  doc(db, 'academias', tenantId, 'sedes', sedeId, 'canchas', canchaId)
 
 /* --------------------------------------------------------------------- */
 /* Lecturas                                                               */
@@ -405,26 +602,233 @@ export async function getSedes(db, tenantId) {
     )
 }
 
-/** Canchas activas de una sede. Acotado por sede + activa + limit. Orden client-side por `numero`. */
+/**
+ * Canchas de una sede, ordenadas por `numero` y después nombre. Acotado por
+ * sede + limit (50). El filtro de activa se hace en el cliente para que una
+ * cancha vieja SIN el campo `activa` siga contando como activa (fallback); las
+ * inactivas no llegan a la agenda.
+ */
 export async function getCanchas(db, tenantId, sedeId) {
-  const q = query(
-    collection(db, 'academias', tenantId, 'sedes', sedeId, 'canchas'),
-    where('activa', '==', true),
-    limit(20),
-  )
+  const q = query(collection(db, 'academias', tenantId, 'sedes', sedeId, 'canchas'), limit(50))
+  const snap = await getDocs(q)
+  return snap.docs
+    .map((d) => ({ id: d.id, ...d.data() }))
+    .filter((cancha) => cancha.activa !== false)
+    .sort(
+      (a, b) =>
+        (a.numero ?? 0) - (b.numero ?? 0) ||
+        String(nombreDeCancha(a, a.id)).localeCompare(String(nombreDeCancha(b, b.id)), 'es'),
+    )
+}
+
+/**
+ * Canchas de una sede INCLUYENDO las inactivas: es la lectura de la pantalla de
+ * Configuración, que necesita listarlas para reactivarlas. Acotado por sede +
+ * limit (50). Misma forma que `getCanchas` (sin el filtro de activa).
+ */
+export async function listarCanchas(db, tenantId, sedeId) {
+  const q = query(collection(db, 'academias', tenantId, 'sedes', sedeId, 'canchas'), limit(50))
   const snap = await getDocs(q)
   return snap.docs
     .map((d) => ({ id: d.id, ...d.data() }))
     .sort(
       (a, b) =>
         (a.numero ?? 0) - (b.numero ?? 0) ||
-        String(a.nombre ?? '').localeCompare(String(b.nombre ?? '')),
+        String(nombreDeCancha(a, a.id)).localeCompare(String(nombreDeCancha(b, b.id)), 'es'),
     )
+}
+
+/* --------------------------------------------------------------------- */
+/* Configuración de sedes y canchas                                        */
+/* --------------------------------------------------------------------- */
+
+/** Lee una sede. 1 lectura. */
+export async function getSede(db, tenantId, sedeId) {
+  const snap = await getDoc(refSede(db, tenantId, sedeId))
+  return snap.exists() ? { id: snap.id, ...snap.data() } : null
+}
+
+/** Falla con SedeInvalidaError si la sede no existe. 1 lectura. */
+async function exigirSede(db, tenantId, sedeId) {
+  const snap = await getDoc(refSede(db, tenantId, sedeId))
+  if (!snap.exists()) throw new SedeInvalidaError(`La sede "${sedeId}" no existe`)
+  return { id: snap.id, ...snap.data() }
+}
+
+/**
+ * Agrega una cancha a una sede. El nombre se normaliza
+ * (`normalizarNombreCancha`) y debe ser único dentro de la sede
+ * (case-insensitive); el `numero` se calcula como el siguiente entero.
+ * La cancha nace activa. Las canchas NUNCA se borran: se desactivan.
+ */
+export async function crearCancha(db, tenantId, sedeId, datos = {}, opciones = {}) {
+  const { uid = null, now = new Date() } = opciones
+  await exigirSede(db, tenantId, sedeId)
+  const existentes = await listarCanchas(db, tenantId, sedeId)
+  const nombre = validarNombreCancha(datos.nombre, existentes)
+  const numero = existentes.reduce((max, cancha) => Math.max(max, Number(cancha.numero) || 0), 0) + 1
+
+  const ref = doc(collection(db, 'academias', tenantId, 'sedes', sedeId, 'canchas'))
+  await setDoc(ref, {
+    nombre,
+    numero,
+    tipo: datos.tipo ?? null,
+    activa: true,
+    creadoPor: uid,
+    creadoEn: Timestamp.fromDate(now),
+  })
+  return { canchaId: ref.id }
+}
+
+/** Renombra una cancha. Mismas reglas de nombre que al crearla (normalizado y único en la sede). */
+export async function renombrarCancha(db, tenantId, sedeId, canchaId, nombre, opciones = {}) {
+  const { uid = null, now = new Date() } = opciones
+  const snap = await getDoc(refCancha(db, tenantId, sedeId, canchaId))
+  if (!snap.exists()) throw new SedeInvalidaError(`La cancha "${canchaId}" no existe`)
+  const existentes = await listarCanchas(db, tenantId, sedeId)
+  const nombreLimpio = validarNombreCancha(nombre, existentes, canchaId)
+  await updateDoc(refCancha(db, tenantId, sedeId, canchaId), {
+    nombre: nombreLimpio,
+    actualizadoPor: uid,
+    actualizadoEn: Timestamp.fromDate(now),
+  })
+  return { canchaId, nombre: nombreLimpio }
+}
+
+/**
+ * Activa o desactiva una cancha. Soft delete: el documento NUNCA se borra, así
+ * las clases que ya la usan quedan intactas.
+ *
+ * DESACTIVAR se rechaza mientras la cancha tenga clases pendientes —no
+ * canceladas y cuyo fin todavía no pasó, comparado contra `ahora`—: primero hay
+ * que cancelarlas o moverlas a otra cancha. Una clase ya terminada no bloquea,
+ * aunque siga sin cerrar o sin cobrar. Reactivar SIEMPRE se permite.
+ *
+ * Desactivada, la cancha no admite reservas NUEVAS ni reprogramaciones HACIA
+ * ella (lo validan `crearClase` y `reprogramarClase`).
+ */
+export async function cambiarActivaCancha(db, tenantId, sedeId, canchaId, activa, opciones = {}) {
+  const { uid = null, ahora = new Date() } = opciones
+  const now = opciones.now ?? ahora
+  const snap = await getDoc(refCancha(db, tenantId, sedeId, canchaId))
+  if (!snap.exists()) throw new SedeInvalidaError(`La cancha "${canchaId}" no existe`)
+  const valor = Boolean(activa)
+
+  if (!valor) {
+    const nombre = nombreDeCancha({ id: canchaId, ...snap.data() }, canchaId)
+    const pendientes = await contarClasesPendientesDeCancha(db, tenantId, sedeId, canchaId, ahora)
+    if (pendientes > 0) {
+      throw new SedeInvalidaError(
+        `No se puede desactivar ${nombre}: tiene ${pendientes} ` +
+          `${pendientes === 1 ? 'clase pendiente' : 'clases pendientes'}. ` +
+          'Cancélalas o muévelas a otra cancha primero.',
+      )
+    }
+  }
+
+  await updateDoc(refCancha(db, tenantId, sedeId, canchaId), {
+    activa: valor,
+    actualizadoPor: uid,
+    actualizadoEn: Timestamp.fromDate(now),
+  })
+  return { canchaId, activa: valor }
+}
+
+/**
+ * Cuenta las clases FUTURAS (fecha >= hoy local, nunca con `toISOString()`) no
+ * canceladas de una sede que quedarían fuera del horario propuesto. Acotado por
+ * tenant + sede + fecha + limit (el índice `clases: sedeId + fecha + horaInicio`
+ * cubre el prefijo sedeId + fecha); el filtro de estado y el de franja van en el
+ * cliente. `ahora` es inyectable.
+ */
+async function contarClasesFueraDeHorario(db, tenantId, sedeId, horario, ahora) {
+  const q = query(
+    collection(db, 'academias', tenantId, 'clases'),
+    where('sedeId', '==', sedeId),
+    where('fecha', '>=', fechaHoyLocal(ahora)),
+    limit(LIMITE_CLASES_HORARIO),
+  )
+  const snap = await getDocs(q)
+  let fuera = 0
+  for (const documento of snap.docs) {
+    const clase = documento.data()
+    if (clase.estado === 'cancelada') continue
+    const inicio = RE_HHMM.test(clase.horaInicio ?? '') ? aMinutos(clase.horaInicio) : null
+    const fin = RE_HHMM.test(clase.horaFin ?? '') ? aMinutos(clase.horaFin) : null
+    if (inicio === null || fin === null) continue
+    if (inicio < horario.apertura * 60 || fin > horario.cierre * 60) fuera += 1
+  }
+  return fuera
+}
+
+/**
+ * ¿La clase todavía no terminó en `ahora`? Se compara el FIN en hora LOCAL
+ * (nunca con `toISOString()`), con reloj inyectable. Una clase que termina
+ * EXACTAMENTE en `ahora` ya terminó. Las canceladas nunca cuentan y una clase
+ * con fecha u hora corruptas se ignora (igual que en `contarClasesFueraDeHorario`).
+ * Función pura: no toca Firestore.
+ */
+export function clasePendiente(clase, ahora = new Date()) {
+  if (clase?.estado === 'cancelada') return false
+  if (!RE_FECHA.test(clase?.fecha ?? '') || !RE_HHMM.test(clase?.horaFin ?? '')) return false
+  return instanteLocal(clase.fecha, clase.horaFin).getTime() > ahora.getTime()
+}
+
+/**
+ * Cuenta las clases PENDIENTES de una cancha: las no canceladas cuyo fin todavía
+ * no pasó (ver `clasePendiente`). Acotado por tenant + cancha + fecha (desde hoy
+ * local) + limit; el índice `clases: canchaId + fecha + horaInicio` cubre el
+ * prefijo canchaId + fecha. El estado y el reloj se filtran en el cliente.
+ *
+ * Una cancha de OTRA sede podría compartir el id del documento: las clases con
+ * un `sedeId` distinto se ignoran (las que no traen `sedeId`, de datos viejos,
+ * se cuentan igual).
+ */
+async function contarClasesPendientesDeCancha(db, tenantId, sedeId, canchaId, ahora) {
+  const q = query(
+    collection(db, 'academias', tenantId, 'clases'),
+    where('canchaId', '==', canchaId),
+    where('fecha', '>=', fechaHoyLocal(ahora)),
+    limit(LIMITE_CLASES_PENDIENTES),
+  )
+  const snap = await getDocs(q)
+  let pendientes = 0
+  for (const documento of snap.docs) {
+    const clase = documento.data()
+    if (clase.sedeId && clase.sedeId !== sedeId) continue
+    if (clasePendiente(clase, ahora)) pendientes += 1
+  }
+  return pendientes
+}
+
+/**
+ * Fija el horario de una sede (`{apertura, cierre}` en horas enteras 0-24, con
+ * cierre > apertura). Rechaza el cambio si deja FUERA a alguna clase futura no
+ * cancelada, con un mensaje que dice cuántas son.
+ */
+export async function setSedeHorario(db, tenantId, sedeId, horario, opciones = {}) {
+  const { uid = null, ahora = new Date() } = opciones
+  const now = opciones.now ?? ahora
+  await exigirSede(db, tenantId, sedeId)
+  const nuevo = validarHorario(horario)
+  const fuera = await contarClasesFueraDeHorario(db, tenantId, sedeId, nuevo, ahora)
+  if (fuera > 0) {
+    throw new SedeInvalidaError(
+      `No se puede cambiar el horario: ${fuera} clase(s) futura(s) quedarían fuera de ` +
+        `${formatHora12(nuevo.apertura * 60)} a ${formatHora12(nuevo.cierre * 60)}. ` +
+        'Reprograma o cancela esas clases primero.',
+    )
+  }
+  await updateDoc(refSede(db, tenantId, sedeId), {
+    horario: nuevo,
+    actualizadoPor: uid,
+    actualizadoEn: Timestamp.fromDate(now),
+  })
+  return { sedeId, horario: nuevo }
 }
 
 /** Estados admitidos por los filtros de listado. */
 export const ESTADOS_LISTA = ['activos', 'inactivos', 'todos']
-
 /** Tope duro de una página de `listarAlumnos`. */
 export const LIMITE_PAGINA_ALUMNOS = 100
 
@@ -897,10 +1301,10 @@ export async function crearClase(db, tenantId, datos, opciones = {}) {
   }
   validarCategoria(datos.categoria)
   validarCupo(datos.cupo)
-  // El horario se valida fuera de la transacción (es puro) y también el
-  // "no reservar en el pasado", que depende del reloj inyectado.
-  const bloques = bloquesDeClase(datos)
-  validarInicioNoPasado(datos.fecha, datos.horaInicio, ahora)
+  // La franja, los bloques y el "no reservar en el pasado" se validan DENTRO de
+  // la transacción: la franja ya no es global y necesita el horario de la sede
+  // (ver `horarioDeSede`). El orden importa: primero la franja (horario de la
+  // sede) y después el reloj, igual que en la reprogramación.
   const claseRef = claseId
     ? refClase(db, tenantId, claseId)
     : doc(collection(db, 'academias', tenantId, 'clases'))
@@ -909,9 +1313,10 @@ export async function crearClase(db, tenantId, datos, opciones = {}) {
   const alumnosIniciales = datos.alumnos ?? []
 
   // Referencias de sede, cancha y profesor para leer dentro de la transacción.
-  const sedeRef = doc(db, 'academias', tenantId, 'sedes', datos.sedeId)
-  const canchaRef = doc(db, 'academias', tenantId, 'sedes', datos.sedeId, 'canchas', datos.canchaId)
+  const sedeRef = refSede(db, tenantId, datos.sedeId)
+  const canchaRef = refCancha(db, tenantId, datos.sedeId, datos.canchaId)
   const profRef = refProfesor(db, tenantId, datos.profesorId)
+  let bloques = []
 
   await runTransaction(db, async (tx) => {
     // Todas las lecturas ANTES de cualquier escritura (requisito de las
@@ -924,13 +1329,13 @@ export async function crearClase(db, tenantId, datos, opciones = {}) {
       tx.get(canchaRef),
       tx.get(profRef),
     ])
-    if (!snapSede.exists() || snapSede.data().activa === false) {
+    if (!snapSede.exists() || !estaActivo(snapSede.data())) {
       throw new ClaseInvalidaError(`La sede "${datos.sedeId}" no existe o no está activa`)
     }
-    if (!snapCancha.exists() || snapCancha.data().activa === false) {
+    if (!snapCancha.exists() || !estaActivo(snapCancha.data())) {
       throw new ClaseInvalidaError(`La cancha "${datos.canchaId}" no existe o no está activa en la sede "${datos.sedeId}"`)
     }
-    if (!snapProfesor.exists() || snapProfesor.data().activo === false) {
+    if (!snapProfesor.exists() || !estaActivo(snapProfesor.data())) {
       throw new ClaseInvalidaError(`El profesor "${datos.profesorId}" no existe o no está activo`)
     }
     if (!(snapProfesor.data().sedes ?? []).includes(datos.sedeId)) {
@@ -938,6 +1343,11 @@ export async function crearClase(db, tenantId, datos, opciones = {}) {
         `El profesor "${datos.profesorId}" no está asignado a la sede "${datos.sedeId}"`,
       )
     }
+
+    // Franja + bloques con el horario REAL de la sede (fallback 07:00-23:00) y,
+    // recién después, el "no reservar en el pasado" (reloj inyectado).
+    bloques = bloquesDeClase(datos, horarioDeSede(snapSede.data()))
+    validarInicioNoPasado(datos.fecha, datos.horaInicio, ahora)
 
     const snapsBloque = await Promise.all(
       bloques.map((b) => tx.get(refBloque(db, tenantId, b.id))),
@@ -1102,10 +1512,38 @@ export async function reprogramarClase(db, tenantId, claseId, nuevoCambio = {}, 
       horaInicio: campo('horaInicio'),
       horaFin: campo('horaFin'),
     }
-    // Horario (puro) y "no se reprograma al pasado" (reloj inyectado).
-    const bloquesNuevos = bloquesDeClase(futura)
-    validarInicioNoPasado(futura.fecha, futura.horaInicio, ahora)
     const bloquesViejos = datos.bloques ?? []
+
+    // Sede, cancha y profesor DESTINO: existen y están activos (campo ausente =
+    // activo), y el profesor está asignado a la sede. La cancha inactiva rechaza
+    // la reprogramación HACIA ella; las clases que ya están en una cancha
+    // inactiva no se tocan.
+    const [snapSede, snapCancha, snapProfesor] = await Promise.all([
+      tx.get(refSede(db, tenantId, futura.sedeId)),
+      tx.get(refCancha(db, tenantId, futura.sedeId, futura.canchaId)),
+      tx.get(refProfesor(db, tenantId, futura.profesorId)),
+    ])
+    if (!snapSede.exists() || !estaActivo(snapSede.data())) {
+      throw new ClaseInvalidaError(`La sede "${futura.sedeId}" no existe o no está activa`)
+    }
+    if (!snapCancha.exists() || !estaActivo(snapCancha.data())) {
+      throw new ClaseInvalidaError(
+        `La cancha "${futura.canchaId}" no existe o no está activa en la sede "${futura.sedeId}"`,
+      )
+    }
+    if (!snapProfesor.exists() || !estaActivo(snapProfesor.data())) {
+      throw new ClaseInvalidaError(`El profesor "${futura.profesorId}" no existe o no está activo`)
+    }
+    if (!(snapProfesor.data().sedes ?? []).includes(futura.sedeId)) {
+      throw new ClaseInvalidaError(
+        `El profesor "${futura.profesorId}" no está asignado a la sede "${futura.sedeId}"`,
+      )
+    }
+
+    // Franja + bloques con el horario REAL de la sede destino y, recién
+    // después, el "no se reprograma al pasado" (reloj inyectado).
+    const bloquesNuevos = bloquesDeClase(futura, horarioDeSede(snapSede.data()))
+    validarInicioNoPasado(futura.fecha, futura.horaInicio, ahora)
 
     // Todas las lecturas antes de cualquier escritura.
     const snaps = await Promise.all(
@@ -1118,24 +1556,6 @@ export async function reprogramarClase(db, tenantId, claseId, nuevoCambio = {}, 
       (b, i) => snaps[i].exists() && snaps[i].data().claseId !== claseId,
     )
     if (ocupado) throw new SolapamientoError(ocupado)
-
-    // El profesor de la clase tiene que existir, estar activo y estar asignado
-    // a la sede de la clase. Los nombres denormalizados salen del documento.
-    const [snapSede, snapProfesor] = await Promise.all([
-      tx.get(doc(db, 'academias', tenantId, 'sedes', futura.sedeId)),
-      tx.get(refProfesor(db, tenantId, futura.profesorId)),
-    ])
-    if (!snapSede.exists() || snapSede.data().activa === false) {
-      throw new ClaseInvalidaError(`La sede "${futura.sedeId}" no existe o no está activa`)
-    }
-    if (!snapProfesor.exists() || snapProfesor.data().activo === false) {
-      throw new ClaseInvalidaError(`El profesor "${futura.profesorId}" no existe o no está activo`)
-    }
-    if (!(snapProfesor.data().sedes ?? []).includes(futura.sedeId)) {
-      throw new ClaseInvalidaError(
-        `El profesor "${futura.profesorId}" no está asignado a la sede "${futura.sedeId}"`,
-      )
-    }
 
     // Asignación de alumnos: si cambia la lista se valida (existen, activos,
     // sin duplicados, dentro del cupo); si solo cambia el cupo, se revisa que
@@ -1315,7 +1735,7 @@ export async function registrarAsistencia(db, tenantId, claseId, asistencias, op
         finFecha.setMinutes(finMinutos)
         if (ahora.getTime() < finFecha.getTime()) {
           throw new ClaseInvalidaError(
-            `La clase ${claseId} todavía no terminó (horaFin ${d.horaFin} el ${d.fecha})`,
+            `La clase ${claseId} todavía no terminó (horaFin ${formatHora12(d.horaFin)} el ${d.fecha})`,
           )
         }
       }
