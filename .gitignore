@@ -25,6 +25,10 @@ firebase-debug.log
 .emulator-data/
 emulator-export/
 firestore-export/
+firebase-export-*/
+
+# Arnés de tests (generado localmente)
+tests/.harness/
 
 # Variables de entorno (nunca commitear)
 .env
