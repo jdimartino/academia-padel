@@ -1,6 +1,7 @@
 import {
   estadoDe,
   estaSinCerrar,
+  etiquetaCategoriaGrupo,
   formatHora12,
   iniciales,
   rangoClase,
@@ -17,6 +18,7 @@ export default function ClassBlock({ clase, escala, minutoInicio, onSelect }) {
   if (!rango) return null
 
   const estado = estadoDe(clase.estado)
+  const grupo = etiquetaCategoriaGrupo(clase.categoriaGrupo)
   const alumnos = clase.alumnoNombres ?? []
   const sinCerrar = estaSinCerrar(clase)
   const top = (rango.inicio - minutoInicio) * escala
@@ -28,7 +30,7 @@ export default function ClassBlock({ clase, escala, minutoInicio, onSelect }) {
       className={`bloque bloque--${estado.tono}${sinCerrar ? ' bloque--sin-cerrar' : ''}`}
       style={{ top: `${top}px`, height: `${alto}px` }}
       onClick={() => onSelect(clase)}
-      aria-label={`${tituloClase(clase)}, ${formatHora12(clase.horaInicio)} a ${formatHora12(clase.horaFin)}, ${estado.label}${sinCerrar ? ', sin cerrar' : ''}`}
+      aria-label={`${tituloClase(clase)}, ${formatHora12(clase.horaInicio)} a ${formatHora12(clase.horaFin)}, ${estado.label}${grupo ? `, grupo ${grupo}` : ''}${sinCerrar ? ', sin cerrar' : ''}`}
     >
       {sinCerrar ? (
         <span
@@ -42,7 +44,10 @@ export default function ClassBlock({ clase, escala, minutoInicio, onSelect }) {
         {formatHora12(clase.horaInicio)}–{formatHora12(clase.horaFin)}
       </span>
       <span className="bloque__estado">{estado.label.toUpperCase()}</span>
-      <span className="bloque__titulo">{tituloClase(clase)}</span>
+      <span className="bloque__titulo">
+        {tituloClase(clase)}
+        {grupo ? <span className="bloque__grupo"> · {grupo}</span> : null}
+      </span>
       <span className="bloque__profe">{clase.profesorNombre}</span>
       {alumnos.length ? (
         <span className="bloque__avatares">

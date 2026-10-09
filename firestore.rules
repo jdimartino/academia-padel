@@ -124,6 +124,14 @@ service cloud.firestore {
         && horarioValido(horarioDe(data));
     }
 
+    // Categoría de grupo de una clase: opcional; si viene, es una de las tres
+    // permitidas (o null). Es distinta del nivel `categoria`.
+    function categoriaGrupoValida(data) {
+      return !data.keys().hasAny(['categoriaGrupo'])
+        || data.categoriaGrupo == null
+        || data.categoriaGrupo in ['infantil', 'junior', 'adulto'];
+    }
+
     match /academias/{tenantId} {
       allow read, write: if esAdmin(tenantId);
 
@@ -166,9 +174,13 @@ service cloud.firestore {
       }
 
       // La reserva, la reprogramación, la cancelación, la asistencia y el
-      // cierre los hace solo el administrador.
+      // cierre los hace solo el administrador. La categoría de grupo, si viene,
+      // tiene que ser una de las tres permitidas (el resto del contenido de la
+      // clase lo valida la capa de datos, que es la única que escribe acá).
       match /clases/{claseId} {
-        allow read, write: if esAdmin(tenantId);
+        allow read: if esAdmin(tenantId);
+        allow create, update: if esAdmin(tenantId) && categoriaGrupoValida(request.resource.data);
+        allow delete: if esAdmin(tenantId);
       }
 
       // Ocupación de 30 minutos de cancha o de profesor, con ID determinista

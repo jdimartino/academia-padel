@@ -2757,3 +2757,73 @@ describe('[F2] sedes: crear, renombrar, desactivar y reactivar', () => {
     )
   })
 })
+
+/* --------------------------------------------------------------------- */
+/* [F2] Categoría de grupo de la clase (distinta del nivel `categoria`)    */
+/* --------------------------------------------------------------------- */
+
+describe('[F2] categoría de grupo en la clase', () => {
+  it('crearClase guarda la categoría de grupo válida', async () => {
+    const { claseId } = await reservar({ categoriaGrupo: 'infantil' })
+    assert.equal((await getClase(adminDb, T1, claseId)).categoriaGrupo, 'infantil')
+  })
+
+  it('crearClase sin categoría de grupo la deja en null', async () => {
+    const { claseId } = await reservar()
+    assert.equal((await getClase(adminDb, T1, claseId)).categoriaGrupo, null)
+  })
+
+  it('crearClase con categoría de grupo inválida → ClaseInvalidaError', async () => {
+    for (const valor of ['juvenil', 'Infantil', 'adultos', 'niños', 7, {}]) {
+      await assert.rejects(
+        () => reservar({ categoriaGrupo: valor }),
+        (error) =>
+          error instanceof ClaseInvalidaError && /Categoría de grupo inválida/.test(error.message),
+        `debía rechazar ${JSON.stringify(valor)}`,
+      )
+    }
+    // Ningún rechazo escribió la clase.
+    assert.equal((await bloque(`traki_c1_${FECHA}_1800`)).exists(), false)
+  })
+
+  it('la categoría de grupo es un campo APARTE del nivel de la clase', async () => {
+    const { claseId } = await reservar({ categoria: '6a', categoriaGrupo: 'junior' })
+    const guardada = await getClase(adminDb, T1, claseId)
+    assert.equal(guardada.categoria, '6a')
+    assert.equal(guardada.categoriaGrupo, 'junior')
+  })
+
+  it('reprogramarClase cambia la categoría de grupo, la limpia con null y la valida', async () => {
+    const { claseId } = await reservar({ categoriaGrupo: 'infantil' })
+    await reprogramarClase(
+      adminDb,
+      T1,
+      claseId,
+      { categoriaGrupo: 'adulto' },
+      { uid: ADMIN, ahora: AHORA_RESERVA },
+    )
+    assert.equal((await getClase(adminDb, T1, claseId)).categoriaGrupo, 'adulto')
+
+    await reprogramarClase(
+      adminDb,
+      T1,
+      claseId,
+      { categoriaGrupo: null },
+      { uid: ADMIN, ahora: AHORA_RESERVA },
+    )
+    assert.equal((await getClase(adminDb, T1, claseId)).categoriaGrupo, null)
+
+    await assert.rejects(
+      () =>
+        reprogramarClase(
+          adminDb,
+          T1,
+          claseId,
+          { categoriaGrupo: 'juvenil' },
+          { uid: ADMIN, ahora: AHORA_RESERVA },
+        ),
+      (error) =>
+        error instanceof ClaseInvalidaError && /Categoría de grupo inválida/.test(error.message),
+    )
+  })
+})

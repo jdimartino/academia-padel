@@ -284,6 +284,26 @@ export function etiquetaCategoria(categoria) {
 }
 
 /*
+ * CATEGORÍA DE GRUPO de la clase (opcional y DISTINTA del nivel/categoría de
+ * arriba: Principiante, 7ª…1ª): infantil | junior | adulto, o `null` si no se
+ * indica. La valida la capa de datos (src/firebase/db.js) contra esta misma
+ * lista. Todavía no afecta precios.
+ */
+export const CATEGORIAS_GRUPO = ['infantil', 'junior', 'adulto']
+
+/** Única tabla de rótulos de categoría de grupo que ve el usuario. */
+const ETIQUETAS_CATEGORIA_GRUPO = {
+  infantil: 'Infantil',
+  junior: 'Junior',
+  adulto: 'Adulto',
+}
+
+export function etiquetaCategoriaGrupo(categoriaGrupo) {
+  if (!categoriaGrupo) return null
+  return ETIQUETAS_CATEGORIA_GRUPO[categoriaGrupo] ?? capitalizar(categoriaGrupo)
+}
+
+/*
  * Modalidad derivada del cupo (no es un campo aparte): una clase de una sola
  * plaza es Individual; con dos o más, Grupal.
  */

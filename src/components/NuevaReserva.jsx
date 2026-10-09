@@ -12,10 +12,12 @@ import {
 } from '../firebase/db'
 import {
   CATEGORIAS,
+  CATEGORIAS_GRUPO,
   DURACIONES_VALIDAS,
   aHoraHHmm,
   aMinutos,
   etiquetaCategoria,
+  etiquetaCategoriaGrupo,
   etiquetaDuracion,
   formatHora12,
   formatMinutos,
@@ -84,6 +86,9 @@ export default function NuevaReserva({
   )
   const [modalidad, setModalidad] = useState((clase?.cupo ?? 4) <= 1 ? 'Individual' : 'Grupal')
   const [categoria, setCategoria] = useState(clase?.categoria ?? '')
+  // Categoría de GRUPO (infantil | junior | adulto), opcional y distinta del
+  // nivel de `categoria`. Vacío = sin categoría de grupo (null).
+  const [categoriaGrupo, setCategoriaGrupo] = useState(clase?.categoriaGrupo ?? '')
   const [profesorId, setProfesorId] = useState(clase?.profesorId ?? null)
   const [profesores, setProfesores] = useState(null)
   const [alumnosSel, setAlumnosSel] = useState(() => {
@@ -107,6 +112,7 @@ export default function NuevaReserva({
       duracion,
       modalidad,
       categoria,
+      categoriaGrupo,
       profesorId,
       alumnos: alumnosSel.map((alumno) => alumno.id),
     }
@@ -277,6 +283,7 @@ export default function NuevaReserva({
         horaFin: aHoraHHmm(fin),
         cupo,
         categoria: categoria || null,
+        categoriaGrupo: categoriaGrupo || null,
         alumnos: alumnosSel.map((alumno) => alumno.id),
       }
       let claseId
@@ -419,6 +426,25 @@ export default function NuevaReserva({
             {CATEGORIAS.map((valor) => (
               <option key={valor} value={valor}>
                 {etiquetaCategoria(valor)}
+              </option>
+            ))}
+          </select>
+        </div>
+
+        <div className="form__field">
+          <label className="form__label" htmlFor="nr-categoria-grupo">
+            Categoría de grupo (opcional)
+          </label>
+          <select
+            className="form__input"
+            id="nr-categoria-grupo"
+            value={categoriaGrupo}
+            onChange={(e) => setCategoriaGrupo(e.target.value)}
+          >
+            <option value="">Sin categoría de grupo</option>
+            {CATEGORIAS_GRUPO.map((valor) => (
+              <option key={valor} value={valor}>
+                {etiquetaCategoriaGrupo(valor)}
               </option>
             ))}
           </select>

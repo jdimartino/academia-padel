@@ -260,6 +260,12 @@
   text-overflow: ellipsis;
 }
 
+/* Categoría de grupo de la clase (infantil/junior/adulto), dentro del título. */
+.bloque__grupo {
+  font-weight: 600;
+  opacity: 0.85;
+}
+
 .bloque__profe {
   font-size: 11px;
   line-height: 1.15;

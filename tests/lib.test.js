@@ -7,11 +7,13 @@
 import assert from 'node:assert/strict'
 import { describe, it } from 'node:test'
 import {
+  CATEGORIAS_GRUPO,
   contarSinCerrar,
   diaDeFecha,
   esHuecoReservable,
   estaSinCerrar,
   etiquetaCategoria,
+  etiquetaCategoriaGrupo,
   etiquetaDia,
   etiquetaDuracion,
   formatHora12,
@@ -503,6 +505,23 @@ describe('título de clase', () => {
   it('título = "Modalidad · Categoría" y solo modalidad sin categoría', () => {
     assert.equal(tituloClase({ cupo: 4, categoria: '6a' }), 'Grupal · 6ta')
     assert.equal(tituloClase({ cupo: 1, categoria: null }), 'Individual')
+  })
+
+  /*
+   * La categoría de GRUPO es un campo aparte del nivel: no cambia `tituloClase`,
+   * que sigue siendo "Modalidad · Categoría".
+   */
+  it('categoría de grupo: etiquetas y lista de valores válidos', () => {
+    assert.deepEqual(CATEGORIAS_GRUPO, ['infantil', 'junior', 'adulto'])
+    assert.equal(etiquetaCategoriaGrupo('infantil'), 'Infantil')
+    assert.equal(etiquetaCategoriaGrupo('junior'), 'Junior')
+    assert.equal(etiquetaCategoriaGrupo('adulto'), 'Adulto')
+    assert.equal(etiquetaCategoriaGrupo(null), null)
+    assert.equal(etiquetaCategoriaGrupo(''), null)
+  })
+
+  it('la categoría de grupo no toca el título de la clase', () => {
+    assert.equal(tituloClase({ cupo: 4, categoria: '6a', categoriaGrupo: 'infantil' }), 'Grupal · 6ta')
   })
 })
 

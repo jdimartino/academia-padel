@@ -148,6 +148,7 @@ async function crearClaseEnSeed(datos) {
     serieId: null,
     estado: datos.estado ?? 'reservada',
     categoria: datos.categoria ?? null,
+    categoriaGrupo: datos.categoriaGrupo ?? null,
     asistencias: datos.asistencias ?? [],
     alumnos,
     alumnoNombres,
@@ -726,10 +727,13 @@ async function main() {
     horaFin: '10:00',
     cupo: 4,
     categoria: '4a',
+    categoriaGrupo: 'adulto',
     alumnosIds: ['a1'],
     estado: 'reservada',
   })
 
+  // Reserva futura con categoría de grupo: la grilla la muestra como
+  // "Grupal · 6ta · Infantil" y el detalle trae la fila "Categoría de grupo".
   await crearClaseEnSeed({
     id: 'c1',
     sedeId: 'traki',
@@ -742,6 +746,7 @@ async function main() {
     horaFin: '11:00',
     cupo: 4,
     categoria: '6a',
+    categoriaGrupo: 'infantil',
     alumnosIds: ['a1'],
     estado: 'reservada',
   })
@@ -784,6 +789,7 @@ async function main() {
     horaFin: '13:00',
     cupo: 2,
     categoria: '5a',
+    categoriaGrupo: 'junior',
     alumnosIds: ['a1', 'a2'],
     estado: 'reservada',
   })

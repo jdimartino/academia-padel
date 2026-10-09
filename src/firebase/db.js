@@ -36,6 +36,7 @@ import {
 } from 'firebase/firestore'
 import {
   CATEGORIAS,
+  CATEGORIAS_GRUPO,
   DIAS_SEMANA,
   DURACIONES_VALIDAS,
   HORARIO_DEFAULT,
@@ -108,6 +109,7 @@ export const LIMITE_CLASES_PENDIENTES = 500
 /** Categorías válidas de una clase. Ver docs/modelo-datos.md §4. */
 export {
   CATEGORIAS,
+  CATEGORIAS_GRUPO,
   HORARIO_DEFAULT,
   HORARIO_SEMANA_DEFAULT,
   horarioDeSede,
@@ -148,6 +150,19 @@ function validarCategoria(categoria) {
   if (categoria != null && !CATEGORIAS.includes(categoria)) {
     throw new ClaseInvalidaError(
       `Categoría inválida "${categoria}". Permitidas: ${CATEGORIAS.join(', ')}`,
+    )
+  }
+}
+
+/**
+ * Valida la CATEGORÍA DE GRUPO de una clase (opcional): `infantil`, `junior` o
+ * `adulto`, o `null`/ausente si no se indica. Es un campo DISTINTO de
+ * `categoria` (el nivel: Principiante, 7ª…1ª) y todavía no afecta precios.
+ */
+function validarCategoriaGrupo(categoriaGrupo) {
+  if (categoriaGrupo != null && !CATEGORIAS_GRUPO.includes(categoriaGrupo)) {
+    throw new ClaseInvalidaError(
+      `Categoría de grupo inválida "${categoriaGrupo}". Permitidas: ${CATEGORIAS_GRUPO.join(', ')}`,
     )
   }
 }
@@ -1534,7 +1549,9 @@ export async function getClasesDeSedePorFecha(db, tenantId, sedeId, fecha) {
  * 7:30 a 9:00 (3 bloques) choca con una de 8:00 a 9:00 (2 bloques) y NO choca
  * con una de 9:00 a 10:00 (el borde exacto se toca, no se solapa).
  *
- * `datos` acepta los campos de `clases/{claseId}` (ver docs/modelo-datos.md §4).
+ * `datos` acepta los campos de `clases/{claseId}` (ver docs/modelo-datos.md §4),
+ * incluida `categoriaGrupo` (`infantil` | `junior` | `adulto` | `null`), que es
+ * DISTINTA del nivel `categoria`.
  * Las series fijas (`tipo: 'fija'`) NO están implementadas: sin definir.
  */
 export async function crearClase(db, tenantId, datos, opciones = {}) {
@@ -1547,6 +1564,7 @@ export async function crearClase(db, tenantId, datos, opciones = {}) {
     )
   }
   validarCategoria(datos.categoria)
+  validarCategoriaGrupo(datos.categoriaGrupo)
   validarCupo(datos.cupo)
   // La franja, los bloques y el "no reservar en el pasado" se validan DENTRO de
   // la transacción: la franja ya no es global y necesita el horario de la sede
@@ -1622,6 +1640,7 @@ export async function crearClase(db, tenantId, datos, opciones = {}) {
       serieId: null,
       estado: 'reservada',
       categoria: datos.categoria ?? null,
+      categoriaGrupo: datos.categoriaGrupo ?? null,
       asistencias: [],
       alumnos,
       alumnoNombres,
@@ -1717,7 +1736,8 @@ export async function cancelarClase(db, tenantId, claseId, opciones = {}) {
  * clase sobre sus propios huecos es válido).
  *
  * `nuevoCambio` trae solo los campos a cambiar (fecha, horaInicio, horaFin,
- * canchaId, sedeId, profesorId, …). Los que no vengan se conservan.
+ * canchaId, sedeId, profesorId, categoriaGrupo, …). Los que no vengan se
+ * conservan.
  */
 export async function reprogramarClase(db, tenantId, claseId, nuevoCambio = {}, opciones = {}) {
   const { uid = null, ahora = new Date() } = opciones
@@ -1730,6 +1750,7 @@ export async function reprogramarClase(db, tenantId, claseId, nuevoCambio = {}, 
     )
   }
   validarCategoria(nuevoCambio.categoria)
+  validarCategoriaGrupo(nuevoCambio.categoriaGrupo)
   if (nuevoCambio.cupo !== undefined) validarCupo(nuevoCambio.cupo)
   // La lista de alumnos no puede quedar vacía: una clase reprogramada sigue
   // necesitando al menos un alumno.
@@ -1863,6 +1884,7 @@ export async function reprogramarClase(db, tenantId, claseId, nuevoCambio = {}, 
       'horaFin',
       'cupo',
       'categoria',
+      'categoriaGrupo',
     ]) {
       if (nuevoCambio[clave] !== undefined) cambios[clave] = nuevoCambio[clave]
     }

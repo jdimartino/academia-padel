@@ -278,6 +278,7 @@ sin solapamientos.
 | `tipo` | string | `fija` (recurrente) \| `variable` |
 | `serieId` | string \| null | Une las clases fijas generadas de una serie |
 | `categoria` | string \| null | Opcional. Una de `principiante`, `7a`, `6a`, `5a`, `4a`, `3a`, `2a`, `1a`. Se muestra como "Principiante", "7ª" … "1ª". Validado en `crearClase`/`reprogramarClase`; `null` si no se definió. |
+| `categoriaGrupo` | string \| null | Opcional y **distinta** de `categoria` (el nivel): `infantil` \| `junior` \| `adulto`, o `null`. Validada en `crearClase`/`reprogramarClase` (y en firestore.rules); se muestra en la reserva y en el detalle de la clase. Todavía no afecta precios. |
 | `cupo` | number | |
 | `alumnos` | string[] | IDs de alumnos asignados. `crearClase`, `reprogramarClase` y `asignarAlumnos` los validan (existen, activos, sin duplicados, dentro del `cupo`). |
 | `asistencias` | map[] | `[{alumnoId, estado, motivo, registradoPor, registradoEn}]`. `estado` ∈ `presente` \| `ausente_avisada` \| `ausente_sin_aviso`; `motivo` opcional. |

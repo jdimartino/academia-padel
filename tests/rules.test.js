@@ -668,3 +668,35 @@ describe('8. Sedes y canchas: solo admin y validación de campos', () => {
     await assertFails(actualizarHorario(semana(), sedeRef(as(UID.profT1))))
   })
 })
+
+describe('9. Clase: categoría de grupo validada en las reglas', () => {
+  const claseRef = (db, claseId) => doc(db, 'academias', T1, 'clases', claseId)
+
+  it('administrador de t1 CREA una clase con categoriaGrupo válida → ALLOW', async () => {
+    await assertSucceeds(
+      setDoc(claseRef(as(UID.adminT1), 'cg-infantil'), clase({ categoriaGrupo: 'infantil' })),
+    )
+  })
+
+  it('categoriaGrupo null → ALLOW', async () => {
+    await assertSucceeds(
+      setDoc(claseRef(as(UID.adminT1), 'cg-null'), clase({ categoriaGrupo: null })),
+    )
+  })
+
+  it('administrador de t1 CREA una clase con categoriaGrupo inválida → DENY', async () => {
+    for (const valor of ['juvenil', 'Infantil', 'adultos', 'niños']) {
+      await assertFails(
+        setDoc(claseRef(as(UID.adminT1), `cg-malo-${valor}`), clase({ categoriaGrupo: valor })),
+      )
+    }
+  })
+
+  it('administrador de t1 ACTUALIZA una clase a una categoriaGrupo inválida → DENY', async () => {
+    await assertSucceeds(
+      setDoc(claseRef(as(UID.adminT1), 'cg-upd'), clase({ categoriaGrupo: 'junior' })),
+    )
+    await assertFails(updateDoc(claseRef(as(UID.adminT1), 'cg-upd'), { categoriaGrupo: 'juvenil' }))
+    await assertSucceeds(updateDoc(claseRef(as(UID.adminT1), 'cg-upd'), { categoriaGrupo: 'adulto' }))
+  })
+})

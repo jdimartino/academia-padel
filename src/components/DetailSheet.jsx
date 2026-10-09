@@ -5,7 +5,7 @@ import { db } from '../firebase/config'
 import { asignarAlumnos, cancelarClase, registrarAsistencia } from '../firebase/db'
 import useCierreSeguro from '../hooks/useCierreSeguro'
 import { CloseIcon } from './Icons'
-import { estadoDe, formatHora12, tituloClase } from '../lib/agenda'
+import { estadoDe, etiquetaCategoriaGrupo, formatHora12, tituloClase } from '../lib/agenda'
 import { hayCambios } from '../lib/avisos'
 import { formatearFechaLarga } from '../lib/fechas'
 import SelectorAlumnos from './SelectorAlumnos'
@@ -199,6 +199,12 @@ export default function DetailSheet({
           <dt>Profesor</dt>
           <dd>{clase.profesorNombre}</dd>
         </div>
+        {clase.categoriaGrupo ? (
+          <div className="sheet__fila">
+            <dt>Categoría de grupo</dt>
+            <dd>{etiquetaCategoriaGrupo(clase.categoriaGrupo)}</dd>
+          </div>
+        ) : null}
         <div className="sheet__fila">
           <dt>Alumnos</dt>
           <dd>
