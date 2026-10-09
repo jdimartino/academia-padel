@@ -47,19 +47,55 @@ service cloud.firestore {
     }
 
     // --- Configuración de sedes y canchas ---------------------------------
-    // El horario de una sede es {apertura, cierre} en HORAS enteras 0-24, con
-    // cierre > apertura. Ausente = default 07:00-23:00 de la capa de datos.
+    // El horario de una sede es POR DÍA DE LA SEMANA: un mapa con exactamente
+    // las claves '0' (lunes) … '6' (domingo) donde cada día es `null` (cerrado)
+    // o una franja {apertura, cierre} en MINUTOS múltiplos de 30, dentro de
+    // 0-1440 y con cierre > apertura. Ausente = default 07:00-23:00 de la capa
+    // de datos. Se sigue aceptando el formato VIEJO (un solo par de horas
+    // enteras 0-24) para no denegar la edición de una sede vieja: la capa de
+    // datos lo lee expandido a los 7 días y escribe siempre el formato nuevo.
+    function franjaValida(franja) {
+      return franja == null
+        || (franja is map
+            && franja.keys().hasOnly(['apertura', 'cierre'])
+            && franja.size() == 2
+            && franja.apertura is int
+            && franja.cierre is int
+            && franja.apertura >= 0
+            && franja.apertura % 30 == 0
+            && franja.cierre <= 1440
+            && franja.cierre % 30 == 0
+            && franja.cierre > franja.apertura);
+    }
+
+    function horarioSemanalValido(horario) {
+      return horario.keys().hasOnly(['0', '1', '2', '3', '4', '5', '6'])
+        && horario.size() == 7
+        && franjaValida(horario['0'])
+        && franjaValida(horario['1'])
+        && franjaValida(horario['2'])
+        && franjaValida(horario['3'])
+        && franjaValida(horario['4'])
+        && franjaValida(horario['5'])
+        && franjaValida(horario['6']);
+    }
+
+    function horarioHeredadoValido(horario) {
+      return horario.keys().hasOnly(['apertura', 'cierre'])
+        && horario.size() == 2
+        && horario.apertura is int
+        && horario.cierre is int
+        && horario.apertura >= 0
+        && horario.apertura <= 24
+        && horario.cierre >= 0
+        && horario.cierre <= 24
+        && horario.cierre > horario.apertura;
+    }
+
     function horarioValido(horario) {
       return horario == null
         || (horario is map
-            && horario.keys().hasOnly(['apertura', 'cierre'])
-            && horario.apertura is int
-            && horario.cierre is int
-            && horario.apertura >= 0
-            && horario.apertura <= 24
-            && horario.cierre >= 0
-            && horario.cierre <= 24
-            && horario.cierre > horario.apertura);
+            && (horarioSemanalValido(horario) || horarioHeredadoValido(horario)));
     }
 
     function horarioDe(data) {
@@ -79,6 +115,15 @@ service cloud.firestore {
         && (!data.keys().hasAny(['activa']) || data.activa is bool);
     }
 
+    // Una sede necesita nombre (mismas reglas que una cancha: no vacío y con
+    // tope de largo) y, si trae `activa`, tiene que ser booleana: así se cubren
+    // crear, renombrar y activar/desactivar.
+    function sedeValida(data) {
+      return nombreCanchaValido(data.nombre)
+        && (!data.keys().hasAny(['activa']) || data.activa is bool)
+        && horarioValido(horarioDe(data));
+    }
+
     match /academias/{tenantId} {
       allow read, write: if esAdmin(tenantId);
 
@@ -94,10 +139,12 @@ service cloud.firestore {
 
       match /sedes/{sedeId} {
         allow read: if esAdmin(tenantId);
-        // El admin es el único que escribe; si trae `horario`, se valida el
-        // rango (las sedes sin horario siguen permitidas: usan el default).
-        allow create, update: if esAdmin(tenantId)
-          && horarioValido(horarioDe(request.resource.data));
+        // El admin es el único que escribe. Nombre obligatorio (mismas reglas
+        // que el de una cancha) y horario por día válido si viene; las sedes sin
+        // `horario` siguen permitidas (usan el default 07:00-23:00). Las sedes
+        // se desactivan, no se borran, pero el borrado del admin se deja como
+        // estaba (igual que en las canchas).
+        allow create, update: if esAdmin(tenantId) && sedeValida(request.resource.data);
         allow delete: if esAdmin(tenantId);
 
         match /canchas/{canchaId} {

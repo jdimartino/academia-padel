@@ -8,13 +8,20 @@ import assert from 'node:assert/strict'
 import { describe, it } from 'node:test'
 import {
   contarSinCerrar,
+  diaDeFecha,
   esHuecoReservable,
   estaSinCerrar,
   etiquetaCategoria,
+  etiquetaDia,
   etiquetaDuracion,
   formatHora12,
+  formatMinutos,
+  franjaValida,
+  horarioDeSede,
+  horarioDelDia,
   huecoDeClic,
   huecoLibre,
+  lineasDeFranja,
   modalidadDeClase,
   opcionesDeInicio,
   rangoHorasAgenda,
@@ -24,8 +31,36 @@ import { aISO, hoyISO } from '../src/lib/fechas.js'
 // Helpers puros de db.js: no tocan Firestore, así que se prueban acá sin emulador.
 import { claveNombreCancha, normalizarNombreCancha } from '../src/firebase/db.js'
 
+/** Franja de un día en minutos, como la guarda una sede. */
+const dia = (aperturaHoras, cierreHoras) => ({
+  apertura: Math.round(aperturaHoras * 60),
+  cierre: Math.round(cierreHoras * 60),
+})
+
+/*
+ * Horario de una sede que ilustra la Fase 2: lunes a viernes 7:30-15:30, sábado
+ * 8:00-13:00 y domingo CERRADO. Claves 0 = lunes … 6 = domingo.
+ */
+const SEMANA_MEDIA_HORA = {
+  0: dia(7.5, 15.5),
+  1: dia(7.5, 15.5),
+  2: dia(7.5, 15.5),
+  3: dia(7.5, 15.5),
+  4: dia(7.5, 15.5),
+  5: dia(8, 13),
+  6: null,
+}
+
+/** Sede con ese horario, como la lee `horarioDeSede`. */
+const SEDE_MEDIA_HORA = { nombre: 'Traki', horario: SEMANA_MEDIA_HORA }
+
+// Fechas conocidas: 2026-11-14 sábado, 2026-11-15 domingo, 2026-11-16 lunes.
+const SABADO = '2026-11-14'
+const DOMINGO = '2026-11-15'
+const LUNES = '2026-11-16'
+
 describe('horas de inicio de una reserva', () => {
-  it('cada 30 min de 07:00 a 23:00 según la duración', () => {
+  it('cada 30 min de 07:00 a 23:00 según la duración (franja default)', () => {
     const unaHora = opcionesDeInicio(60)
     const horaYMedia = opcionesDeInicio(90)
     const dosHoras = opcionesDeInicio(120)
@@ -54,9 +89,39 @@ describe('horas de inicio de una reserva', () => {
     assert.equal(horaYMedia[1], '07:30')
   })
 
+  it('una sede que abre y cierra a y media: 7:30-15:30', () => {
+    const franja = { apertura: 450, cierre: 930 }
+    const unaHora = opcionesDeInicio(60, franja)
+    // La grilla arranca en la apertura EXACTA y el último inicio cabe antes del
+    // cierre exacto.
+    assert.equal(unaHora[0], '07:30')
+    assert.equal(unaHora[1], '08:00')
+    assert.equal(unaHora[unaHora.length - 1], '14:30')
+    assert.ok(!unaHora.includes('07:00'))
+    assert.ok(!unaHora.includes('15:00'))
+  })
+
+  it('una clase de 90 min que no cabe antes del cierre no se ofrece', () => {
+    // Con cierre 15:30 el último inicio de 90 min es 14:00 (termina 15:30).
+    const horaYMedia = opcionesDeInicio(90, { apertura: 450, cierre: 930 })
+    assert.equal(horaYMedia[0], '07:30')
+    assert.equal(horaYMedia[horaYMedia.length - 1], '14:00')
+    assert.ok(!horaYMedia.includes('14:30'))
+    // Y con 2 h el último es 13:30.
+    const dosHoras = opcionesDeInicio(120, { apertura: 450, cierre: 930 })
+    assert.equal(dosHoras[dosHoras.length - 1], '13:30')
+    assert.ok(!dosHoras.includes('14:00'))
+  })
+
+  it('un día CERRADO no ofrece ninguna hora de inicio', () => {
+    assert.deepEqual(opcionesDeInicio(60, null), [])
+    assert.deepEqual(opcionesDeInicio(90, null), [])
+    assert.deepEqual(opcionesDeInicio(60, null, [{ estado: 'reservada', horaInicio: '08:00', horaFin: '09:00' }]), [])
+  })
+
   it('cerca del cierre, una duración de 90 min ya no ofrece el inicio que se pasa', () => {
     // Sede que cierra a las 20:00: con 90 min el último inicio es 18:30.
-    const horaYMedia = opcionesDeInicio(90, { apertura: 9, cierre: 20 })
+    const horaYMedia = opcionesDeInicio(90, { apertura: 540, cierre: 1200 })
     assert.equal(horaYMedia[0], '09:00')
     assert.equal(horaYMedia[horaYMedia.length - 1], '18:30')
     assert.ok(!horaYMedia.includes('19:00'))
@@ -69,13 +134,13 @@ describe('horas de inicio de una reserva', () => {
     // 18:00-19:00 ocupada: con 1 h no se puede empezar 18:00 ni 18:30, pero sí
     // 19:00 (borde exacto: no se solapa).
     const ocupadas = [{ estado: 'reservada', horaInicio: '18:00', horaFin: '19:00' }]
-    const unaHora = opcionesDeInicio(60, { apertura: 7, cierre: 23 }, ocupadas)
+    const unaHora = opcionesDeInicio(60, { apertura: 420, cierre: 1380 }, ocupadas)
     assert.ok(!unaHora.includes('18:00'))
     assert.ok(!unaHora.includes('18:30'))
     assert.ok(unaHora.includes('19:00'))
     assert.ok(unaHora.includes('17:00'))
     // Con 90 min, 17:30-19:00 tampoco entra, y 17:00-18:30 tampoco (pisa 18:00).
-    const horaYMedia = opcionesDeInicio(90, { apertura: 7, cierre: 23 }, ocupadas)
+    const horaYMedia = opcionesDeInicio(90, { apertura: 420, cierre: 1380 }, ocupadas)
     assert.ok(!horaYMedia.includes('17:30'))
     assert.ok(!horaYMedia.includes('17:00'))
     // 16:30-18:00 termina justo cuando la otra empieza: sí entra.
@@ -86,7 +151,7 @@ describe('horas de inicio de una reserva', () => {
 
   it('una clase cancelada no descarta ninguna hora de inicio', () => {
     const ocupadas = [{ estado: 'cancelada', horaInicio: '18:00', horaFin: '19:00' }]
-    assert.ok(opcionesDeInicio(60, { apertura: 7, cierre: 23 }, ocupadas).includes('18:00'))
+    assert.ok(opcionesDeInicio(60, { apertura: 420, cierre: 1380 }, ocupadas).includes('18:00'))
   })
 
   it('sin duración válida no ofrece ninguna hora', () => {
@@ -94,20 +159,28 @@ describe('horas de inicio de una reserva', () => {
     assert.deepEqual(opcionesDeInicio(-60), [])
   })
 
-  it('con el horario de la sede, la franja arranca en la apertura y cierra en el cierre', () => {
-    const unaHora = opcionesDeInicio(60, { apertura: 9, cierre: 20 })
+  it('con el horario del día, la franja arranca en la apertura y cierra en el cierre', () => {
+    const unaHora = opcionesDeInicio(60, { apertura: 540, cierre: 1200 })
     assert.equal(unaHora[0], '09:00')
     assert.equal(unaHora[unaHora.length - 1], '19:00')
 
-    const dosHoras = opcionesDeInicio(120, { apertura: 9, cierre: 20 })
+    const dosHoras = opcionesDeInicio(120, { apertura: 540, cierre: 1200 })
     assert.equal(dosHoras[0], '09:00')
     assert.equal(dosHoras[dosHoras.length - 1], '18:00')
 
-    // Cierre 24: el formato HH:mm no expresa las 24:00, así que la última
-    // hora de inicio sigue siendo la que termina a las 23:00.
-    const hastaMedianoche = opcionesDeInicio(60, { apertura: 0, cierre: 24 })
+    // Cierre 24:00: el formato HH:mm no expresa las 24:00, así que la última
+    // hora de inicio es la que termina a las 23:30.
+    const hastaMedianoche = opcionesDeInicio(60, { apertura: 0, cierre: 1440 })
     assert.equal(hastaMedianoche[0], '00:00')
-    assert.equal(hastaMedianoche[hastaMedianoche.length - 1], '22:00')
+    assert.equal(hastaMedianoche[hastaMedianoche.length - 1], '22:30')
+  })
+
+  it('una franja ilegible cae al default 07:00-23:00', () => {
+    for (const franjaMala of [undefined, {}, { apertura: '9', cierre: 20 }, { apertura: 20, cierre: 8 }, 7]) {
+      const unaHora = opcionesDeInicio(60, franjaMala)
+      assert.equal(unaHora[0], '07:00', JSON.stringify(franjaMala))
+      assert.equal(unaHora[unaHora.length - 1], '22:00', JSON.stringify(franjaMala))
+    }
   })
 })
 
@@ -127,8 +200,9 @@ describe('etiqueta de duración', () => {
 })
 
 /*
- * Rango vertical de la grilla de la agenda: el horario de la sede (apertura →
- * min(cierre, 23)) extendido para que ninguna clase NO cancelada quede fuera.
+ * Rango vertical de la grilla de la agenda, EN MINUTOS: la franja del día
+ * (apertura → min(cierre, 23:30)) extendida para que ninguna clase NO cancelada
+ * quede fuera.
  */
 describe('rango de horas de la agenda', () => {
   const claseEn = (horaInicio, horaFin, extra = {}) => ({
@@ -138,47 +212,84 @@ describe('rango de horas de la agenda', () => {
     ...extra,
   })
 
-  it('sin clases, el rango es el de la sede y sin horario cae al default 7-23', () => {
-    assert.deepEqual(rangoHorasAgenda({ apertura: 7, cierre: 23 }, []), {
-      horaInicio: 7,
-      horaFin: 23,
+  it('sin clases, el rango es el del día y sin franja cae al default 7-23', () => {
+    assert.deepEqual(rangoHorasAgenda({ apertura: 420, cierre: 1380 }, []), {
+      minutoInicio: 420,
+      minutoFin: 1380,
     })
-    assert.deepEqual(rangoHorasAgenda(null, []), { horaInicio: 7, horaFin: 23 })
+    assert.deepEqual(rangoHorasAgenda(undefined, []), { minutoInicio: 420, minutoFin: 1380 })
   })
 
-  it('sigue la apertura y el cierre de la sede (9-20)', () => {
-    assert.deepEqual(rangoHorasAgenda({ apertura: 9, cierre: 20 }, []), {
-      horaInicio: 9,
-      horaFin: 20,
+  it('sigue la apertura y el cierre del día (9-20)', () => {
+    assert.deepEqual(rangoHorasAgenda({ apertura: 540, cierre: 1200 }, []), {
+      minutoInicio: 540,
+      minutoFin: 1200,
     })
   })
 
-  it('con cierre 24 el fin efectivo es 23 (la última clase termina a las 23:00)', () => {
-    assert.deepEqual(rangoHorasAgenda({ apertura: 7, cierre: 24 }, []), {
-      horaInicio: 7,
-      horaFin: 23,
+  it('la grilla arranca y termina en la media hora exacta (7:30-15:30)', () => {
+    assert.deepEqual(rangoHorasAgenda({ apertura: 450, cierre: 930 }, []), {
+      minutoInicio: 450,
+      minutoFin: 930,
+    })
+    // Las líneas van cada 30 min desde la apertura, con la media hora marcada.
+    const lineas = lineasDeFranja({ minutoInicio: 450, minutoFin: 930 })
+    assert.equal(lineas[0].minuto, 450)
+    assert.equal(lineas[0].horaEntera, false)
+    assert.equal(lineas[1].minuto, 480)
+    assert.equal(lineas[1].horaEntera, true)
+    assert.equal(lineas[lineas.length - 1].minuto, 930)
+  })
+
+  it('con cierre 24:00 el fin efectivo es 23:30 (último fin expresable)', () => {
+    assert.deepEqual(rangoHorasAgenda({ apertura: 420, cierre: 1440 }, []), {
+      minutoInicio: 420,
+      minutoFin: 1410,
+    })
+  })
+
+  it('un día CERRADO no tiene franja: dibuja el default y no agranda por clases', () => {
+    assert.deepEqual(rangoHorasAgenda(null, []), { minutoInicio: 420, minutoFin: 1380 })
+  })
+
+  it('una clase guardada en un día CERRADO igual se dibuja (nunca queda invisible)', () => {
+    assert.deepEqual(rangoHorasAgenda(null, [claseEn('09:00', '10:00')]), {
+      minutoInicio: 420,
+      minutoFin: 1380,
+    })
+    // Una clase fuera del default sí agranda el rango aunque el día esté cerrado.
+    assert.deepEqual(rangoHorasAgenda(null, [claseEn('06:00', '07:00')]), {
+      minutoInicio: 360,
+      minutoFin: 1380,
     })
   })
 
   it('una clase de 21:00 a 22:00 adentro del rango default no lo agranda', () => {
-    assert.deepEqual(rangoHorasAgenda({ apertura: 7, cierre: 23 }, [claseEn('21:00', '22:00')]), {
-      horaInicio: 7,
-      horaFin: 23,
+    assert.deepEqual(rangoHorasAgenda({ apertura: 420, cierre: 1380 }, [claseEn('21:00', '22:00')]), {
+      minutoInicio: 420,
+      minutoFin: 1380,
     })
   })
 
   it('una clase a las 07:00 con apertura 9 extiende el inicio', () => {
-    assert.deepEqual(rangoHorasAgenda({ apertura: 9, cierre: 20 }, [claseEn('07:00', '08:00')]), {
-      horaInicio: 7,
-      horaFin: 20,
+    assert.deepEqual(rangoHorasAgenda({ apertura: 540, cierre: 1200 }, [claseEn('07:00', '08:00')]), {
+      minutoInicio: 420,
+      minutoFin: 1200,
     })
   })
 
   it('una clase que termina después del cierre extiende el fin', () => {
-    assert.deepEqual(rangoHorasAgenda({ apertura: 9, cierre: 20 }, [claseEn('20:00', '21:00')]), {
-      horaInicio: 9,
-      horaFin: 21,
+    assert.deepEqual(rangoHorasAgenda({ apertura: 540, cierre: 1200 }, [claseEn('20:00', '21:00')]), {
+      minutoInicio: 540,
+      minutoFin: 1260,
     })
+  })
+
+  it('un inicio a y media fuera de la franja redondea hacia afuera al bloque', () => {
+    assert.deepEqual(
+      rangoHorasAgenda({ apertura: 540, cierre: 1200 }, [claseEn('08:30', '09:30')]),
+      { minutoInicio: 510, minutoFin: 1200 },
+    )
   })
 
   it('una clase cancelada fuera del rango NO lo extiende', () => {
@@ -186,39 +297,147 @@ describe('rango de horas de la agenda', () => {
       claseEn('07:00', '08:00', { estado: 'cancelada' }),
       claseEn('21:00', '22:00', { estado: 'cancelada' }),
     ]
-    assert.deepEqual(rangoHorasAgenda({ apertura: 9, cierre: 20 }, canceladas), {
-      horaInicio: 9,
-      horaFin: 20,
+    assert.deepEqual(rangoHorasAgenda({ apertura: 540, cierre: 1200 }, canceladas), {
+      minutoInicio: 540,
+      minutoFin: 1200,
     })
   })
 
   it('horario faltante o corrupto → default 7-23', () => {
     const corruptos = [
       undefined,
-      null,
       {},
       { apertura: '9', cierre: 20 },
       { apertura: 20, cierre: 8 },
-      { apertura: 7, cierre: 25 },
-      { apertura: -1, cierre: 20 },
+      { apertura: 420, cierre: 1500 },
+      { apertura: -30, cierre: 1200 },
       7,
       'x',
     ]
-    for (const horario of corruptos) {
+    for (const franjaMala of corruptos) {
       assert.deepEqual(
-        rangoHorasAgenda(horario, []),
-        { horaInicio: 7, horaFin: 23 },
-        `horario: ${JSON.stringify(horario)}`,
+        rangoHorasAgenda(franjaMala, []),
+        { minutoInicio: 420, minutoFin: 1380 },
+        `franja: ${JSON.stringify(franjaMala)}`,
       )
     }
   })
 
   it('ignora una clase con horas corruptas (no rompe la grilla)', () => {
     const rotas = [claseEn('25:00', '26:00'), claseEn(null, null), claseEn('20:00', '19:00')]
-    assert.deepEqual(rangoHorasAgenda({ apertura: 9, cierre: 20 }, rotas), {
-      horaInicio: 9,
-      horaFin: 20,
+    assert.deepEqual(rangoHorasAgenda({ apertura: 540, cierre: 1200 }, rotas), {
+      minutoInicio: 540,
+      minutoFin: 1200,
     })
+  })
+})
+
+/*
+ * Modelo del horario de una sede: mapa de 7 días (0 = lunes … 6 = domingo) con
+ * la franja del día en MINUTOS o `null` (cerrado). Compatibilidad con el formato
+ * viejo (un par de horas enteras) y default 07:00-23:00.
+ */
+describe('horario de la sede por día de la semana', () => {
+  it('acepta el formato nuevo tal cual (con días cerrados)', () => {
+    const semana = horarioDeSede(SEDE_MEDIA_HORA)
+    assert.deepEqual(semana[0], { apertura: 450, cierre: 930 })
+    assert.equal(semana[6], null)
+    assert.deepEqual(semana[5], { apertura: 480, cierre: 780 })
+  })
+
+  it('expande el formato VIEJO de horas enteras a los 7 días', () => {
+    const semana = horarioDeSede({ horario: { apertura: 8, cierre: 20 } })
+    for (const diaSemana of [0, 1, 2, 3, 4, 5, 6]) {
+      assert.deepEqual(semana[diaSemana], { apertura: 480, cierre: 1200 })
+    }
+    // Con cierre 24 el formato viejo equivalía a medianoche (1440).
+    assert.deepEqual(horarioDeSede({ horario: { apertura: 0, cierre: 24 } })[0], {
+      apertura: 0,
+      cierre: 1440,
+    })
+  })
+
+  it('sin horario o con datos corruptos cae al default 07:00-23:00 los 7 días', () => {
+    const corruptos = [
+      undefined,
+      {},
+      { horario: null },
+      { horario: { apertura: '8', cierre: 20 } },
+      { horario: { apertura: 20, cierre: 8 } },
+      { horario: { 0: { apertura: 450, cierre: 930 } } },
+      { horario: { 0: { apertura: 450, cierre: 930 }, 1: null } },
+      { horario: { 0: { apertura: 435, cierre: 930 }, 1: null, 2: null, 3: null, 4: null, 5: null, 6: null } },
+    ]
+    for (const sede of corruptos) {
+      const semana = horarioDeSede(sede)
+      for (const diaSemana of [0, 1, 2, 3, 4, 5, 6]) {
+        assert.deepEqual(semana[diaSemana], { apertura: 420, cierre: 1380 }, JSON.stringify(sede))
+      }
+    }
+  })
+
+  it('horarioDelDia devuelve la franja del día de la fecha, o null si está cerrado', () => {
+    const semana = SEMANA_MEDIA_HORA
+    assert.deepEqual(horarioDelDia(LUNES, semana), { apertura: 450, cierre: 930 })
+    assert.deepEqual(horarioDelDia(SABADO, semana), { apertura: 480, cierre: 780 })
+    assert.equal(horarioDelDia(DOMINGO, semana), null)
+    // Una fecha inválida no inventa un día.
+    assert.equal(horarioDelDia('2026-02-31', semana), null)
+    assert.equal(horarioDelDia(null, semana), null)
+  })
+
+  it('una sede con horarios distintos entre semana y fin de semana', () => {
+    const semana = horarioDeSede(SEDE_MEDIA_HORA)
+    const lunes = horarioDelDia(LUNES, semana)
+    const sabado = horarioDelDia(SABADO, semana)
+    assert.notDeepEqual(lunes, sabado)
+    // El lunes se puede reservar a las 7:30; el sábado, no (abre 8:00).
+    assert.ok(opcionesDeInicio(60, lunes).includes('07:30'))
+    assert.ok(!opcionesDeInicio(60, sabado).includes('07:30'))
+    // El domingo está cerrado: no hay huecos.
+    assert.deepEqual(opcionesDeInicio(60, horarioDelDia(DOMINGO, semana)), [])
+  })
+
+  it('diaDeFecha usa 0 = lunes … 6 = domingo con la fecha LOCAL', () => {
+    assert.equal(diaDeFecha(LUNES), 0)
+    assert.equal(diaDeFecha(SABADO), 5)
+    assert.equal(diaDeFecha(DOMINGO), 6)
+    assert.equal(diaDeFecha('2026-11-13'), 4)
+    assert.equal(diaDeFecha('2026-02-31'), null)
+    assert.equal(diaDeFecha('15/11/2026'), null)
+    assert.equal(diaDeFecha(null), null)
+  })
+
+  it('etiquetaDia rotula el día en el mismo orden del modelo', () => {
+    assert.equal(etiquetaDia(0), 'Lunes')
+    assert.equal(etiquetaDia(5), 'Sábado')
+    assert.equal(etiquetaDia(6), 'Domingo')
+    assert.equal(etiquetaDia(7), '')
+  })
+
+  it('franjaValida acepta solo minutos múltiplos de 30 dentro de 0-1440 con cierre > apertura', () => {
+    assert.deepEqual(franjaValida({ apertura: 450, cierre: 930 }), { apertura: 450, cierre: 930 })
+    assert.deepEqual(franjaValida({ apertura: 0, cierre: 1440 }), { apertura: 0, cierre: 1440 })
+    for (const mala of [
+      { apertura: 435, cierre: 930 }, // 7:15
+      { apertura: 450, cierre: 945 },
+      { apertura: 930, cierre: 930 },
+      { apertura: 930, cierre: 450 },
+      { apertura: -30, cierre: 930 },
+      { apertura: 0, cierre: 1470 },
+      { apertura: '450', cierre: 930 },
+      null,
+    ]) {
+      assert.equal(franjaValida(mala), null, JSON.stringify(mala))
+    }
+  })
+
+  it('formatMinutos muestra las medias horas en 12 h', () => {
+    assert.equal(formatMinutos(450), '7:30 AM')
+    assert.equal(formatMinutos(930), '3:30 PM')
+    assert.equal(formatMinutos(0), '12:00 AM')
+    assert.equal(formatMinutos(1440), '12:00 AM')
+    assert.equal(formatMinutos(1290), '9:30 PM')
   })
 })
 
@@ -406,7 +625,7 @@ describe('claveNombreCancha (unicidad)', () => {
  * reserva nueva (cancha + hora, en formato interno de 24 h).
  */
 describe('hueco de clic en la grilla', () => {
-  const rango = { horaInicio: 9, horaFin: 20 }
+  const rango = { minutoInicio: 540, minutoFin: 1200 }
   const clic = (minutos) =>
     huecoDeClic({ canchaId: 'c2', minutosDesdeInicioGrilla: minutos, rango })
 
@@ -428,13 +647,25 @@ describe('hueco de clic en la grilla', () => {
     assert.deepEqual(clic((18 - 9) * 60 - 1), { canchaId: 'c2', horaInicio: '17:30' })
   })
 
+  it('la primera fila es la apertura EXACTA (grilla 7:30-15:30)', () => {
+    const rangoMedia = { minutoInicio: 450, minutoFin: 930 }
+    assert.deepEqual(
+      huecoDeClic({ canchaId: 'c2', minutosDesdeInicioGrilla: 0, rango: rangoMedia }),
+      { canchaId: 'c2', horaInicio: '07:30' },
+    )
+    assert.deepEqual(
+      huecoDeClic({ canchaId: 'c2', minutosDesdeInicioGrilla: 30, rango: rangoMedia }),
+      { canchaId: 'c2', horaInicio: '08:00' },
+    )
+  })
+
   it('primera hora y borde de cierre de la franja 9 AM-8 PM', () => {
     assert.deepEqual(clic(0), { canchaId: 'c2', horaInicio: '09:00' })
     // Última hora que admite una reserva de 1 h en esa franja.
     assert.deepEqual(clic((19 - 9) * 60), { canchaId: 'c2', horaInicio: '19:00' })
     // El borde de cierre no admite clase: no está entre las horas del formulario.
     assert.deepEqual(clic((20 - 9) * 60), { canchaId: 'c2', horaInicio: '20:00' })
-    assert.ok(!opcionesDeInicio(60, { apertura: 9, cierre: 20 }).includes('20:00'))
+    assert.ok(!opcionesDeInicio(60, { apertura: 540, cierre: 1200 }).includes('20:00'))
   })
 
   it('conserva la cancha del clic', () => {

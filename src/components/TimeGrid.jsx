@@ -1,11 +1,13 @@
 import { useMemo } from 'react'
 import ClassBlock from './ClassBlock'
 import {
+  HORARIO_DEFAULT,
   MINUTOS_BLOQUE,
   aHoraHHmm,
   esHuecoReservable,
   formatHora12,
   horarioDeSede,
+  horarioDelDia,
   huecoDeClic,
   huecoLibre,
   lineasDeFranja,
@@ -29,25 +31,36 @@ export default function TimeGrid({
   onSelectHueco = null,
 }) {
   /*
-   * Rango vertical de la grilla: sale del horario de la sede SELECCIONADA
-   * (`sede.horario`, con el default 07-23 si falta) y se agranda para incluir
-   * cualquier clase no cancelada que quede fuera, así una clase guardada nunca
-   * se dibuja fuera de la grilla (ver `rangoHorasAgenda`). Se recalcula al
-   * cambiar de sede o de día/semana. Ya no es la franja fija 07-21.
+   * Horario de la sede PARA EL DÍA que se está viendo (`horarioDelDia`): arranca
+   * en la apertura exacta (puede ser a y media) y termina en el cierre exacto.
+   * `null` = sede cerrada ese día (aviso + ningún hueco). Sin fecha se usa el
+   * default 07:00-23:00 para no inventar un cierre.
    */
-  const rango = useMemo(() => rangoHorasAgenda(sede?.horario, clases), [sede, clases])
-  const minutoInicio = rango.horaInicio * 60
-  const alto = (rango.horaFin - rango.horaInicio) * 60 * escala
+  const franja = useMemo(
+    () => (fecha ? horarioDelDia(fecha, horarioDeSede(sede)) : HORARIO_DEFAULT),
+    [fecha, sede],
+  )
+  const cerrada = franja === null
+
+  /*
+   * Rango vertical de la grilla, en minutos: sale del horario del día y se
+   * agranda para incluir cualquier clase no cancelada que quede fuera, así una
+   * clase guardada nunca se dibuja fuera de la grilla (ver `rangoHorasAgenda`).
+   */
+  const rango = useMemo(() => rangoHorasAgenda(franja, clases), [franja, clases])
+  const minutoInicio = rango.minutoInicio
+  const alto = (rango.minutoFin - rango.minutoInicio) * escala
   const lineas = lineasDeFranja(rango)
 
   /*
-   * Bloques de inicio que admite una reserva de 1 h en la sede: la última hora
-   * del rango es el borde de cierre y no admite clase. Es una lista de "HH:mm"
-   * cada MINUTOS_BLOQUE, no solo horas en punto.
+   * Bloques de inicio que admite una reserva de 1 h ese día: la última fila del
+   * rango es el borde de cierre y no admite clase. Con el día cerrado la lista
+   * queda vacía y no hay ninguna celda clicable. Es una lista de "HH:mm" cada
+   * MINUTOS_BLOQUE, no solo horas en punto.
    */
   const iniciosReservables = useMemo(
-    () => new Set(opcionesDeInicio(60, horarioDeSede(sede))),
-    [sede],
+    () => new Set(opcionesDeInicio(60, franja)),
+    [franja],
   )
 
   /*
@@ -58,7 +71,7 @@ export default function TimeGrid({
   const bloquesDeGrilla = useMemo(
     () =>
       lineas
-        .filter((linea) => linea.minuto < rango.horaFin * 60)
+        .filter((linea) => linea.minuto < rango.minutoFin)
         .map((linea) => {
           const desde = linea.minuto - minutoInicio
           const hueco = huecoDeClic({
@@ -96,6 +109,11 @@ export default function TimeGrid({
 
   return (
     <section className="grid-panel glass" aria-label="Grilla horaria">
+      {cerrada ? (
+        <p className="aviso" role="status">
+          Sede cerrada este día. Elige otro día o cambia el horario en Configuración.
+        </p>
+      ) : null}
       <div className="grid-scroll">
         <div className="grid" style={{ '--ncanchas': canchas.length || 1 }}>
           <div className="grid__corner" />

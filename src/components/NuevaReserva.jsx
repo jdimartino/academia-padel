@@ -6,6 +6,7 @@ import {
   crearClase,
   getProfesores,
   horarioDeSede,
+  horarioDelDia,
   nombreCompleto,
   reprogramarClase,
 } from '../firebase/db'
@@ -17,6 +18,7 @@ import {
   etiquetaCategoria,
   etiquetaDuracion,
   formatHora12,
+  formatMinutos,
   opcionesDeInicio,
 } from '../lib/agenda'
 import { hayCambios } from '../lib/avisos'
@@ -54,11 +56,16 @@ export default function NuevaReserva({
 }) {
   const { user } = useAuth()
   const esEdicion = Boolean(clase)
-  // Franja de la sede: el formulario solo ofrece horas dentro de su horario.
-  const horario = useMemo(() => horarioDeSede(sede), [sede])
+  /*
+   * Horario de la sede: el formulario solo ofrece horas dentro del horario del
+   * DÍA que se está reservando (puede estar cerrado, con horarios distintos por
+   * día de la semana). `franja` es `null` cuando la sede está cerrada ese día.
+   */
+  const semana = useMemo(() => horarioDeSede(sede), [sede])
+  const franja = useMemo(() => horarioDelDia(fecha, semana), [fecha, semana])
   // Inicios posibles con la duración MÁS CORTA: sirve de default cuando todavía
   // no hay duración elegida (una reserva nueva arranca en 60 min).
-  const iniciosBase = opcionesDeInicio(DURACIONES_VALIDAS[0], horario)
+  const iniciosBase = opcionesDeInicio(DURACIONES_VALIDAS[0], franja)
   const [canchaId, setCanchaId] = useState(
     clase?.canchaId ?? hueco?.canchaId ?? canchas[0]?.id ?? null,
   )
@@ -151,15 +158,15 @@ export default function NuevaReserva({
     [otrasClases, canchaId, profesorId],
   )
   /*
-   * Inicios ofrecidos: cada MINUTOS_BLOQUE (30 min) dentro del horario de la
-   * sede, filtrando los que no caben antes del cierre con la duración elegida y
-   * los que chocan con otra clase del día en la misma cancha o con el mismo
-   * profesor. Al cambiar la duración (o la cancha o el profesor) la lista se
-   * recalcula sola.
+   * Inicios ofrecidos: cada MINUTOS_BLOQUE (30 min) dentro del horario del DÍA
+   * de la sede (vacío si ese día está cerrado), filtrando los que no caben antes
+   * del cierre con la duración elegida y los que chocan con otra clase del día
+   * en la misma cancha o con el mismo profesor. Al cambiar la duración (o la
+   * cancha o el profesor) la lista se recalcula sola.
    */
   const horas = useMemo(
-    () => opcionesDeInicio(duracion, horario, clasesQueOcupan),
-    [duracion, horario, clasesQueOcupan],
+    () => opcionesDeInicio(duracion, franja, clasesQueOcupan),
+    [duracion, franja, clasesQueOcupan],
   )
 
   /*
@@ -180,15 +187,15 @@ export default function NuevaReserva({
   const sinCanchasActivas = !canchas.some((cancha) => cancha.activa !== false)
 
   /*
-   * Al cambiar la duración (o la franja de la sede, o la cancha/profesor), la
+   * Al cambiar la duración (o la franja del día, o la cancha/profesor), la
    * hora elegida podría quedar fuera de la lista de inicios posibles. Si sigue
    * estando se conserva TAL CUAL (así el hueco precargado por clic mantiene su
    * media hora exacta); si no, se cae a la última hora que sí cabe.
    */
   useEffect(() => {
     setHoraInicio((hora) => (horas.includes(hora) ? hora : (horas[horas.length - 1] ?? hora)))
-    // `horas` se recalcula con la duración, el horario, la cancha y el profesor;
-    // solo interesa cuando cambia la lista resultante.
+    // `horas` se recalcula con la duración, el horario del día, la cancha y el
+    // profesor; solo interesa cuando cambia la lista resultante.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [horas])
 
@@ -201,11 +208,15 @@ export default function NuevaReserva({
 
   const problemas = useMemo(() => {
     const lista = []
-    if (inicio < horario.apertura * 60) {
-      lista.push(`La clase no puede empezar antes de las ${formatHora12(horario.apertura)}.`)
-    }
-    if (fin > horario.cierre * 60) {
-      lista.push(`La clase no puede terminar después de las ${formatHora12(horario.cierre)}.`)
+    if (franja === null) {
+      lista.push('La sede está cerrada ese día: no se pueden reservar clases.')
+    } else {
+      if (inicio < franja.apertura) {
+        lista.push(`La clase no puede empezar antes de las ${formatMinutos(franja.apertura)}.`)
+      }
+      if (fin > franja.cierre) {
+        lista.push(`La clase no puede terminar después de las ${formatMinutos(franja.cierre)}.`)
+      }
     }
 
     const solapan = (otra) => {
@@ -232,7 +243,7 @@ export default function NuevaReserva({
       }
     }
     return lista
-  }, [canchaId, fin, inicio, otrasClases, profesor, profesorId, horario])
+  }, [canchaId, fin, inicio, otrasClases, profesor, profesorId, franja])
 
   const puedeEnviar = Boolean(canchaId && profesorId) && problemas.length === 0 && !enviando
 

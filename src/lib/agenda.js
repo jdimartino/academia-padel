@@ -1,13 +1,16 @@
+import { DIAS_CORTOS, DIAS_LARGOS, diaSemana } from './fechas.js'
+
 /*
- * Helpers puros de la agenda: grilla horaria, estados y avatares.
- * No tocan Firestore; la página les pasa las clases ya leídas.
+ * Helpers puros de la agenda: horario de las sedes, grilla horaria, estados y
+ * avatares. No tocan Firestore; la página les pasa las clases ya leídas.
  */
 
 /**
- * Franja por defecto de una sede que todavía no tiene el campo `horario`:
- * 07:00-23:00 (ver `horarioDeSede`).
+ * Franja de UN día, en MINUTOS desde medianoche: 07:00-23:00 por defecto. Los
+ * valores guardados en una sede son múltiplos de MINUTOS_BLOQUE, así una sede
+ * puede abrir a las 7:30. Ver `horarioDeSede`.
  */
-export const HORARIO_DEFAULT = Object.freeze({ apertura: 7, cierre: 23 })
+export const HORARIO_DEFAULT = Object.freeze({ apertura: 7 * 60, cierre: 23 * 60 })
 
 /**
  * Granularidad de la ocupación: 30 minutos. ÚNICA definición del tamaño de
@@ -24,29 +27,157 @@ export const MINUTOS_BLOQUE = 30
  */
 export const DURACIONES_VALIDAS = [60, 90, 120]
 
+/** Minutos de un día completo (24:00). Tope de la apertura/cierre de una sede. */
+export const MINUTOS_DIA = 24 * 60
+
+/*
+ * Último minuto en que puede TERMINAR una clase: 23:30 (1410). El formato
+ * "HH:mm" no expresa las 24:00, así que 1410 es el fin más grande que se puede
+ * guardar/leer; una sede que cierra a las 24:00 admite clases hasta las 23:30 y
+ * la grilla dibuja hasta ahí (nunca ofrece un inicio que daría "24:00").
+ */
+export const ULTIMO_FIN_CLASE = MINUTOS_DIA - MINUTOS_BLOQUE
+
+/**
+ * Días de la semana en el orden del MODELO y de la UI: 0 = lunes … 6 = domingo.
+ * Es el mismo índice de `diaSemana`/`DIAS_CORTOS` de src/lib/fechas.js, así que
+ * el horario de una sede es un mapa con estas 7 claves: cada valor es una franja
+ * en minutos o `null` si la sede está cerrada ese día.
+ */
+export const DIAS_SEMANA = Object.freeze([0, 1, 2, 3, 4, 5, 6])
+
+/** Los 7 días abiertos con la franja por defecto (07:00-23:00). */
+export const HORARIO_SEMANA_DEFAULT = Object.freeze(
+  Object.fromEntries(DIAS_SEMANA.map((dia) => [dia, HORARIO_DEFAULT])),
+)
+
+const RE_FECHA = /^(\d{4})-(\d{2})-(\d{2})$/
 const RE_HHMM = /^([01]\d|2[0-3]):([0-5]\d)$/
 
 /**
- * Franja horaria efectiva de una sede. El campo `horario` es
- * `{apertura, cierre}` en HORAS enteras; si falta o está corrupto se cae al
- * default 07:00-23:00, así las sedes viejas (sin el campo) siguen funcionando.
+ * Normaliza la franja de UN día (minutos): apertura y cierre enteros, múltiplos
+ * de MINUTOS_BLOQUE, dentro de 0-1440 y con cierre > apertura. Devuelve una
+ * franja nueva o `null` si el valor no sirve. `null` NO es una franja inválida:
+ * significa "día cerrado" y lo resuelve `horarioDelDia`.
+ *
+ * Es TOLERANTE con campos de más (solo mira `apertura` y `cierre`): así una sede
+ * con datos viejos o ensuciados sigue abriendo. La escritura es más estricta y
+ * vive en `validarHorario` de src/firebase/db.js, que exige exactamente
+ * `{apertura, cierre}` y rechaza campos extra (igual que firestore.rules).
+ */
+export function franjaValida(franja) {
+  const apertura = franja?.apertura
+  const cierre = franja?.cierre
+  if (!Number.isInteger(apertura) || !Number.isInteger(cierre)) return null
+  if (apertura < 0 || apertura % MINUTOS_BLOQUE !== 0) return null
+  if (cierre > MINUTOS_DIA || cierre % MINUTOS_BLOQUE !== 0) return null
+  if (cierre <= apertura) return null
+  return { apertura, cierre }
+}
+
+/** Mapa de los 7 días de una sede, o `null` si no tiene el formato por día. */
+function semanaValida(horario) {
+  if (!horario || typeof horario !== 'object' || Array.isArray(horario)) return null
+  if (Object.keys(horario).length !== DIAS_SEMANA.length) return null
+  const semana = {}
+  for (const dia of DIAS_SEMANA) {
+    if (!Object.hasOwn(horario, dia)) return null
+    const valor = horario[dia]
+    if (valor === null) {
+      semana[dia] = null
+      continue
+    }
+    const franja = franjaValida(valor)
+    if (!franja) return null
+    semana[dia] = franja
+  }
+  return semana
+}
+
+/**
+ * Formato VIEJO de una sede: `{apertura, cierre}` en HORAS enteras 0-24.
+ * Devuelve la franja equivalente en minutos, o `null` si no lo es.
+ */
+function franjaHeredada(horario) {
+  if (!horario || typeof horario !== 'object' || Array.isArray(horario)) return null
+  const apertura = horario.apertura
+  const cierre = horario.cierre
+  if (!Number.isInteger(apertura) || !Number.isInteger(cierre)) return null
+  if (apertura < 0 || apertura > 24 || cierre < 0 || cierre > 24) return null
+  if (cierre <= apertura) return null
+  return { apertura: apertura * 60, cierre: cierre * 60 }
+}
+
+/**
+ * Mapa de los 7 días con el horario efectivo de una sede, con claves 0 (lunes) a
+ * 6 (domingo). Cada día es `{apertura, cierre}` en MINUTOS o `null` (cerrado).
+ *
+ * Compatibilidad: si la sede trae el formato viejo (un solo par de horas
+ * enteras) se EXPANDE a los 7 días con ese mismo horario. Si falta el campo o
+ * está corrupto, se cae al default 07:00-23:00 todos los días, así las sedes
+ * viejas siguen funcionando.
+ *
  * Es pura y vive acá (no en la capa de datos) porque la usan la grilla de la
  * agenda, el formulario de reserva y la validación de `db.js` por igual.
  */
 export function horarioDeSede(sede) {
   const horario = sede?.horario
-  const apertura = Number.isInteger(horario?.apertura) ? horario.apertura : null
-  const cierre = Number.isInteger(horario?.cierre) ? horario.cierre : null
-  if (
-    apertura === null ||
-    cierre === null ||
-    apertura < 0 ||
-    cierre > 24 ||
-    cierre <= apertura
-  ) {
-    return { ...HORARIO_DEFAULT }
+  const semana = semanaValida(horario)
+  if (semana) return semana
+  const heredado = franjaHeredada(horario)
+  if (heredado) {
+    return Object.fromEntries(DIAS_SEMANA.map((dia) => [dia, { ...heredado }]))
   }
-  return { apertura, cierre }
+  return { ...HORARIO_SEMANA_DEFAULT }
+}
+
+/**
+ * Día de la semana de una fecha "YYYY-MM-DD" con partes LOCALES (nunca
+ * `toISOString()`: con Caracas, UTC-4, adelantaría el día). Mismo índice que
+ * `diaSemana` de src/lib/fechas.js: 0 = lunes … 6 = domingo. `null` si la fecha
+ * no es válida o no existe (2026-02-31).
+ */
+export function diaDeFecha(fecha) {
+  const match = RE_FECHA.exec(String(fecha ?? '').trim())
+  if (!match) return null
+  const [y, mes, d] = [Number(match[1]), Number(match[2]), Number(match[3])]
+  const date = new Date(y, mes - 1, d)
+  if (date.getFullYear() !== y || date.getMonth() !== mes - 1 || date.getDate() !== d) {
+    return null
+  }
+  return diaSemana(String(fecha).trim())
+}
+
+/**
+ * Franja de la sede para UNA fecha concreta: `{apertura, cierre}` en minutos, o
+ * `null` si ese día está CERRADO (no admite reservas ni ofrece huecos). Es la
+ * utilidad que consultan la grilla, el formulario de reserva y `db.js`.
+ */
+export function horarioDelDia(fecha, horarioSemana) {
+  const dia = diaDeFecha(fecha)
+  if (dia === null) return null
+  const semana = semanaValida(horarioSemana) ?? horarioDeSede({ horario: horarioSemana })
+  const franja = semana[dia]
+  return franja ? { ...franja } : null
+}
+
+/** Rótulo del día: 0 = lunes → "Lunes". Cadena vacía si el día no existe. */
+export function etiquetaDia(dia) {
+  if (!Number.isInteger(dia) || dia < 0 || dia > 6) return ''
+  return capitalizar(DIAS_LARGOS[(dia + 1) % 7])
+}
+
+/** Rótulo corto del día: 0 = lunes → "Lu" (mismo orden que `DIAS_CORTOS`). */
+export function etiquetaDiaCorto(dia) {
+  return DIAS_CORTOS[dia] ?? ''
+}
+
+/** "7:30 AM" de unos minutos desde medianoche. Solo presentación. */
+export function formatMinutos(minutos) {
+  if (!Number.isInteger(minutos) || minutos < 0 || minutos > MINUTOS_DIA) {
+    return formatHora12(minutos)
+  }
+  return formatHora12(aHoraHHmm(minutos))
 }
 
 /** "18:30" → 1110. Devuelve null si no es "HH:mm" válido. */
@@ -211,16 +342,14 @@ export function iniciales(nombre) {
   return (partes[0][0] + partes[partes.length - 1][0]).toUpperCase()
 }
 
-/** Horas enteras de la franja, para las etiquetas de la grilla. */
-export function horasDeFranja(rango) {
-  const horas = []
-  for (let h = rango.horaInicio; h <= rango.horaFin; h += 1) horas.push(h)
-  return horas
-}
-
 /** Redondea HACIA ABAJO a la grilla de bloques (múltiplo de MINUTOS_BLOQUE). */
 export function aBloqueDeGrilla(minutos) {
   return Math.floor(minutos / MINUTOS_BLOQUE) * MINUTOS_BLOQUE
+}
+
+/** Redondea HACIA ARRIBA a la grilla de bloques (múltiplo de MINUTOS_BLOQUE). */
+export function aBloqueDeGrillaArriba(minutos) {
+  return Math.ceil(minutos / MINUTOS_BLOQUE) * MINUTOS_BLOQUE
 }
 
 /**
@@ -237,57 +366,62 @@ export function etiquetaDuracion(minutos) {
   return `${horas} h ${resto} min`
 }
 
-/*
- * Última hora en la que puede TERMINAR una clase. El formato "HH:mm" no expresa
- * las 24:00, así que con una sede que cierra a las 24 la última clase termina
- * igual a las 23:00. Es el mismo fin efectivo que usa la validación de reservas.
- */
-export const HORA_CIERRE_CLASE = 23
-
 /**
- * Rango vertical (en horas enteras) que dibuja la grilla de la agenda:
- * `{horaInicio, horaFin}`.
+ * Rango vertical que dibuja la grilla de la agenda, en MINUTOS desde
+ * medianoche: `{minutoInicio, minutoFin}`. Con esto la grilla puede arrancar en
+ * la apertura EXACTA de la sede (p. ej. 7:30) y terminar en su cierre exacto.
  *
- * - Arranca en la apertura de la sede y termina en `min(cierre, 23)`, el mismo
- *   fin efectivo que aplica la validación de reservas (ver HORA_CIERRE_CLASE).
- * - `horario` es el `{apertura, cierre}` de la sede; si falta o está corrupto se
- *   usa el default 07:00-23:00 (ver `horarioDeSede`).
+ * - `franja` es el horario del DÍA que se está viendo (`{apertura, cierre}` en
+ *   minutos, ver `horarioDelDia`) o `null` si la sede está cerrada ese día. Si
+ *   falta o está corrupta, se usa el default 07:00-23:00.
+ * - El fin se recorta a `ULTIMO_FIN_CLASE` (23:30): el eje no puede rotular las
+ *   24:00 y la reserva tampoco puede terminar ahí.
+ * - Un día CERRADO no tiene franja propia, así que se dibuja el rango default
+ *   como fondo neutro (la pantalla avisa que la sede está cerrada y no ofrece
+ *   huecos: ver `opcionesDeInicio` con `null`).
  * - Si alguna clase NO cancelada de las que se están mostrando empieza antes del
  *   inicio o termina después del fin, el rango se AGRANDA para incluirla: una
  *   clase guardada nunca queda invisible. Las canceladas no agrandan nada.
  *
  * Es pura y no lee Firestore: el llamador le pasa las clases de la vista.
  */
-export function rangoHorasAgenda(horario, clasesDeLaSemana = []) {
-  const franja = horarioDeSede({ horario })
-  let horaInicio = franja.apertura
-  let horaFin = Math.min(franja.cierre, HORA_CIERRE_CLASE)
+export function rangoHorasAgenda(franja, clasesDeLaSemana = []) {
+  const abierto = franja === null ? null : franjaValida(franja)
+  const base = abierto ?? HORARIO_DEFAULT
+  let minutoInicio = base.apertura
+  let minutoFin = Math.min(base.cierre, ULTIMO_FIN_CLASE)
 
   for (const clase of clasesDeLaSemana ?? []) {
     if (clase?.estado === 'cancelada') continue
     const rango = rangoClase(clase)
     if (!rango) continue
-    // Se redondea hacia afuera a la hora: las ETIQUETAS de la grilla son horas
-    // enteras (las líneas finas de media hora van dentro de cada hora).
-    if (rango.inicio < horaInicio * 60) horaInicio = Math.floor(rango.inicio / 60)
-    const finEnHoras = Math.ceil(rango.fin / 60)
-    if (finEnHoras > horaFin) horaFin = finEnHoras
+    // Se redondea hacia AFUERA al bloque de 30 min: las líneas y las etiquetas de
+    // la grilla caen cada MINUTOS_BLOQUE, no solo en la hora en punto.
+    if (rango.inicio < minutoInicio) minutoInicio = aBloqueDeGrilla(rango.inicio)
+    if (rango.fin > minutoFin) minutoFin = aBloqueDeGrillaArriba(rango.fin)
   }
 
-  return { horaInicio, horaFin }
+  // Con una sede abierta 23:30-24:00 el recorte a ULTIMO_FIN_CLASE dejaría el
+  // rango vacío: se garantiza una fila.
+  if (minutoFin <= minutoInicio) {
+    minutoFin = Math.min(minutoInicio + MINUTOS_BLOQUE, MINUTOS_DIA)
+  }
+
+  return { minutoInicio, minutoFin }
 }
 
 /*
- * Horas de INICIO que admite una clase, según su duración (en minutos) y la
- * franja de la sede (horas enteras): en punto o a y media (paso de
- * MINUTOS_BLOQUE), desde la apertura, y sin que la clase termine después del
- * cierre. Es la misma regla que aplica la capa de datos (src/firebase/db.js:
- * duración 60/90/120 y horario de la sede); acá se usa para armar el selector
- * del formulario. No confundir con el rango que DIBUJA la grilla de la agenda
- * (ver `rangoHorasAgenda`).
+ * Minutos de INICIO que admite una clase, según su duración (en minutos) y el
+ * horario del DÍA (en minutos): en punto o a y media (paso de MINUTOS_BLOQUE),
+ * desde la apertura, y sin que la clase termine después del cierre. Es la misma
+ * regla que aplica la capa de datos (src/firebase/db.js: duración 60/90/120 y
+ * horario del día); acá se usa para armar el selector del formulario. No
+ * confundir con el rango que DIBUJA la grilla de la agenda (ver
+ * `rangoHorasAgenda`).
  *
- * `horario` es `{apertura, cierre}` en horas enteras (el de la sede). Sin él se
- * usa la franja histórica 07:00-23:00.
+ * `franja` es el horario del día `{apertura, cierre}` en minutos: sin argumento
+ * (o con un valor corrupto) se usa la franja default 07:00-23:00. Con `null` —día
+ * CERRADO— no se ofrece ninguna hora.
  *
  * `ocupadas` (opcional) es la lista de clases ya cargadas del día: si una hora
  * de inicio choca con alguna (misma cancha o mismo profesor, ver
@@ -296,17 +430,16 @@ export function rangoHorasAgenda(horario, clasesDeLaSemana = []) {
  * puramente horarios (la grilla, los tests de franja).
  *
  * El formato "HH:mm" no expresa las 24:00, así que el fin de clase nunca puede
- * caer exactamente en la medianoche: con cierre 24 la última hora de inicio
- * efectiva es la que termina a las 23:00 (igual que con cierre 23).
+ * caer exactamente en la medianoche: con cierre 24:00 la última hora de inicio
+ * efectiva es la que termina a las 23:30 (ver ULTIMO_FIN_CLASE).
  */
-export function opcionesDeInicio(duracion = 60, horario = null, ocupadas = null) {
+export function opcionesDeInicio(duracion = 60, franja = undefined, ocupadas = null) {
   const opciones = []
-  const apertura =
-    (Number.isInteger(horario?.apertura) ? horario.apertura : HORARIO_DEFAULT.apertura) * 60
-  const cierreHoras = Number.isInteger(horario?.cierre) ? horario.cierre : HORA_CIERRE_CLASE
-  const cierre = Math.min(cierreHoras, HORA_CIERRE_CLASE) * 60
+  if (franja === null) return opciones
+  const dia = franjaValida(franja) ?? HORARIO_DEFAULT
+  const cierre = Math.min(dia.cierre, ULTIMO_FIN_CLASE)
   if (!Number.isFinite(duracion) || duracion <= 0) return opciones
-  for (let minuto = apertura; minuto + duracion <= cierre; minuto += MINUTOS_BLOQUE) {
+  for (let minuto = dia.apertura; minuto + duracion <= cierre; minuto += MINUTOS_BLOQUE) {
     if (ocupadas && chocaConAlguna(ocupadas, minuto, minuto + duracion)) continue
     opciones.push(aHoraHHmm(minuto))
   }
@@ -336,11 +469,9 @@ export function chocaConAlguna(clases, inicio, fin) {
  */
 export function lineasDeFranja(rango) {
   const lineas = []
-  for (
-    let m = rango.horaInicio * 60;
-    m <= rango.horaFin * 60;
-    m += MINUTOS_BLOQUE
-  ) {
+  const inicio = Number.isInteger(rango?.minutoInicio) ? rango.minutoInicio : HORARIO_DEFAULT.apertura
+  const fin = Number.isInteger(rango?.minutoFin) ? rango.minutoFin : HORARIO_DEFAULT.cierre
+  for (let m = inicio; m <= fin; m += MINUTOS_BLOQUE) {
     lineas.push({ minuto: m, horaEntera: m % 60 === 0 })
   }
   return lineas
@@ -348,7 +479,7 @@ export function lineasDeFranja(rango) {
 
 /*
  * Hueco de la grilla a partir de un clic: `minutosDesdeInicioGrilla` son los
- * minutos medidos desde el borde superior de la grilla (`rango.horaInicio`), no
+ * minutos medidos desde el borde superior de la grilla (`rango.minutoInicio`), no
  * desde la hora en punto, porque el clic puede caer en cualquier punto de la
  * celda. Se redondea HACIA ABAJO al bloque de MINUTOS_BLOQUE: 5:30 PM y 5:59 PM
  * caen los dos en las 5:30 PM, y 5:00 PM en las 5:00 PM. `horaInicio` sale en el
@@ -356,10 +487,12 @@ export function lineasDeFranja(rango) {
  * de reserva. Devuelve null si el cálculo no da una hora válida.
  */
 export function huecoDeClic({ canchaId, minutosDesdeInicioGrilla, rango }) {
-  const horasGrilla = rango?.horaInicio
-  if (!Number.isInteger(horasGrilla) || !Number.isFinite(minutosDesdeInicioGrilla)) return null
-  const minuto = aBloqueDeGrilla(horasGrilla * 60 + minutosDesdeInicioGrilla)
-  if (minuto < 0) return null
+  const minutoInicioGrilla = rango?.minutoInicio
+  if (!Number.isInteger(minutoInicioGrilla) || !Number.isFinite(minutosDesdeInicioGrilla)) {
+    return null
+  }
+  const minuto = aBloqueDeGrilla(minutoInicioGrilla + minutosDesdeInicioGrilla)
+  if (minuto < 0 || minuto > MINUTOS_DIA - MINUTOS_BLOQUE) return null
   return { canchaId, horaInicio: aHoraHHmm(minuto) }
 }
 

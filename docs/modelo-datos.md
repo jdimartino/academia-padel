@@ -136,15 +136,29 @@ carga por su cuenta.
 
 | Campo | Tipo | Nota |
 | --- | --- | --- |
-| `nombre` | string | "Traki", "Boleíta", "Santa Rosa", "Capital" (tenant de ensayo) |
+| `nombre` | string | "Traki", "Boleíta", "Santa Rosa", "Capital" (tenant de ensayo). Requerido, normalizado y único en el tenant (sin distinguir caja, espacios de más ni acentos) |
 | `direccion` | string | *sin definir formato* |
 | `activa` | bool | |
 | `orden` | number | Para ordenar en la UI |
-| `horario` | map | `{apertura, cierre}` en HORAS enteras 0-24, con `cierre > apertura`. Es la franja que usan la reserva y la reprogramación. Si falta (sedes viejas), `horarioDeSede` cae al default **07:00-23:00**. |
+| `horario` | map | Horario **por día de la semana**: claves `'0'` (lunes) … `'6'` (domingo), el mismo índice que `diaSemana` de `src/lib/fechas.js`. Cada día es `null` (cerrado) o `{apertura, cierre}` en **MINUTOS** desde medianoche, múltiplos de `MINUTOS_BLOQUE` (30), dentro de 0-1440 y con `cierre > apertura` (7:30 → 450). Si falta (sedes viejas) o está corrupto, `horarioDeSede` cae al default **07:00-23:00 los 7 días**. El formato VIEJO (un solo `{apertura, cierre}` en horas enteras 0-24) se sigue LEYENDO y se expande a los 7 días, pero al ESCRIBIR se exige el formato por día |
 
-`setSedeHorario(db, tenant, sedeId, {apertura, cierre})` valida el rango y
-rechaza el cambio si deja fuera a alguna clase FUTURA no cancelada (mensaje con
-la cantidad). Solo lo escribe el administrador (ver firestore.rules).
+`horarioDeSede(sede)` devuelve el mapa de los 7 días y
+`horarioDelDia(fecha, horarioSemanal)` la franja del día de esa fecha (o `null`
+si la sede está cerrada), con la fecha interpretada en hora LOCAL (nunca
+`toISOString()`).
+
+`setSedeHorario(db, tenant, sedeId, semana)` valida el formato y rechaza el
+cambio si deja fuera a alguna clase FUTURA no cancelada, comparando **cada clase
+con el horario de su día** y en minutos (mensaje con la cantidad). Un día que
+queda cerrado deja fuera a todas sus clases.
+
+Las sedes **nunca se borran**: se desactivan (`activa: false`) y se reactivan.
+Desactivar se rechaza si la sede tiene clases pendientes (no canceladas y cuyo
+fin todavía no pasó); desactivada, la sede desaparece de la agenda y no admite
+reservas nuevas ni reprogramaciones HACIA ella. Funciones: `crearSede`,
+`renombrarSede`, `desactivarSede`, `reactivarSede` y, para la pantalla,
+`listarSedes` (incluye las inactivas). Solo lo escribe el administrador (ver
+firestore.rules).
 
 ### `academias/{tenantId}/sedes/{sedeId}/canchas/{canchaId}`
 

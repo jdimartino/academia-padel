@@ -30,6 +30,8 @@ import {
   crearCancha,
   crearClase,
   crearProfesor,
+  crearSede,
+  desactivarSede,
   fechaHoyLocal,
   getAlumno,
   getCanchas,
@@ -39,14 +41,19 @@ import {
   getSede,
   getSedes,
   horarioDeSede,
+  horarioDelDia,
   listarAlumnos,
   listarCanchas,
+  listarSedes,
   nombreCompleto,
   nombreDeCancha,
+  reactivarSede,
   registrarAsistencia,
   renombrarCancha,
+  renombrarSede,
   reprogramarClase,
   setSedeHorario,
+  validarHorario,
 } from '../src/firebase/db.js'
 
 const PROJECT_ID = 'academia-padel-jdm'
@@ -57,11 +64,33 @@ const ALUMNO = 'uid-alumno-t1'
  * Fecha de ensayo FUTURA: el "ahora" inyectado de las reservas queda fijo una
  * hora antes de las 18:00 locales (Caracas) de ese día, así la regla "no se
  * reserva en el pasado" nunca rompe la suite dependa de cuándo se corra.
+ * 2026-11-15 es DOMINGO; 2026-11-14 sábado y 2026-11-16 lunes.
  */
 const FECHA = '2026-11-15'
 const AHORA_RESERVA = new Date(2026, 10, 15, 17, 0, 0)
 /** Momento local después de que termina la clase de ensayo (horaFin 19:00). */
 const DESPUES_DEL_FIN = new Date(2026, 10, 15, 20, 0, 0)
+
+/** Fechas de ensayo con día de la semana conocido (0 = lunes en el horario). */
+const LUNES = '2026-11-16'
+const SABADO = '2026-11-14'
+const DOMINGO = FECHA
+
+/** Franja de un día en MINUTOS, como la guarda una sede. */
+const franja = (apertura, cierre) => ({ apertura, cierre })
+
+/** Franja default 07:00-23:00 en minutos. */
+const FRANJA_DEFAULT = franja(7 * 60, 23 * 60)
+
+/**
+ * Horario semanal completo: todos los días con `abierto` (07:00-23:00 por
+ * defecto) salvo los días que vengan en `porDia` (una franja o `null` = cerrado).
+ */
+function semana(porDia = {}, abierto = FRANJA_DEFAULT) {
+  return Object.fromEntries(
+    [0, 1, 2, 3, 4, 5, 6].map((dia) => [dia, dia in porDia ? porDia[dia] : { ...abierto }]),
+  )
+}
 
 let env
 let adminDb
@@ -2184,93 +2213,165 @@ describe('[A3] desactivar una cancha con clases pendientes', () => {
   })
 })
 
-describe('[A3] horario de sede: validación y guardado', () => {
-  it('horarioDeSede cae al default si falta o está corrupto', () => {
-    assert.deepEqual(horarioDeSede({}), { apertura: 7, cierre: 23 })
-    assert.deepEqual(horarioDeSede(undefined), { apertura: 7, cierre: 23 })
-    assert.deepEqual(horarioDeSede({ horario: { apertura: 8, cierre: 20 } }), {
-      apertura: 8,
-      cierre: 20,
-    })
-    assert.deepEqual(horarioDeSede({ horario: { apertura: '8', cierre: 20 } }), {
-      apertura: 7,
-      cierre: 23,
-    })
-    assert.deepEqual(horarioDeSede({ horario: { apertura: 20, cierre: 8 } }), {
-      apertura: 7,
-      cierre: 23,
-    })
+describe('[A3] horario de sede: validación y guardado por día', () => {
+  it('horarioDeSede expande el formato viejo y cae al default si falta o está corrupto', () => {
+    const porDefecto = horarioDeSede({})
+    for (const dia of [0, 3, 6]) assert.deepEqual(porDefecto[dia], FRANJA_DEFAULT)
+    // Formato viejo (un par de horas enteras): se expande a los 7 días.
+    const viejo = horarioDeSede({ horario: { apertura: 8, cierre: 20 } })
+    for (const dia of [0, 3, 6]) assert.deepEqual(viejo[dia], franja(480, 1200))
+    // Corrupto: default en los 7 días.
+    assert.deepEqual(horarioDeSede({ horario: { apertura: '8', cierre: 20 } })[0], FRANJA_DEFAULT)
+    assert.deepEqual(horarioDeSede({ horario: { apertura: 20, cierre: 8 } })[0], FRANJA_DEFAULT)
+    assert.deepEqual(horarioDeSede({ horario: { 0: franja(435, 930) } })[0], FRANJA_DEFAULT)
   })
 
-  it('rechaza horas no enteras, fuera de 0-24 o con cierre <= apertura', async () => {
+  it('rechaza horarios incompletos, no múltiplos de 30, fuera de rango o con cierre <= apertura', async () => {
+    const incompleto = semana()
+    delete incompleto[6]
     const invalidos = [
-      { apertura: -1, cierre: 23 },
-      { apertura: 7, cierre: 25 },
-      { apertura: 7, cierre: 7 },
-      { apertura: 8, cierre: 7 },
-      { apertura: 7.5, cierre: 23 },
-      { apertura: '7', cierre: 23 },
+      null,
+      [1, 2, 3],
+      {},
+      incompleto,
+      { ...semana(), 7: franja(420, 1380) },
+      semana({ 0: franja(435, 930) }), // 7:15 no es múltiplo de 30
+      semana({ 0: { apertura: 420, cierre: 1380, extra: 1 } }),
+      semana({ 0: { apertura: 420, cierre: 420 } }),
+      semana({ 0: franja(900, 420) }),
+      semana({ 0: franja(420, 1500) }),
+      semana({ 0: franja(-30, 930) }),
+      semana({ 0: { apertura: '420', cierre: 1380 } }),
+      { apertura: 7, cierre: 23 }, // formato VIEJO al ESCRIBIR: se rechaza
     ]
     for (const horario of invalidos) {
       await assert.rejects(
-        () => setSedeHorario(adminDb, T1, 'traki', horario, { uid: ADMIN }),
+        () => setSedeHorario(adminDb, T1, 'traki', horario, { uid: ADMIN, ahora: AHORA_RESERVA }),
         SedeInvalidaError,
         `debía rechazar ${JSON.stringify(horario)}`,
       )
     }
+    // Ningún rechazo escribió: la sede sigue sin horario (default).
+    assert.equal((await getSede(adminDb, T1, 'traki')).horario, undefined)
   })
 
-  it('guarda el horario y getSede lo devuelve', async () => {
-    const { horario } = await setSedeHorario(
-      adminDb,
-      T1,
-      'traki',
-      { apertura: 0, cierre: 24 },
-      { uid: ADMIN, ahora: AHORA_RESERVA },
+  it('guarda el horario por día (con días cerrados) y getSede lo devuelve', async () => {
+    const propuesto = semana({ 5: franja(480, 780), 6: null }, franja(450, 930))
+    const { horario } = await setSedeHorario(adminDb, T1, 'traki', propuesto, {
+      uid: ADMIN,
+      ahora: AHORA_RESERVA,
+    })
+    assert.deepEqual(horario, propuesto)
+    assert.deepEqual((await getSede(adminDb, T1, 'traki')).horario, propuesto)
+
+    // El día cerrado se lee como null (sin huecos) y los abiertos con su franja.
+    const guardada = await getSede(adminDb, T1, 'traki')
+    const leido = horarioDeSede(guardada)
+    assert.equal(horarioDelDia(DOMINGO, leido), null)
+    assert.deepEqual(horarioDelDia(SABADO, leido), franja(480, 780))
+    assert.deepEqual(horarioDelDia(LUNES, leido), franja(450, 930))
+  })
+
+  it('valida en memoria sin tocar la base (validarHorario)', () => {
+    assert.deepEqual(validarHorario(semana({ 6: null })), semana({ 6: null }))
+    assert.throws(() => validarHorario(semana({ 0: franja(435, 930) })), SedeInvalidaError)
+    assert.throws(() => validarHorario({ apertura: 7, cierre: 23 }), SedeInvalidaError)
+  })
+
+  it('una sede con el formato VIEJO se lee expandida a 7 días y admite reservas', async () => {
+    await setDoc(
+      doc(adminDb, 'academias', T1, 'sedes', 'traki'),
+      { horario: { apertura: 7, cierre: 23 } },
+      { merge: true },
     )
-    assert.deepEqual(horario, { apertura: 0, cierre: 24 })
-    assert.deepEqual((await getSede(adminDb, T1, 'traki')).horario, { apertura: 0, cierre: 24 })
+    const expandido = horarioDeSede(await getSede(adminDb, T1, 'traki'))
+    for (const dia of [0, 1, 2, 3, 4, 5, 6]) assert.deepEqual(expandido[dia], FRANJA_DEFAULT)
+    // La reserva del domingo 18:00-19:00 sigue funcionando con el formato viejo.
+    assert.ok((await reservar()).claseId)
   })
 
   it('setSedeHorario en una sede inexistente → SedeInvalidaError', async () => {
     await assert.rejects(
-      () => setSedeHorario(adminDb, T1, 'no-existe', { apertura: 8, cierre: 20 }, { uid: ADMIN }),
+      () =>
+        setSedeHorario(adminDb, T1, 'no-existe', semana(), { uid: ADMIN, ahora: AHORA_RESERVA }),
       (error) => error instanceof SedeInvalidaError && /no existe/.test(error.message),
     )
   })
 })
 
-describe('[A3] horario de sede vs clases futuras', () => {
+describe('[A3] horario de sede vs clases futuras (por día de la semana)', () => {
   it('rechaza el horario que deja clases futuras fuera, diciendo cuántas', async () => {
     await reservar({ horaInicio: '22:00', horaFin: '23:00' })
     await reservar({ canchaId: 'c2', profesorId: 'p2', horaInicio: '22:00', horaFin: '23:00' })
 
     await assert.rejects(
       () =>
-        setSedeHorario(
-          adminDb,
-          T1,
-          'traki',
-          { apertura: 7, cierre: 22 },
-          { uid: ADMIN, ahora: AHORA_RESERVA },
-        ),
+        setSedeHorario(adminDb, T1, 'traki', semana({}, franja(420, 1320)), {
+          uid: ADMIN,
+          ahora: AHORA_RESERVA,
+        }),
       (error) => error instanceof SedeInvalidaError && /2 clase/.test(error.message),
     )
     // No se guardó nada: la sede sigue sin horario (default).
     assert.equal((await getSede(adminDb, T1, 'traki')).horario, undefined)
   })
 
-  it('rechaza un horario que abre más tarde que una clase futura', async () => {
-    await reservar() // 18:00-19:00
+  it('compara cada clase con el horario de SU día, en minutos reales', async () => {
+    // Una clase el DOMINGO (FECHA) y otra el LUNES, las dos de 22:00 a 23:00.
+    await reservar({ horaInicio: '22:00', horaFin: '23:00' })
+    await crearClase(
+      adminDb,
+      T1,
+      clase({ fecha: LUNES, canchaId: 'c2', profesorId: 'p2', horaInicio: '22:00', horaFin: '23:00' }),
+      { uid: ADMIN, ahora: AHORA_RESERVA },
+    )
+
+    // Cerrar antes SOLO el domingo deja fuera solo la clase del domingo.
     await assert.rejects(
       () =>
-        setSedeHorario(
-          adminDb,
-          T1,
-          'traki',
-          { apertura: 20, cierre: 23 },
-          { uid: ADMIN, ahora: AHORA_RESERVA },
-        ),
+        setSedeHorario(adminDb, T1, 'traki', semana({ 6: franja(420, 1320) }), {
+          uid: ADMIN,
+          ahora: AHORA_RESERVA,
+        }),
+      (error) => error instanceof SedeInvalidaError && /1 clase/.test(error.message),
+    )
+    // Y al revés: cerrar antes SOLO el lunes deja fuera solo la del lunes.
+    await assert.rejects(
+      () =>
+        setSedeHorario(adminDb, T1, 'traki', semana({ 0: franja(420, 1320) }), {
+          uid: ADMIN,
+          ahora: AHORA_RESERVA,
+        }),
+      (error) => error instanceof SedeInvalidaError && /1 clase/.test(error.message),
+    )
+    // Con los dos días abiertos hasta las 23:00 no queda ninguna fuera.
+    const { horario } = await setSedeHorario(adminDb, T1, 'traki', semana(), {
+      uid: ADMIN,
+      ahora: AHORA_RESERVA,
+    })
+    assert.deepEqual(horario[6], FRANJA_DEFAULT)
+  })
+
+  it('un día que queda CERRADO deja fuera a todas sus clases', async () => {
+    await reservar() // domingo 18:00-19:00
+    await assert.rejects(
+      () =>
+        setSedeHorario(adminDb, T1, 'traki', semana({ 6: null }), {
+          uid: ADMIN,
+          ahora: AHORA_RESERVA,
+        }),
+      (error) => error instanceof SedeInvalidaError && /1 clase/.test(error.message),
+    )
+  })
+
+  it('rechaza un horario que abre más tarde que una clase futura', async () => {
+    await reservar() // domingo 18:00-19:00
+    await assert.rejects(
+      () =>
+        setSedeHorario(adminDb, T1, 'traki', semana({ 6: franja(1200, 1380) }), {
+          uid: ADMIN,
+          ahora: AHORA_RESERVA,
+        }),
       (error) => error instanceof SedeInvalidaError && /1 clase/.test(error.message),
     )
   })
@@ -2285,18 +2386,15 @@ describe('[A3] horario de sede vs clases futuras', () => {
       bloques: [],
     })
 
-    const { horario } = await setSedeHorario(
-      adminDb,
-      T1,
-      'traki',
-      { apertura: 7, cierre: 22 },
-      { uid: ADMIN, ahora: AHORA_RESERVA },
-    )
-    assert.deepEqual(horario, { apertura: 7, cierre: 22 })
+    const { horario } = await setSedeHorario(adminDb, T1, 'traki', semana({}, franja(420, 1320)), {
+      uid: ADMIN,
+      ahora: AHORA_RESERVA,
+    })
+    assert.deepEqual(horario[0], franja(420, 1320))
   })
 })
 
-describe('[A3] reserva y reprogramación usan el horario de la sede', () => {
+describe('[A3] reserva y reprogramación usan el horario del día de la sede', () => {
   /** Madrugada del día de ensayo: sirve para probar franjas fuera de 07-23. */
   const AHORA_MADRUGADA = new Date(2026, 10, 15, 5, 0, 0)
 
@@ -2309,18 +2407,15 @@ describe('[A3] reserva y reprogramación usan el horario de la sede', () => {
           uid: ADMIN,
           ahora: AHORA_MADRUGADA,
         }),
-      /07:00|empezar antes/,
+      /empezar antes/,
     )
   })
 
   it('con la sede abierta a las 06:00, la reserva de 06:00 se acepta', async () => {
-    await setSedeHorario(
-      adminDb,
-      T1,
-      'traki',
-      { apertura: 6, cierre: 24 },
-      { uid: ADMIN, ahora: AHORA_MADRUGADA },
-    )
+    await setSedeHorario(adminDb, T1, 'traki', semana({}, franja(360, 1440)), {
+      uid: ADMIN,
+      ahora: AHORA_MADRUGADA,
+    })
     const { claseId } = await crearClase(
       adminDb,
       T1,
@@ -2330,42 +2425,74 @@ describe('[A3] reserva y reprogramación usan el horario de la sede', () => {
     assert.ok(claseId)
   })
 
-  it('rechaza una reserva antes de la apertura de la sede', async () => {
-    await setSedeHorario(
-      adminDb,
-      T1,
-      'traki',
-      { apertura: 19, cierre: 23 },
-      { uid: ADMIN, ahora: AHORA_RESERVA },
+  it('una sede que abre 7:30 admite la reserva de 7:30 y rechaza la de 7:00', async () => {
+    await setSedeHorario(adminDb, T1, 'traki', semana({}, franja(450, 930)), {
+      uid: ADMIN,
+      ahora: AHORA_RESERVA,
+    })
+    // Lunes 7:30-8:30: entra justo a la apertura.
+    assert.ok(
+      (
+        await crearClase(
+          adminDb,
+          T1,
+          clase({ fecha: LUNES, horaInicio: '07:30', horaFin: '08:30' }),
+          { uid: ADMIN, ahora: AHORA_RESERVA },
+        )
+      ).claseId,
     )
+    // Lunes 7:00-8:00: empieza antes de la apertura (otra cancha y profesor).
     await assert.rejects(
-      () => reservar({ horaInicio: '18:00', horaFin: '19:00' }),
-      /19:00|empezar antes/,
+      () =>
+        crearClase(
+          adminDb,
+          T1,
+          clase({
+            fecha: LUNES,
+            canchaId: 'c2',
+            profesorId: 'p2',
+            horaInicio: '07:00',
+            horaFin: '08:00',
+          }),
+          { uid: ADMIN, ahora: AHORA_RESERVA },
+        ),
+      /empezar antes/,
     )
+  })
+
+  it('rechaza una reserva en un día CERRADO', async () => {
+    await setSedeHorario(adminDb, T1, 'traki', semana({ 6: null }), {
+      uid: ADMIN,
+      ahora: AHORA_RESERVA,
+    })
+    await assert.rejects(
+      () => reservar(),
+      (error) => error instanceof ClaseInvalidaError && /cerrada/.test(error.message),
+    )
+    assert.equal((await bloque(`traki_c1_${FECHA}_1800`)).exists(), false)
+  })
+
+  it('rechaza una reserva antes de la apertura de la sede', async () => {
+    await setSedeHorario(adminDb, T1, 'traki', semana({}, franja(1140, 1380)), {
+      uid: ADMIN,
+      ahora: AHORA_RESERVA,
+    })
+    await assert.rejects(() => reservar({ horaInicio: '18:00', horaFin: '19:00' }), /empezar antes/)
   })
 
   it('rechaza una reserva que termina después del cierre de la sede', async () => {
-    await setSedeHorario(
-      adminDb,
-      T1,
-      'traki',
-      { apertura: 7, cierre: 22 },
-      { uid: ADMIN, ahora: AHORA_RESERVA },
-    )
-    await assert.rejects(
-      () => reservar({ horaInicio: '22:00', horaFin: '23:00' }),
-      /22:00|terminar/,
-    )
+    await setSedeHorario(adminDb, T1, 'traki', semana({}, franja(420, 1320)), {
+      uid: ADMIN,
+      ahora: AHORA_RESERVA,
+    })
+    await assert.rejects(() => reservar({ horaInicio: '22:00', horaFin: '23:00' }), /terminar/)
   })
 
   it('permite reservar justo dentro del horario de la sede', async () => {
-    await setSedeHorario(
-      adminDb,
-      T1,
-      'traki',
-      { apertura: 18, cierre: 23 },
-      { uid: ADMIN, ahora: AHORA_RESERVA },
-    )
+    await setSedeHorario(adminDb, T1, 'traki', semana({}, franja(1080, 1380)), {
+      uid: ADMIN,
+      ahora: AHORA_RESERVA,
+    })
     assert.ok((await reservar({ horaInicio: '18:00', horaFin: '19:00' })).claseId)
     assert.ok(
       (
@@ -2379,15 +2506,12 @@ describe('[A3] reserva y reprogramación usan el horario de la sede', () => {
     )
   })
 
-  it('la reprogramación usa el horario de la sede destino', async () => {
-    const { claseId } = await reservar() // 18:00-19:00
-    await setSedeHorario(
-      adminDb,
-      T1,
-      'traki',
-      { apertura: 7, cierre: 22 },
-      { uid: ADMIN, ahora: AHORA_RESERVA },
-    )
+  it('la reprogramación usa el horario del día de la sede destino', async () => {
+    const { claseId } = await reservar() // domingo 18:00-19:00
+    await setSedeHorario(adminDb, T1, 'traki', semana({}, franja(420, 1320)), {
+      uid: ADMIN,
+      ahora: AHORA_RESERVA,
+    })
     await assert.rejects(
       () =>
         reprogramarClase(
@@ -2397,10 +2521,30 @@ describe('[A3] reserva y reprogramación usan el horario de la sede', () => {
           { horaInicio: '22:00', horaFin: '23:00' },
           { uid: ADMIN, ahora: AHORA_RESERVA },
         ),
-      /22:00|terminar/,
+      /terminar/,
     )
     // La clase original queda intacta.
     assert.equal((await getClase(adminDb, T1, claseId)).horaInicio, '18:00')
+  })
+
+  it('la reprogramación a un día CERRADO se rechaza', async () => {
+    const { claseId } = await reservar() // domingo 18:00-19:00
+    await setSedeHorario(adminDb, T1, 'traki', semana({ 0: null }), {
+      uid: ADMIN,
+      ahora: AHORA_RESERVA,
+    })
+    await assert.rejects(
+      () =>
+        reprogramarClase(
+          adminDb,
+          T1,
+          claseId,
+          { fecha: LUNES, horaInicio: '18:00', horaFin: '19:00' },
+          { uid: ADMIN, ahora: AHORA_RESERVA },
+        ),
+      (error) => error instanceof ClaseInvalidaError && /cerrada/.test(error.message),
+    )
+    assert.equal((await getClase(adminDb, T1, claseId)).fecha, FECHA)
   })
 })
 
@@ -2444,5 +2588,172 @@ describe('[A3] cancha inactiva: rechaza reservas nuevas y reprogramaciones', () 
     for (const bloqueId of bloques) {
       assert.ok((await bloque(bloqueId)).exists(), `bloque ${bloqueId} intacto`)
     }
+  })
+})
+/* --------------------------------------------------------------------- */
+/* [F2] Sedes: crear, renombrar, desactivar y reactivar                    */
+/* --------------------------------------------------------------------- */
+
+describe('[F2] sedes: crear, renombrar, desactivar y reactivar', () => {
+  const leerSede = (sedeId) => getSede(adminDb, T1, sedeId)
+
+  it('crearSede normaliza el nombre, la deja activa y con horario default', async () => {
+    const { sedeId } = await crearSede(adminDb, T1, { nombre: '  boleita   norte ' }, { uid: ADMIN })
+    const sede = await leerSede(sedeId)
+    assert.equal(sede.nombre, 'Boleita Norte')
+    assert.equal(sede.activa, true)
+    assert.ok(Number.isInteger(sede.orden))
+    assert.deepEqual(sede.horario, semana())
+    // Nace visible en la agenda y en la lista completa.
+    assert.ok((await getSedes(adminDb, T1)).some((s) => s.id === sedeId))
+    assert.ok((await listarSedes(adminDb, T1)).some((s) => s.id === sedeId))
+  })
+
+  it('crearSede con nombre vacío o solo espacios → SedeInvalidaError', async () => {
+    await assert.rejects(
+      () => crearSede(adminDb, T1, { nombre: '   ' }, { uid: ADMIN }),
+      (error) => error instanceof SedeInvalidaError && /nombre/.test(error.message),
+    )
+  })
+
+  it('crearSede con nombre repetido (caja, espacios y acentos) → SedeInvalidaError', async () => {
+    await crearSede(adminDb, T1, { nombre: 'Boleíta' }, { uid: ADMIN })
+    for (const repetido of ['traki', '  TRAKI  ', 'boleita', 'BOLEITA']) {
+      await assert.rejects(
+        () => crearSede(adminDb, T1, { nombre: repetido }, { uid: ADMIN }),
+        (error) => error instanceof SedeInvalidaError && /Ya hay una sede llamada/.test(error.message),
+        `debía rechazar ${repetido}`,
+      )
+    }
+    // La sede nueva NO se creó: siguen traki + Boleíta.
+    assert.equal((await listarSedes(adminDb, T1)).length, 2)
+  })
+
+  it('crearSede guarda el horario por día que se le pase y valida el que no sirve', async () => {
+    const horario = semana({ 0: franja(450, 930), 6: null })
+    const { sedeId } = await crearSede(adminDb, T1, { nombre: 'Media Hora', horario }, { uid: ADMIN })
+    assert.deepEqual((await leerSede(sedeId)).horario, horario)
+    await assert.rejects(
+      () =>
+        crearSede(
+          adminDb,
+          T1,
+          { nombre: 'Horario malo', horario: semana({ 0: franja(435, 930) }) },
+          { uid: ADMIN },
+        ),
+      SedeInvalidaError,
+    )
+  })
+
+  it('renombrarSede normaliza, acepta su propio nombre y rechaza el de otra sede', async () => {
+    const { sedeId } = await crearSede(adminDb, T1, { nombre: 'boleita' }, { uid: ADMIN })
+    const { nombre } = await renombrarSede(adminDb, T1, sedeId, '  Central  ', { uid: ADMIN })
+    assert.equal(nombre, 'Central')
+    // El propio nombre en otra caja no es conflicto y queda normalizado.
+    await renombrarSede(adminDb, T1, sedeId, 'CENTRAL', { uid: ADMIN })
+    assert.equal((await leerSede(sedeId)).nombre, 'Central')
+    // El nombre de OTRA sede sí se rechaza.
+    await assert.rejects(
+      () => renombrarSede(adminDb, T1, sedeId, '  traki ', { uid: ADMIN }),
+      (error) =>
+        error instanceof SedeInvalidaError &&
+        error.message === 'Ya hay una sede llamada "Traki"',
+    )
+    await assert.rejects(
+      () => renombrarSede(adminDb, T1, 'no-existe', 'Otra', { uid: ADMIN }),
+      SedeInvalidaError,
+    )
+  })
+
+  it('desactivar una sede sin clases pendientes la saca de la agenda pero no la borra', async () => {
+    const { sedeId } = await crearSede(adminDb, T1, { nombre: 'Auxiliar' }, { uid: ADMIN })
+    const { activa } = await desactivarSede(adminDb, T1, sedeId, {
+      uid: ADMIN,
+      ahora: AHORA_RESERVA,
+    })
+    assert.equal(activa, false)
+    assert.ok(!(await getSedes(adminDb, T1)).some((s) => s.id === sedeId))
+    // El documento NO se borra: sigue en la lista completa para reactivarla.
+    const todas = await listarSedes(adminDb, T1)
+    const guardada = todas.find((s) => s.id === sedeId)
+    assert.ok(guardada, 'el documento de la sede NO se borra')
+    assert.equal(guardada.activa, false)
+  })
+
+  it('desactivar una sede con clases pendientes → rechaza con la cantidad y no escribe', async () => {
+    await reservar() // domingo 18:00-19:00 en traki
+    await assert.rejects(
+      () => desactivarSede(adminDb, T1, 'traki', { uid: ADMIN, ahora: AHORA_RESERVA }),
+      (error) =>
+        error instanceof SedeInvalidaError &&
+        error.message ===
+          'No se puede desactivar Traki: tiene 1 clase pendiente. Cancélalas o muévelas a otra sede primero.',
+    )
+    assert.equal((await leerSede('traki')).activa, true)
+  })
+
+  it('varias clases pendientes → mensaje en plural con la cantidad', async () => {
+    await reservar({ horaInicio: '18:00', horaFin: '19:00' })
+    await reservar({ canchaId: 'c2', profesorId: 'p2', horaInicio: '20:00', horaFin: '21:00' })
+    await assert.rejects(
+      () => desactivarSede(adminDb, T1, 'traki', { uid: ADMIN, ahora: AHORA_RESERVA }),
+      (error) =>
+        error instanceof SedeInvalidaError &&
+        error.message.startsWith('No se puede desactivar Traki: tiene 2 clases pendientes.'),
+    )
+  })
+
+  it('solo cuentan las clases PENDIENTES: una cancelada no bloquea', async () => {
+    const { claseId } = await reservar()
+    await cancelarClase(adminDb, T1, claseId, { uid: ADMIN })
+    const { activa } = await desactivarSede(adminDb, T1, 'traki', {
+      uid: ADMIN,
+      ahora: AHORA_RESERVA,
+    })
+    assert.equal(activa, false)
+  })
+
+  it('una clase ya terminada no bloquea la desactivación', async () => {
+    await reservar() // 18:00-19:00
+    const { activa } = await desactivarSede(adminDb, T1, 'traki', {
+      uid: ADMIN,
+      ahora: DESPUES_DEL_FIN,
+    })
+    assert.equal(activa, false)
+  })
+
+  it('reactivar SIEMPRE se permite, aunque haya clases pendientes', async () => {
+    await reservar() // clase pendiente en traki
+    await setDoc(
+      doc(adminDb, 'academias', T1, 'sedes', 'traki'),
+      { activa: false },
+      { merge: true },
+    )
+    const { activa } = await reactivarSede(adminDb, T1, 'traki', { uid: ADMIN })
+    assert.equal(activa, true)
+    assert.equal((await leerSede('traki')).activa, true)
+  })
+
+  it('una sede desactivada rechaza reservas nuevas', async () => {
+    await setDoc(
+      doc(adminDb, 'academias', T1, 'sedes', 'traki'),
+      { activa: false },
+      { merge: true },
+    )
+    await assert.rejects(
+      () => reservar(),
+      (error) => error instanceof ClaseInvalidaError && /no está activa/.test(error.message),
+    )
+  })
+
+  it('desactivar o reactivar una sede inexistente → SedeInvalidaError', async () => {
+    await assert.rejects(
+      () => desactivarSede(adminDb, T1, 'no-existe', { uid: ADMIN }),
+      SedeInvalidaError,
+    )
+    await assert.rejects(
+      () => reactivarSede(adminDb, T1, 'no-existe', { uid: ADMIN }),
+      SedeInvalidaError,
+    )
   })
 })

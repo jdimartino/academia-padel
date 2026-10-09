@@ -358,3 +358,87 @@
 .bloque--sin-cerrar {
   box-shadow: var(--bloque-sombra), inset 0 0 0 2px rgba(255, 122, 26, 0.9);
 }
+
+/* ============================================================
+   Configuración: editor de horario de la sede, por día de la semana
+   ============================================================ */
+
+/*
+ * Mobile-first: cada día es una fila apilada (nombre + interruptor "cerrado",
+ * horas y "Aplicar a todos los días"). Desde 48rem la fila pasa a una sola
+ * línea. Los selectores de hora son anchos, así que nunca se fija un ancho en
+ * píxeles: se reparten el espacio con flex.
+ */
+.horario-editor {
+  margin: 0;
+  padding: 12px;
+  border-radius: 14px;
+  border: 1px solid rgba(255, 255, 255, 0.18);
+  background: rgba(255, 255, 255, 0.06);
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.horario-editor legend {
+  padding: 0 6px;
+}
+
+.horario-dia {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 10px 0;
+  border-top: 1px solid rgba(255, 255, 255, 0.12);
+}
+
+.horario-dia:first-of-type {
+  border-top: 0;
+  padding-top: 0;
+}
+
+.horario-dia__cab {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+}
+
+.horario-dia__nombre {
+  font-weight: 600;
+}
+
+.horario-dia__horas {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.horario-dia__horas .form__input {
+  flex: 1 1 0;
+  min-width: 0;
+}
+
+.horario-dia__horas span {
+  color: var(--texto-muted);
+}
+
+@media (min-width: 48rem) {
+  .horario-dia {
+    flex-direction: row;
+    align-items: center;
+    gap: 12px;
+  }
+
+  .horario-dia__cab {
+    flex: 0 0 11rem;
+  }
+
+  .horario-dia__horas {
+    flex: 1 1 auto;
+  }
+
+  .horario-dia__aplicar {
+    flex: 0 0 auto;
+  }
+}

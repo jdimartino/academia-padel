@@ -36,11 +36,17 @@ import {
 } from 'firebase/firestore'
 import {
   CATEGORIAS,
+  DIAS_SEMANA,
   DURACIONES_VALIDAS,
   HORARIO_DEFAULT,
+  HORARIO_SEMANA_DEFAULT,
   MINUTOS_BLOQUE,
+  etiquetaDia,
   formatHora12,
+  formatMinutos,
+  franjaValida,
   horarioDeSede,
+  horarioDelDia,
 } from '../lib/agenda.js'
 
 /**
@@ -55,26 +61,35 @@ export { MINUTOS_BLOQUE }
  * Reglas de horario de una clase (se aplican en la capa de datos, no solo en el
  * formulario):
  * - arranca en punto o a y media (múltiplo de MINUTOS_BLOQUE) dentro de la
- *   franja de la SEDE;
+ *   franja de la SEDE PARA ESE DÍA;
  * - dura 1 h, 1 h 30 o 2 h exactas (ver DURACIONES_VALIDAS);
- * - no puede terminar después del cierre de la SEDE, así que la última hora de
- *   inicio depende de la duración.
+ * - no puede terminar después del cierre de la SEDE ese día, así que la última
+ *   hora de inicio depende de la duración.
  *
- * La franja ya no es global: cada sede tiene `horario {apertura, cierre}` en
- * horas enteras. HORARIO_DEFAULT es el fallback 07:00-23:00 para las sedes que
- * todavía no tienen el campo (ver `horarioDeSede`). Las dos son puras y viven en
- * src/lib/agenda.js; acá se reexportan para no romper a quien las importa de la
- * capa de datos.
+ * La franja no es global: cada sede tiene un horario POR DÍA DE LA SEMANA con
+ * apertura y cierre en MINUTOS (múltiplos de 30) o `null` si ese día está
+ * cerrado (ver `horarioDeSede` y `horarioDelDia` en src/lib/agenda.js).
+ * HORARIO_SEMANA_DEFAULT es el fallback 07:00-23:00 para las sedes sin el campo
+ * o con datos corruptos. Todo eso es puro y vive en src/lib/agenda.js; acá se
+ * reexporta para no romper a quien lo importa de la capa de datos.
  *
- * NOTA (Fase 2): la franja de la sede sigue en HORAS ENTERAS. Poder configurar
- * apertura/cierre en medias horas es la Fase 2 y toca el modelo de sedes.
+ * HORA_APERTURA y HORA_CIERRE son la franja del día por defecto (07:00-23:00),
+ * en MINUTOS (420-1380): antes eran horas enteras y con el horario por día todo
+ * el proyecto trabaja en minutos.
  */
-export const HORA_APERTURA = HORARIO_DEFAULT.apertura * 60
-export const HORA_CIERRE = HORARIO_DEFAULT.cierre * 60
+export const HORA_APERTURA = HORARIO_DEFAULT.apertura
+export const HORA_CIERRE = HORARIO_DEFAULT.cierre
 export { DURACIONES_VALIDAS }
 
 /** Tope de largo del nombre de una cancha (después de recortar). */
 export const LIMITE_NOMBRE_CANCHA = 100
+
+/**
+ * Tope de largo del nombre de una sede. Es el MISMO tope que el de una cancha:
+ * los nombres de sede se normalizan y se comparan con las mismas utilidades
+ * (`normalizarNombreCancha` / `claveNombreCancha`).
+ */
+export const LIMITE_NOMBRE_SEDE = LIMITE_NOMBRE_CANCHA
 
 /**
  * Tope de clases futuras que `setSedeHorario` revisa antes de aceptar un
@@ -91,7 +106,13 @@ export const LIMITE_CLASES_HORARIO = 500
 export const LIMITE_CLASES_PENDIENTES = 500
 
 /** Categorías válidas de una clase. Ver docs/modelo-datos.md §4. */
-export { CATEGORIAS, HORARIO_DEFAULT, horarioDeSede }
+export {
+  CATEGORIAS,
+  HORARIO_DEFAULT,
+  HORARIO_SEMANA_DEFAULT,
+  horarioDeSede,
+  horarioDelDia,
+}
 
 /** Cupo máximo de una clase según el modelo de datos (docs/modelo-datos.md §4). */
 export const CUPO_MAXIMO = 4
@@ -305,22 +326,58 @@ export function validarInicioNoPasado(fecha, horaInicio, ahora) {
 /* --------------------------------------------------------------------- */
 
 /**
- * Valida y normaliza un horario de sede: apertura y cierre enteros entre 0 y
- * 24, con cierre > apertura. Devuelve `{apertura, cierre}`.
+ * Valida y normaliza el HORARIO SEMANAL de una sede: un mapa con los 7 días
+ * (claves 0 = lunes … 6 = domingo, ver `DIAS_SEMANA`). Cada día es `null` (la
+ * sede está cerrada ese día) o una franja `{apertura, cierre}` en MINUTOS,
+ * múltiplos de MINUTOS_BLOQUE, dentro de 0-1440 y con cierre > apertura.
+ *
+ * Es estricto a propósito: solo acepta el formato nuevo. El formato VIEJO de un
+ * solo par de horas enteras se sigue LEYENDO (`horarioDeSede` lo expande a los
+ * 7 días), pero lo que se escribe es siempre el formato por día.
+ *
+ * Devuelve un mapa nuevo con los 7 días.
  */
 export function validarHorario(horario) {
-  const apertura = horario?.apertura
-  const cierre = horario?.cierre
-  if (!Number.isInteger(apertura) || !Number.isInteger(cierre)) {
-    throw new SedeInvalidaError('La apertura y el cierre deben ser horas enteras')
+  if (!horario || typeof horario !== 'object' || Array.isArray(horario)) {
+    throw new SedeInvalidaError('El horario debe indicar los 7 días de la semana')
   }
-  if (apertura < 0 || apertura > 24 || cierre < 0 || cierre > 24) {
-    throw new SedeInvalidaError('La apertura y el cierre deben estar entre 0 y 24')
+  const claves = Object.keys(horario)
+  if (claves.length !== DIAS_SEMANA.length) {
+    throw new SedeInvalidaError('El horario debe traer exactamente los 7 días de la semana')
   }
-  if (cierre <= apertura) {
-    throw new SedeInvalidaError('El cierre debe ser posterior a la apertura')
+  const semana = {}
+  for (const dia of DIAS_SEMANA) {
+    const etiqueta = etiquetaDia(dia)
+    if (!Object.hasOwn(horario, dia)) {
+      throw new SedeInvalidaError(`Falta el horario del ${etiqueta.toLowerCase()}`)
+    }
+    const valor = horario[dia]
+    if (valor === null) {
+      semana[dia] = null
+      continue
+    }
+    // Estricto con la FORMA: exactamente `{apertura, cierre}` (sin campos
+    // extra), igual que la validación de firestore.rules. El lector
+    // (`franjaValida`) sí es tolerante y solo mira las dos horas.
+    const esObjeto = valor !== null && typeof valor === 'object' && !Array.isArray(valor)
+    const franja = esObjeto && Object.keys(valor).length === 2 ? franjaValida(valor) : null
+    if (!franja) {
+      throw new SedeInvalidaError(
+        `El horario del ${etiqueta.toLowerCase()} es inválido: la apertura y el cierre deben ` +
+          `ser múltiplos de ${MINUTOS_BLOQUE} min entre 0 y 1440, con el cierre después de la apertura`,
+      )
+    }
+    semana[dia] = franja
   }
-  return { apertura, cierre }
+  return semana
+}
+
+/**
+ * Nombre visible de una sede. Si el documento no tiene `nombre` se cae al id.
+ */
+export function nombreDeSede(sede, sedeId = null) {
+  const nombre = String(sede?.nombre ?? '').trim()
+  return nombre || String(sedeId ?? sede?.id ?? '')
 }
 
 /**
@@ -439,21 +496,54 @@ export function validarNombreCancha(nombre, canchas = [], exceptoId = null) {
 }
 
 /**
- * Valida que una franja de clase (horas "HH:mm") entre en el horario de la
- * sede: arranca a la apertura o después y termina al cierre o antes.
+ * Valida y normaliza el nombre de una SEDE con las MISMAS reglas y utilidades
+ * que el de una cancha (`normalizarNombreCancha` + `claveNombreCancha`): no
+ * puede quedar vacío, tiene tope de largo y no puede repetirse dentro del tenant
+ * (ignora caja, espacios de más, letras pegadas a dígitos y acentos; las sedes
+ * inactivas también cuentan). `sedes` son las sedes existentes y `exceptoId`
+ * deja afuera a la que se está renombrando. Devuelve el nombre a guardar.
  */
-export function validarFranjaEnHorario(horaInicio, horaFin, horario = HORARIO_DEFAULT) {
-  const franja = horarioDeSede({ horario })
-  const inicio = aMinutos(horaInicio)
-  const fin = aMinutos(horaFin)
-  if (inicio < franja.apertura * 60) {
-    throw new ClaseInvalidaError(
-      `La clase no puede empezar antes de ${formatHora12(franja.apertura * 60)} (recibido ${formatHora12(horaInicio)})`,
+export function validarNombreSede(nombre, sedes = [], exceptoId = null) {
+  const texto = normalizarNombreCancha(nombre)
+  if (!texto) throw new SedeInvalidaError('La sede necesita un nombre')
+  if (texto.length > LIMITE_NOMBRE_SEDE) {
+    throw new SedeInvalidaError(
+      `El nombre de la sede no puede superar ${LIMITE_NOMBRE_SEDE} caracteres`,
     )
   }
-  if (fin > franja.cierre * 60) {
+  const clave = claveNombreCancha(texto)
+  const repetida = sedes.find(
+    (sede) => sede.id !== exceptoId && claveNombreCancha(nombreDeSede(sede, sede.id)) === clave,
+  )
+  if (repetida) {
+    throw new SedeInvalidaError(`Ya hay una sede llamada "${nombreDeSede(repetida, repetida.id)}"`)
+  }
+  return texto
+}
+
+/**
+ * Valida que una franja de clase (horas "HH:mm") entre en el horario del DÍA de
+ * la sede: arranca a la apertura o después y termina al cierre o antes.
+ *
+ * `horario` es la franja del día en MINUTOS (`{apertura, cierre}`), tal como la
+ * devuelve `horarioDelDia`. Con `null` —día CERRADO— la clase se rechaza. Sin
+ * argumento (o con un valor corrupto) se usa el default 07:00-23:00.
+ */
+export function validarFranjaEnHorario(horaInicio, horaFin, horario = HORARIO_DEFAULT) {
+  const franja = horario === null ? null : (franjaValida(horario) ?? HORARIO_DEFAULT)
+  if (!franja) {
+    throw new ClaseInvalidaError('La sede está cerrada ese día: no se pueden reservar clases')
+  }
+  const inicio = aMinutos(horaInicio)
+  const fin = aMinutos(horaFin)
+  if (inicio < franja.apertura) {
     throw new ClaseInvalidaError(
-      `La clase no puede terminar después de ${formatHora12(franja.cierre * 60)} (${formatHora12(horaInicio)}-${formatHora12(horaFin)})`,
+      `La clase no puede empezar antes de ${formatMinutos(franja.apertura)} (recibido ${formatHora12(horaInicio)})`,
+    )
+  }
+  if (fin > franja.cierre) {
+    throw new ClaseInvalidaError(
+      `La clase no puede terminar después de ${formatMinutos(franja.cierre)} (${formatHora12(horaInicio)}-${formatHora12(horaFin)})`,
     )
   }
   return franja
@@ -481,9 +571,9 @@ function bloqueProfesorId({ profesorId, fecha, minuto }) {
  * 3 bloques de cancha + 3 de profesor. Como el inicio siempre cae en la grilla
  * y la duración es múltiplo de 30, el rango se cubre exacto.
  *
- * `horario` es la franja de la sede (`{apertura, cierre}` en horas enteras).
- * Por defecto usa 07:00-23:00: los llamadores que tengan la sede le pasan el
- * horario real (ver `horarioDeSede`).
+ * `horario` es la franja del DÍA de la clase en minutos (`{apertura, cierre}`),
+ * tal como la devuelve `horarioDelDia` a partir del horario semanal de la sede.
+ * Por defecto usa 07:00-23:00; con `null` (día cerrado) rechaza la clase.
  */
 export function bloquesDeClase(datos, horario = HORARIO_DEFAULT) {
   const { sedeId, canchaId, profesorId, fecha, horaInicio, horaFin } = datos
@@ -623,6 +713,24 @@ export async function getSedes(db, tenantId) {
 }
 
 /**
+ * Sedes de una academia INCLUYENDO las inactivas: es la lectura de la pantalla
+ * de Configuración, que necesita verlas para reactivarlas y para validar que el
+ * nombre no se repita. Acotado por tenant + limit (50). Misma forma que
+ * `getSedes` (sin el filtro de activa).
+ */
+export async function listarSedes(db, tenantId) {
+  const q = query(collection(db, 'academias', tenantId, 'sedes'), limit(50))
+  const snap = await getDocs(q)
+  return snap.docs
+    .map((d) => ({ id: d.id, ...d.data() }))
+    .sort(
+      (a, b) =>
+        (a.orden ?? 0) - (b.orden ?? 0) ||
+        String(a.nombre ?? '').localeCompare(String(b.nombre ?? ''), 'es'),
+    )
+}
+
+/**
  * Canchas de una sede, ordenadas por `numero` y después nombre. Acotado por
  * sede + limit (50). El filtro de activa se hace en el cliente para que una
  * cancha vieja SIN el campo `activa` siga contando como activa (fallback); las
@@ -673,6 +781,91 @@ async function exigirSede(db, tenantId, sedeId) {
   const snap = await getDoc(refSede(db, tenantId, sedeId))
   if (!snap.exists()) throw new SedeInvalidaError(`La sede "${sedeId}" no existe`)
   return { id: snap.id, ...snap.data() }
+}
+
+/**
+ * Crea una sede. El nombre se normaliza (`normalizarNombreCancha`) y debe ser
+ * único dentro del tenant, contando las sedes inactivas; el `orden` se calcula
+ * como el siguiente entero. La sede nace ACTIVA y con `horario` de 7 días: el
+ * que venga en `datos.horario` (validado) o el default 07:00-23:00.
+ */
+export async function crearSede(db, tenantId, datos = {}, opciones = {}) {
+  const { uid = null, now = new Date() } = opciones
+  const existentes = await listarSedes(db, tenantId)
+  const nombre = validarNombreSede(datos.nombre, existentes)
+  const horario = datos.horario === undefined
+    ? { ...HORARIO_SEMANA_DEFAULT }
+    : validarHorario(datos.horario)
+  const orden = existentes.reduce((max, sede) => Math.max(max, Number(sede.orden) || 0), 0) + 1
+
+  const ref = doc(collection(db, 'academias', tenantId, 'sedes'))
+  await setDoc(ref, {
+    nombre,
+    activa: true,
+    orden,
+    horario,
+    creadoPor: uid,
+    creadoEn: Timestamp.fromDate(now),
+  })
+  return { sedeId: ref.id }
+}
+
+/** Renombra una sede. Mismas reglas de nombre que al crearla (normalizado y único en el tenant). */
+export async function renombrarSede(db, tenantId, sedeId, nombre, opciones = {}) {
+  const { uid = null, now = new Date() } = opciones
+  await exigirSede(db, tenantId, sedeId)
+  const existentes = await listarSedes(db, tenantId)
+  const nombreLimpio = validarNombreSede(nombre, existentes, sedeId)
+  await updateDoc(refSede(db, tenantId, sedeId), {
+    nombre: nombreLimpio,
+    actualizadoPor: uid,
+    actualizadoEn: Timestamp.fromDate(now),
+  })
+  return { sedeId, nombre: nombreLimpio }
+}
+
+/**
+ * Desactiva una sede. Soft delete: el documento NUNCA se borra, así las clases
+ * que ya la usan quedan intactas.
+ *
+ * Se rechaza mientras la sede tenga clases pendientes —no canceladas y cuyo fin
+ * todavía no pasó, comparado contra `ahora`—: primero hay que cancelarlas o
+ * moverlas a otra sede. Una clase ya terminada no bloquea, aunque siga sin
+ * cerrar o sin cobrar.
+ *
+ * Desactivada, la sede no admite reservas NUEVAS ni reprogramaciones HACIA ella
+ * (lo validan `crearClase` y `reprogramarClase`) y desaparece de la agenda.
+ */
+export async function desactivarSede(db, tenantId, sedeId, opciones = {}) {
+  const { uid = null, ahora = new Date() } = opciones
+  const now = opciones.now ?? ahora
+  const sede = await exigirSede(db, tenantId, sedeId)
+  const pendientes = await contarClasesPendientesDeSede(db, tenantId, sedeId, ahora)
+  if (pendientes > 0) {
+    throw new SedeInvalidaError(
+      `No se puede desactivar ${nombreDeSede(sede, sedeId)}: tiene ${pendientes} ` +
+        `${pendientes === 1 ? 'clase pendiente' : 'clases pendientes'}. ` +
+        'Cancélalas o muévelas a otra sede primero.',
+    )
+  }
+  await updateDoc(refSede(db, tenantId, sedeId), {
+    activa: false,
+    actualizadoPor: uid,
+    actualizadoEn: Timestamp.fromDate(now),
+  })
+  return { sedeId, activa: false }
+}
+
+/** Reactiva una sede. SIEMPRE se permite, aunque tenga clases pendientes. */
+export async function reactivarSede(db, tenantId, sedeId, opciones = {}) {
+  const { uid = null, now = new Date() } = opciones
+  await exigirSede(db, tenantId, sedeId)
+  await updateDoc(refSede(db, tenantId, sedeId), {
+    activa: true,
+    actualizadoPor: uid,
+    actualizadoEn: Timestamp.fromDate(now),
+  })
+  return { sedeId, activa: true }
 }
 
 /**
@@ -756,12 +949,14 @@ export async function cambiarActivaCancha(db, tenantId, sedeId, canchaId, activa
 
 /**
  * Cuenta las clases FUTURAS (fecha >= hoy local, nunca con `toISOString()`) no
- * canceladas de una sede que quedarían fuera del horario propuesto. Acotado por
- * tenant + sede + fecha + limit (el índice `clases: sedeId + fecha + horaInicio`
- * cubre el prefijo sedeId + fecha); el filtro de estado y el de franja van en el
- * cliente. `ahora` es inyectable.
+ * canceladas de una sede que quedarían fuera del HORARIO SEMANAL propuesto. La
+ * comprobación es POR DÍA DE LA SEMANA: una clase del martes se compara solo con
+ * el horario del martes, en minutos reales. Un día que queda CERRADO (`null`)
+ * deja fuera a todas sus clases. Acotado por tenant + sede + fecha + limit (el
+ * índice `clases: sedeId + fecha + horaInicio` cubre el prefijo sedeId + fecha);
+ * el filtro de estado y el de franja van en el cliente. `ahora` es inyectable.
  */
-async function contarClasesFueraDeHorario(db, tenantId, sedeId, horario, ahora) {
+async function contarClasesFueraDeHorario(db, tenantId, sedeId, semana, ahora) {
   const q = query(
     collection(db, 'academias', tenantId, 'clases'),
     where('sedeId', '==', sedeId),
@@ -773,10 +968,16 @@ async function contarClasesFueraDeHorario(db, tenantId, sedeId, horario, ahora) 
   for (const documento of snap.docs) {
     const clase = documento.data()
     if (clase.estado === 'cancelada') continue
+    const franja = horarioDelDia(clase.fecha, semana)
+    if (franja === null) {
+      // Día cerrado en el horario nuevo (o fecha corrupta): la clase no cabe.
+      fuera += RE_FECHA.test(clase.fecha ?? '') ? 1 : 0
+      continue
+    }
     const inicio = RE_HHMM.test(clase.horaInicio ?? '') ? aMinutos(clase.horaInicio) : null
     const fin = RE_HHMM.test(clase.horaFin ?? '') ? aMinutos(clase.horaFin) : null
     if (inicio === null || fin === null) continue
-    if (inicio < horario.apertura * 60 || fin > horario.cierre * 60) fuera += 1
+    if (inicio < franja.apertura || fin > franja.cierre) fuera += 1
   }
   return fuera
 }
@@ -822,29 +1023,51 @@ async function contarClasesPendientesDeCancha(db, tenantId, sedeId, canchaId, ah
 }
 
 /**
- * Fija el horario de una sede (`{apertura, cierre}` en horas enteras 0-24, con
- * cierre > apertura). Rechaza el cambio si deja FUERA a alguna clase futura no
- * cancelada, con un mensaje que dice cuántas son.
+ * Cuenta las clases PENDIENTES de una SEDE (ver `clasePendiente`), para la
+ * guarda de la desactivación. Acotado por tenant + sede + fecha (desde hoy
+ * local) + limit; el índice `clases: sedeId + fecha + horaInicio` cubre el
+ * prefijo sedeId + fecha. El estado y el reloj se filtran en el cliente.
+ */
+async function contarClasesPendientesDeSede(db, tenantId, sedeId, ahora) {
+  const q = query(
+    collection(db, 'academias', tenantId, 'clases'),
+    where('sedeId', '==', sedeId),
+    where('fecha', '>=', fechaHoyLocal(ahora)),
+    limit(LIMITE_CLASES_PENDIENTES),
+  )
+  const snap = await getDocs(q)
+  let pendientes = 0
+  for (const documento of snap.docs) {
+    if (clasePendiente(documento.data(), ahora)) pendientes += 1
+  }
+  return pendientes
+}
+
+/**
+ * Fija el horario SEMANAL de una sede: un mapa con los 7 días (0 = lunes … 6 =
+ * domingo) donde cada día es `{apertura, cierre}` en minutos o `null` (cerrado).
+ * Rechaza el cambio si deja FUERA a alguna clase futura no cancelada —comparando
+ * cada clase con el horario de SU día de la semana, en minutos—, con un mensaje
+ * que dice cuántas son.
  */
 export async function setSedeHorario(db, tenantId, sedeId, horario, opciones = {}) {
   const { uid = null, ahora = new Date() } = opciones
   const now = opciones.now ?? ahora
   await exigirSede(db, tenantId, sedeId)
-  const nuevo = validarHorario(horario)
-  const fuera = await contarClasesFueraDeHorario(db, tenantId, sedeId, nuevo, ahora)
+  const semana = validarHorario(horario)
+  const fuera = await contarClasesFueraDeHorario(db, tenantId, sedeId, semana, ahora)
   if (fuera > 0) {
     throw new SedeInvalidaError(
-      `No se puede cambiar el horario: ${fuera} clase(s) futura(s) quedarían fuera de ` +
-        `${formatHora12(nuevo.apertura * 60)} a ${formatHora12(nuevo.cierre * 60)}. ` +
-        'Reprograma o cancela esas clases primero.',
+      `No se puede cambiar el horario: ${fuera} ${fuera === 1 ? 'clase futura quedaría' : 'clases futuras quedarían'} ` +
+        'fuera del horario de su día. Reprograma o cancela esas clases primero.',
     )
   }
   await updateDoc(refSede(db, tenantId, sedeId), {
-    horario: nuevo,
+    horario: semana,
     actualizadoPor: uid,
     actualizadoEn: Timestamp.fromDate(now),
   })
-  return { sedeId, horario: nuevo }
+  return { sedeId, horario: semana }
 }
 
 /** Estados admitidos por los filtros de listado. */
@@ -1368,9 +1591,13 @@ export async function crearClase(db, tenantId, datos, opciones = {}) {
       )
     }
 
-    // Franja + bloques con el horario REAL de la sede (fallback 07:00-23:00) y,
-    // recién después, el "no reservar en el pasado" (reloj inyectado).
-    bloques = bloquesDeClase(datos, horarioDeSede(snapSede.data()))
+    // Franja + bloques con el horario REAL de la sede PARA EL DÍA de la clase
+    // (fallback 07:00-23:00 si la sede no tiene el campo; `null` si ese día está
+    // cerrado) y, recién después, el "no reservar en el pasado" (reloj inyectado).
+    bloques = bloquesDeClase(
+      datos,
+      horarioDelDia(datos.fecha, horarioDeSede(snapSede.data())),
+    )
     validarInicioNoPasado(datos.fecha, datos.horaInicio, ahora)
 
     const snapsBloque = await Promise.all(
@@ -1564,9 +1791,13 @@ export async function reprogramarClase(db, tenantId, claseId, nuevoCambio = {}, 
       )
     }
 
-    // Franja + bloques con el horario REAL de la sede destino y, recién
-    // después, el "no se reprograma al pasado" (reloj inyectado).
-    const bloquesNuevos = bloquesDeClase(futura, horarioDeSede(snapSede.data()))
+    // Franja + bloques con el horario REAL de la sede destino PARA EL DÍA de la
+    // clase (`null` si ese día está cerrado) y, recién después, el "no se
+    // reprograma al pasado" (reloj inyectado).
+    const bloquesNuevos = bloquesDeClase(
+      futura,
+      horarioDelDia(futura.fecha, horarioDeSede(snapSede.data())),
+    )
     validarInicioNoPasado(futura.fecha, futura.horaInicio, ahora)
 
     // Todas las lecturas antes de cualquier escritura.

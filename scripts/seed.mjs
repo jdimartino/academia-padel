@@ -10,6 +10,8 @@
  */
 
 import { bloquesDeClase, camposBusqueda, nombreCompleto, resolverAsignacion } from '../src/firebase/db.js'
+import { horarioDelDia } from '../src/lib/agenda.js'
+import { sumarDias } from '../src/lib/fechas.js'
 
 const PROJECT_ID = process.env.FIREBASE_PROJECT_ID ?? 'academia-padel-jdm'
 const EMULATOR_HOST = process.env.EMULATOR_HOST ?? '127.0.0.1'
@@ -97,15 +99,36 @@ function diaRelativo(dias) {
 }
 
 /**
+ * Fecha "YYYY-MM-DD" a `dias` de hoy, corrida hasta el día MÁS CERCANO en que la
+ * sede abre: hacia adelante si la fecha es futura y hacia atrás si es pasada.
+ * Así ninguna clase del seed cae en un día cerrado (Traki cierra los domingos).
+ */
+function diaRelativoAbierto(dias, horarioSemana) {
+  const paso = dias < 0 ? -1 : 1
+  let fecha = diaRelativo(dias)
+  for (let intento = 0; intento < 7; intento += 1) {
+    if (horarioDelDia(fecha, horarioSemana)) return fecha
+    fecha = sumarDias(fecha, paso)
+  }
+  throw new Error('Ninguna sede del seed abre en toda la semana')
+}
+
+/**
  * Crea una clase con sus bloques de 30 min, reutilizando el mismo cálculo puro
  * que usa `crearClase` en src/firebase/db.js. El seed escribe por REST con token
  * "owner" (único lugar autorizado a saltear reglas), así que no puede llamar la
  * transacción del SDK; reusa `bloquesDeClase` para que la clase sea dueña de sus
  * bloques igual que en la app. Horario: arranque en punto o a y media (múltiplo
- * de 30), duración 60/90/120 min, fin máximo 23:00.
+ * de 30), duración 60/90/120 min y SIEMPRE dentro del horario del día de la sede
+ * (si la sede está cerrada ese día, `bloquesDeClase` rechaza la clase).
  */
 async function crearClaseEnSeed(datos) {
-  const bloques = bloquesDeClase(datos)
+  // La franja del DÍA de la clase sale del horario semanal de su sede: si la
+  // clase no cae dentro (o la sede está cerrada ese día), `bloquesDeClase`
+  // falla y el seed no escribe datos inconsistentes.
+  const sede = SEDES_POR_ID[datos.sedeId]
+  if (!sede) throw new Error(`La clase ${datos.id} del seed usa una sede desconocida: ${datos.sedeId}`)
+  const bloques = bloquesDeClase(datos, horarioDelDia(datos.fecha, sede.horario))
   const creadoEn = new Date()
   const cupo = datos.cupo ?? 4
   // Ninguna clase del seed se siembra sin alumnos (misma regla que la app).
@@ -168,18 +191,80 @@ const USUARIOS = [
 ]
 
 /*
- * Sedes del tenant de ensayo: 4 canchas ACTIVAS cada una y horario 07:00-23:00
- * (el mismo default de la capa de datos). Las canchas se numeran c1..c4.
+ * Sedes del tenant de ensayo: 4 canchas ACTIVAS cada una y horario POR DÍA DE LA
+ * SEMANA, en MINUTOS (0 = lunes … 6 = domingo), con `null` = cerrado.
+ *
+ * Traki es la sede que ilustra las medias horas: abre 7:30 y cierra 15:30 de
+ * lunes a viernes, el sábado 8:00-13:00 y el domingo está CERRADA. Sus clases de
+ * ejemplo caen siempre dentro de ese horario (ver `diaRelativoAbierto`).
+ * Boleíta usa el default 07:00-23:00 todos los días; Santa Rosa y Capital
+ * muestran otros horarios, con Capital cerrada los domingos.
+ * Las canchas se numeran c1..c4.
  */
 const CANCHAS_POR_SEDE = 4
-const HORARIO_SEDE = { apertura: 7, cierre: 23 }
+
+/** Shorthand: franja en horas locales del negocio → minutos desde medianoche. */
+const franja = (apertura, cierre) => ({
+  apertura: Math.round(apertura * 60),
+  cierre: Math.round(cierre * 60),
+})
 
 const SEDES = [
-  { id: 'traki', nombre: 'Traki' },
-  { id: 'boleita', nombre: 'Boleíta' },
-  { id: 'santa-rosa', nombre: 'Santa Rosa' },
-  { id: 'capital', nombre: 'Capital' },
+  {
+    id: 'traki',
+    nombre: 'Traki',
+    horario: {
+      0: franja(7.5, 15.5),
+      1: franja(7.5, 15.5),
+      2: franja(7.5, 15.5),
+      3: franja(7.5, 15.5),
+      4: franja(7.5, 15.5),
+      5: franja(8, 13),
+      6: null,
+    },
+  },
+  {
+    id: 'boleita',
+    nombre: 'Boleíta',
+    horario: {
+      0: franja(7, 23),
+      1: franja(7, 23),
+      2: franja(7, 23),
+      3: franja(7, 23),
+      4: franja(7, 23),
+      5: franja(7, 23),
+      6: franja(7, 23),
+    },
+  },
+  {
+    id: 'santa-rosa',
+    nombre: 'Santa Rosa',
+    horario: {
+      0: franja(9, 21),
+      1: franja(9, 21),
+      2: franja(9, 21),
+      3: franja(9, 21),
+      4: franja(9, 21),
+      5: franja(9, 14),
+      6: franja(9, 14),
+    },
+  },
+  {
+    id: 'capital',
+    nombre: 'Capital',
+    horario: {
+      0: franja(8, 22),
+      1: franja(8, 22),
+      2: franja(8, 22),
+      3: franja(8, 22),
+      4: franja(8, 22),
+      5: franja(8, 22),
+      6: null,
+    },
+  },
 ]
+
+const SEDES_POR_ID = Object.fromEntries(SEDES.map((sede) => [sede.id, sede]))
 
 /*
  * Fichas de profesor de ensayo. `sedes` son las sedes donde dicta: p1 cubre las
@@ -586,7 +671,7 @@ async function main() {
       direccion: `Sede ${sede.nombre}`,
       activa: true,
       orden: SEDES.indexOf(sede),
-      horario: HORARIO_SEDE,
+      horario: sede.horario,
     })
     for (let i = 1; i <= CANCHAS_POR_SEDE; i += 1) {
       await setDoc(`${tenant}/sedes/${sede.id}/canchas/c${i}`, {
@@ -618,11 +703,17 @@ async function main() {
   console.log(`· ${ALUMNOS_SEED.length} alumnos${extra}`)
 
   /*
-   * Fixture de la regla "no se reserva en el pasado": una clase reservada de
-   * ayer. Sirve para ejercitar el rechazo sin fabricar fechas a mano en los
-   * tests de la app. Todas las clases del seed arrancan en punto o a y media y
-   * duran 60, 90 o 120 min, con al menos un alumno.
+   * Fixture de la regla "no se reserva en el pasado": una clase reservada de un
+   * día pasado. Sirve para ejercitar el rechazo sin fabricar fechas a mano en
+   * los tests de la app. Todas las clases del seed van en Traki, arrancan en
+   * punto o a y media, duran 60, 90 o 120 min, tienen al menos un alumno y caen
+   * SIEMPRE dentro del horario de su día (Traki abre 7:30-15:30 y cierra los
+   * domingos: `diaRelativoAbierto` corre la fecha al día abierto más cercano).
    */
+  const horarioTraki = SEDES_POR_ID.traki.horario
+  const ayerAbierto = diaRelativoAbierto(-1, horarioTraki)
+  const mananaAbierto = diaRelativoAbierto(1, horarioTraki)
+
   await crearClaseEnSeed({
     id: 'c0',
     sedeId: 'traki',
@@ -630,7 +721,7 @@ async function main() {
     canchaId: 'c2',
     profesorId: 'p1',
     profesorNombre: nombreCompleto(PROFESORES_POR_ID.p1),
-    fecha: diaRelativo(-1),
+    fecha: ayerAbierto,
     horaInicio: '09:00',
     horaFin: '10:00',
     cupo: 4,
@@ -646,9 +737,9 @@ async function main() {
     canchaId: 'c1',
     profesorId: 'p1',
     profesorNombre: nombreCompleto(PROFESORES_POR_ID.p1),
-    fecha: diaRelativo(1),
-    horaInicio: '18:00',
-    horaFin: '19:00',
+    fecha: mananaAbierto,
+    horaInicio: '10:00',
+    horaFin: '11:00',
     cupo: 4,
     categoria: '6a',
     alumnosIds: ['a1'],
@@ -664,9 +755,9 @@ async function main() {
     canchaId: 'c1',
     profesorId: 'p1',
     profesorNombre: nombreCompleto(PROFESORES_POR_ID.p1),
-    fecha: diaRelativo(-1),
-    horaInicio: '18:00',
-    horaFin: '19:00',
+    fecha: ayerAbierto,
+    horaInicio: '11:00',
+    horaFin: '12:00',
     cupo: 4,
     categoria: '7a',
     alumnosIds: ['a1', 'a2'],
@@ -677,9 +768,10 @@ async function main() {
     estado: 'pendiente_cobro',
   })
 
-  // Clase de 90 min que ARRANCA A Y MEDIA (18:30-20:00): ocupa 3 bloques de 30
-  // min de cancha + 3 de profesor. Es el fixture de la grilla de media hora.
-  // Va en c2 y con p1, que sí dicta en traki (ver PROFESORES).
+  // Clase de 90 min que ARRANCA A Y MEDIA (11:30-13:00): ocupa 3 bloques de 30
+  // min de cancha + 3 de profesor. Es el fixture de la grilla de media hora; va
+  // después de c1 (10:00-11:00) para que el profesor p1, el único de Traki, no
+  // se solape consigo mismo.
   await crearClaseEnSeed({
     id: 'c3',
     sedeId: 'traki',
@@ -687,9 +779,9 @@ async function main() {
     canchaId: 'c2',
     profesorId: 'p1',
     profesorNombre: nombreCompleto(PROFESORES_POR_ID.p1),
-    fecha: diaRelativo(1),
-    horaInicio: '18:30',
-    horaFin: '20:00',
+    fecha: mananaAbierto,
+    horaInicio: '11:30',
+    horaFin: '13:00',
     cupo: 2,
     categoria: '5a',
     alumnosIds: ['a1', 'a2'],

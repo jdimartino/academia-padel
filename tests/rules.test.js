@@ -548,67 +548,123 @@ describe('8. Sedes y canchas: solo admin y validación de campos', () => {
     await assertFails(getDoc(canchaRef(anon, 'rc-allow')))
   })
 
-  it('administrador de t1 ACTUALIZA el horario de una sede con valores válidos → ALLOW', async () => {
+  /** Franja de un día en minutos (formato nuevo del horario). */
+  const dia = (apertura, cierre) => ({ apertura, cierre })
+  /** Horario semanal de 7 días: `porDia` pisa los días indicados (null = cerrado). */
+  const semana = (porDia = {}, abierto = dia(450, 930)) =>
+    Object.fromEntries([0, 1, 2, 3, 4, 5, 6].map((d) => [d, d in porDia ? porDia[d] : { ...abierto }]))
+  const sedeRef = (db, sedeId = 'traki') => doc(db, 'academias', T1, 'sedes', sedeId)
+  const actualizarHorario = (horario, ref = sedeRef(as(UID.adminT1))) =>
+    updateDoc(ref, { horario })
+
+  it('administrador de t1 CREA una sede con nombre y horario por día válidos → ALLOW', async () => {
     await assertSucceeds(
-      updateDoc(doc(as(UID.adminT1), 'academias', T1, 'sedes', 'traki'), {
-        horario: { apertura: 8, cierre: 22 },
+      setDoc(sedeRef(as(UID.adminT1), 'rnueva'), {
+        nombre: 'Sede nueva',
+        activa: true,
+        horario: semana({ 5: dia(480, 780), 6: null }),
       }),
     )
   })
 
-  it('administrador de t1 ACTUALIZA el horario con cierre <= apertura → DENY', async () => {
+  it('administrador de t1 CREA una sede sin nombre → DENY', async () => {
     await assertFails(
-      updateDoc(doc(as(UID.adminT1), 'academias', T1, 'sedes', 'traki'), {
-        horario: { apertura: 22, cierre: 8 },
-      }),
+      setDoc(sedeRef(as(UID.adminT1), 'rsin-nombre'), { activa: true, horario: semana() }),
     )
   })
 
-  it('administrador de t1 ACTUALIZA el horario con cierre igual a apertura → DENY', async () => {
+  it('administrador de t1 CREA una sede con nombre vacío → DENY', async () => {
     await assertFails(
-      updateDoc(doc(as(UID.adminT1), 'academias', T1, 'sedes', 'traki'), {
-        horario: { apertura: 10, cierre: 10 },
-      }),
+      setDoc(sedeRef(as(UID.adminT1), 'rvacia'), { nombre: '   ', activa: true }),
     )
   })
 
-  it('administrador de t1 ACTUALIZA el horario con una hora no entera → DENY', async () => {
+  it('administrador de t1 CREA una sede con activa no booleana → DENY', async () => {
     await assertFails(
-      updateDoc(doc(as(UID.adminT1), 'academias', T1, 'sedes', 'traki'), {
-        horario: { apertura: 7.5, cierre: 23 },
-      }),
+      setDoc(sedeRef(as(UID.adminT1), 'ractiva'), { nombre: 'Sede', activa: 'si' }),
     )
   })
 
-  it('administrador de t1 ACTUALIZA el horario con una hora fuera de 0-24 → DENY', async () => {
-    await assertFails(
-      updateDoc(doc(as(UID.adminT1), 'academias', T1, 'sedes', 'traki'), {
-        horario: { apertura: 7, cierre: 25 },
-      }),
-    )
+  it('profesor de t1 CREA una sede en t1 → DENY (rol profesor)', async () => {
+    await assertFails(setDoc(sedeRef(as(UID.profT1), 'rprofe'), { nombre: 'Sede', activa: true }))
   })
 
-  it('administrador de t1 ACTUALIZA el horario con campos extra → DENY', async () => {
-    await assertFails(
-      updateDoc(doc(as(UID.adminT1), 'academias', T1, 'sedes', 'traki'), {
-        horario: { apertura: 7, cierre: 23, extra: 1 },
-      }),
-    )
+  it('administrador de t2 CREA una sede en t1 → DENY (otro tenant)', async () => {
+    await assertFails(setDoc(sedeRef(as(UID.adminT2), 'rt2'), { nombre: 'Sede', activa: true }))
+  })
+
+  it('administrador de t1 ACTUALIZA el horario por día (7:30-15:30 y domingo cerrado) → ALLOW', async () => {
+    await assertSucceeds(actualizarHorario(semana({ 6: null })))
+  })
+
+  it('un día CERRADO (null) es válido → ALLOW', async () => {
+    await assertSucceeds(actualizarHorario(semana({ 0: null, 1: null, 2: null, 3: null, 4: null, 5: null, 6: null })))
+  })
+
+  it('horario con 7:15 (no múltiplo de 30) → DENY', async () => {
+    await assertFails(actualizarHorario(semana({ 0: dia(435, 930) })))
+  })
+
+  it('horario con cierre igual a apertura → DENY', async () => {
+    await assertFails(actualizarHorario(semana({ 0: dia(930, 930) })))
+  })
+
+  it('horario con cierre MENOR que la apertura → DENY', async () => {
+    await assertFails(actualizarHorario(semana({ 0: dia(930, 450) })))
+  })
+
+  it('horario con una hora fuera de 0-1440 → DENY', async () => {
+    await assertFails(actualizarHorario(semana({ 0: dia(450, 1470) })))
+    await assertFails(actualizarHorario(semana({ 0: dia(-30, 930) })))
+  })
+
+  it('horario con una hora no entera → DENY', async () => {
+    await assertFails(actualizarHorario(semana({ 0: dia(450.5, 930) })))
+  })
+
+  it('horario con un día de menos → DENY', async () => {
+    const incompleto = semana()
+    delete incompleto[6]
+    await assertFails(actualizarHorario(incompleto))
+  })
+
+  it('horario con una clave extra (día 7) → DENY', async () => {
+    await assertFails(actualizarHorario({ ...semana(), 7: dia(450, 930) }))
+  })
+
+  it('horario con campos extra dentro de un día → DENY', async () => {
+    await assertFails(actualizarHorario(semana({ 0: { ...dia(450, 930), extra: 1 } })))
+  })
+
+  it('horario con el formato VIEJO de horas enteras → ALLOW (compatibilidad de lectura)', async () => {
+    await assertSucceeds(actualizarHorario({ apertura: 7, cierre: 23 }))
+  })
+
+  it('horario con el formato viejo corrupto → DENY', async () => {
+    await assertFails(actualizarHorario({ apertura: 23, cierre: 7 }))
+    await assertFails(actualizarHorario({ apertura: 7, cierre: 25 }))
+    await assertFails(actualizarHorario({ apertura: 7, cierre: 23, extra: 1 }))
+  })
+
+  it('horario que no es un mapa → DENY', async () => {
+    await assertFails(actualizarHorario([1, 2, 3]))
+    await assertFails(actualizarHorario('7-23'))
   })
 
   it('administrador de t1 ACTUALIZA una sede sin tocar el horario → ALLOW', async () => {
     await assertSucceeds(
-      updateDoc(doc(as(UID.adminT1), 'academias', T1, 'sedes', 'traki'), {
+      updateDoc(sedeRef(as(UID.adminT1)), {
         direccion: 'Calle de ensayo',
       }),
     )
   })
 
+  it('administrador de t1 DESACTIVA una sede (activa: false) → ALLOW', async () => {
+    await assertSucceeds(updateDoc(sedeRef(as(UID.adminT1)), { activa: false }))
+    await assertSucceeds(updateDoc(sedeRef(as(UID.adminT1)), { activa: true }))
+  })
+
   it('profesor de t1 ACTUALIZA el horario de la sede → DENY (rol profesor)', async () => {
-    await assertFails(
-      updateDoc(doc(as(UID.profT1), 'academias', T1, 'sedes', 'traki'), {
-        horario: { apertura: 8, cierre: 22 },
-      }),
-    )
+    await assertFails(actualizarHorario(semana(), sedeRef(as(UID.profT1))))
   })
 })
