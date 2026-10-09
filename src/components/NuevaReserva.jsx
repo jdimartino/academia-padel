@@ -32,6 +32,12 @@ const MODALIDADES = ['Grupal', 'Individual']
  * que el detalle: bottom sheet en mobile y panel de 360px en desktop.
  * La validación de choques se hace ANTES de enviar contra las clases ya
  * cargadas del día; la transacción de db.js vuelve a validar igual.
+ *
+ * `hueco` (opcional) es una reserva nueva prellenada desde el clic en una hora
+ * libre de la agenda: `{canchaId, horaInicio}` en el formato interno de 24 h,
+ * duración 1 h. Se aplica en los valores INICIALES del estado, así la foto de
+ * `instantanea()` (la del cierre seguro) ya los incluye: un formulario recién
+ * abierto cierra directo con Escape, sin "¿Salir sin guardar?".
  */
 export default function NuevaReserva({
   tenantId,
@@ -40,6 +46,7 @@ export default function NuevaReserva({
   fecha,
   clases,
   clase = null,
+  hueco = null,
   onClose,
   onCreated,
 }) {
@@ -48,13 +55,17 @@ export default function NuevaReserva({
   // Franja de la sede: el formulario solo ofrece horas dentro de su horario.
   const horario = useMemo(() => horarioDeSede(sede), [sede])
   const horas60 = opcionesDeInicio(60, horario)
-  const [canchaId, setCanchaId] = useState(clase?.canchaId ?? canchas[0]?.id ?? null)
+  const [canchaId, setCanchaId] = useState(
+    clase?.canchaId ?? hueco?.canchaId ?? canchas[0]?.id ?? null,
+  )
   const [horaInicio, setHoraInicio] = useState(() => {
     if (clase?.horaInicio) return clase.horaInicio
+    if (hueco?.horaInicio) return hueco.horaInicio
     // Default histórico 18:00; si la sede abre/cierra antes, la última hora útil.
     if (horas60.includes('18:00')) return '18:00'
     return horas60[horas60.length - 1] ?? '07:00'
   })
+  // Una reserva nueva (con hueco o sin él) dura 1 h, que ya es el default de acá.
   const [duracion, setDuracion] = useState(
     clase ? (aMinutos(clase.horaFin) ?? 0) - (aMinutos(clase.horaInicio) ?? 0) : 60,
   )

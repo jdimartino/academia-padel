@@ -134,6 +134,27 @@
   border-top-color: rgba(255, 255, 255, 0.14);
 }
 
+/*
+ * Celda de una hora LIBRE de la grilla: se ve igual que antes (el botón es
+ * transparente, así que las líneas de fondo siguen a la vista), solo agrega el
+ * cursor y el foco visible. Va antes de los bloques en el DOM para que un
+ * bloque de clase quede SIEMPRE por encima y siga abriendo su detalle.
+ */
+.grid__hueco {
+  position: absolute;
+  left: 0;
+  right: 0;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  cursor: pointer;
+}
+
+.grid__hueco:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: -2px;
+}
+
 /* Bloques de clase */
 
 .bloque {

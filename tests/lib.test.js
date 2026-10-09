@@ -8,9 +8,12 @@ import assert from 'node:assert/strict'
 import { describe, it } from 'node:test'
 import {
   contarSinCerrar,
+  esHuecoReservable,
   estaSinCerrar,
   etiquetaCategoria,
   formatHora12,
+  huecoDeClic,
+  huecoLibre,
   modalidadDeClase,
   opcionesDeInicio,
   rangoHorasAgenda,
@@ -331,5 +334,121 @@ describe('claveNombreCancha (unicidad)', () => {
 
   it('nombres distintos dan claves distintas', () => {
     assert.notEqual(claveNombreCancha('Cancha 6'), claveNombreCancha('Cancha 10'))
+  })
+})
+
+/*
+ * Clic en una hora vacía de la agenda: el hueco sale de la posición del clic
+ * (redondeo hacia abajo a la hora en punto) y de ahí sale el prellenado de la
+ * reserva nueva (cancha + hora, en formato interno de 24 h).
+ */
+describe('hueco de clic en la grilla', () => {
+  const rango = { horaInicio: 9, horaFin: 20 }
+  const clic = (minutos) =>
+    huecoDeClic({ canchaId: 'c2', minutosDesdeInicioGrilla: minutos, rango })
+
+  it('redondea hacia abajo: 5:00, 5:30 y 5:59 PM caen en las 5:00 PM', () => {
+    const cinco = (17 - 9) * 60
+    assert.deepEqual(clic(cinco), { canchaId: 'c2', horaInicio: '17:00' })
+    assert.deepEqual(clic(cinco + 30), { canchaId: 'c2', horaInicio: '17:00' })
+    assert.deepEqual(clic(cinco + 59), { canchaId: 'c2', horaInicio: '17:00' })
+    // El minuto que ya es la hora siguiente no se redondea a la anterior.
+    assert.deepEqual(clic(cinco + 60), { canchaId: 'c2', horaInicio: '18:00' })
+    assert.deepEqual(clic(cinco + 61), { canchaId: 'c2', horaInicio: '18:00' })
+  })
+
+  it('primera hora y borde de cierre de la franja 9 AM-8 PM', () => {
+    assert.deepEqual(clic(0), { canchaId: 'c2', horaInicio: '09:00' })
+    // Última hora que admite una reserva de 1 h en esa franja.
+    assert.deepEqual(clic((19 - 9) * 60), { canchaId: 'c2', horaInicio: '19:00' })
+    // El borde de cierre no admite clase: no está entre las horas del formulario.
+    assert.deepEqual(clic((20 - 9) * 60), { canchaId: 'c2', horaInicio: '20:00' })
+    assert.ok(!opcionesDeInicio(60, { apertura: 9, cierre: 20 }).includes('20:00'))
+  })
+
+  it('conserva la cancha del clic', () => {
+    const hueco = huecoDeClic({ canchaId: 'c7', minutosDesdeInicioGrilla: 0, rango })
+    assert.equal(hueco.canchaId, 'c7')
+  })
+
+  it('sin rango o sin minutos válidos no hay hueco', () => {
+    assert.equal(huecoDeClic({ canchaId: 'c2', minutosDesdeInicioGrilla: 0, rango: null }), null)
+    assert.equal(huecoDeClic({ canchaId: 'c2', minutosDesdeInicioGrilla: null, rango }), null)
+  })
+})
+
+/*
+ * Un hueco del pasado no se reserva. Misma regla que la validación de la capa
+ * de datos: el borde exacto (inicio === ahora) SÍ se admite.
+ */
+describe('hueco reservable (reloj inyectable)', () => {
+  const hueco = { canchaId: 'c2', horaInicio: '18:00' }
+
+  it('una hora futura es reservable', () => {
+    assert.equal(esHuecoReservable(hueco, '2026-10-03', new Date(2026, 9, 3, 17, 0, 0)), true)
+    assert.equal(esHuecoReservable(hueco, '2026-10-04', new Date(2026, 9, 3, 23, 0, 0)), true)
+  })
+
+  it('exactamente a la hora del hueco sigue siendo reservable', () => {
+    assert.equal(esHuecoReservable(hueco, '2026-10-03', new Date(2026, 9, 3, 18, 0, 0)), true)
+  })
+
+  it('un minuto después ya es pasado', () => {
+    assert.equal(esHuecoReservable(hueco, '2026-10-03', new Date(2026, 9, 3, 18, 1, 0)), false)
+    assert.equal(esHuecoReservable(hueco, '2026-10-03', new Date(2026, 9, 4, 0, 0, 0)), false)
+  })
+
+  it('un hueco o una fecha inválidos no son reservables', () => {
+    const ahora = new Date(2026, 9, 3, 17, 0, 0)
+    assert.equal(esHuecoReservable({ canchaId: 'c2', horaInicio: '25:00' }, '2026-10-03', ahora), false)
+    assert.equal(esHuecoReservable(null, '2026-10-03', ahora), false)
+    assert.equal(esHuecoReservable(hueco, null, ahora), false)
+  })
+})
+
+/*
+ * "Hora vacía" = ninguna clase NO cancelada de esa cancha ocupa esa hora. Una
+ * clase cancelada no ocupa la cancha, así que la hora vuelve a estar libre.
+ */
+describe('hueco libre (clases que ocupan la cancha)', () => {
+  const hueco = { canchaId: 'c2', horaInicio: '18:00' }
+  const clase = (extra = {}) => ({
+    canchaId: 'c2',
+    estado: 'reservada',
+    horaInicio: '18:00',
+    horaFin: '19:00',
+    ...extra,
+  })
+
+  it('sin clases, o con clases de otra cancha u otra hora, está libre', () => {
+    assert.equal(huecoLibre([], hueco), true)
+    assert.equal(huecoLibre(null, hueco), true)
+    assert.equal(huecoLibre([clase({ canchaId: 'c3' })], hueco), true)
+    assert.equal(huecoLibre([clase({ horaInicio: '19:00', horaFin: '20:00' })], hueco), true)
+    assert.equal(huecoLibre([clase({ horaInicio: '16:00', horaFin: '17:00' })], hueco), true)
+  })
+
+  it('una clase NO cancelada que ocupa esa hora lo deja ocupado', () => {
+    assert.equal(huecoLibre([clase()], hueco), false)
+    // Una clase de 2 h ocupa las dos horas que toca.
+    assert.equal(huecoLibre([clase({ horaInicio: '17:00', horaFin: '19:00' })], hueco), false)
+    assert.equal(
+      huecoLibre([clase({ horaInicio: '18:00', horaFin: '20:00' })], { ...hueco, horaInicio: '19:00' }),
+      false,
+    )
+  })
+
+  it('una clase CANCELADA no ocupa: la hora queda libre', () => {
+    assert.equal(huecoLibre([clase({ estado: 'cancelada' })], hueco), true)
+  })
+
+  it('las horas vecinas de la misma cancha siguen libres', () => {
+    assert.equal(huecoLibre([clase()], { ...hueco, horaInicio: '17:00' }), true)
+    assert.equal(huecoLibre([clase()], { ...hueco, horaInicio: '19:00' }), true)
+  })
+
+  it('un hueco inválido nunca está libre', () => {
+    assert.equal(huecoLibre([], null), false)
+    assert.equal(huecoLibre([], { canchaId: 'c2', horaInicio: 'n/a' }), false)
   })
 })

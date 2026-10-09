@@ -18,6 +18,7 @@ export default function AgendaMobile({
   totalClases,
   sinCerrar,
   onSelectClase,
+  onSelectHueco,
   puedeReservar,
   onNuevaReserva,
 }) {
@@ -108,8 +109,10 @@ export default function AgendaMobile({
             sede={sede}
             canchas={[canchaSel]}
             clases={clases}
+            fecha={fecha}
             escala={1.1}
             onSelect={onSelectClase}
+            onSelectHueco={onSelectHueco}
           />
         ) : null}
       </div>

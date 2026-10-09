@@ -66,6 +66,8 @@ export default function Agenda() {
   const [claseSelId, setClaseSelId] = useState(null)
   const [mostrarForm, setMostrarForm] = useState(false)
   const [claseEdit, setClaseEdit] = useState(null)
+  // Hueco (cancha + hora) del clic en una hora libre: prellena la reserva nueva.
+  const [hueco, setHueco] = useState(null)
 
   /*
    * El detalle se DERIVA de la lectura del día (igual que hace useAgenda con
@@ -97,6 +99,7 @@ export default function Agenda() {
     setCanchaId(nueva?.canchas?.[0]?.id ?? null)
     setClaseSelId(null)
     setMostrarForm(false)
+    setHueco(null)
   }
 
   function irA(delta) {
@@ -105,6 +108,7 @@ export default function Agenda() {
     setMes(destino)
     setClaseSelId(null)
     setMostrarForm(false)
+    setHueco(null)
   }
 
   function irHoy() {
@@ -112,6 +116,7 @@ export default function Agenda() {
     setMes(hoy)
     setClaseSelId(null)
     setMostrarForm(false)
+    setHueco(null)
   }
 
   function elegirFecha(iso) {
@@ -119,12 +124,27 @@ export default function Agenda() {
     setMes(iso)
     setClaseSelId(null)
     setMostrarForm(false)
+    setHueco(null)
   }
 
   function abrirFormulario() {
     if (!esAdmin) return
     setClaseSelId(null)
     setClaseEdit(null)
+    setHueco(null)
+    setMostrarForm(true)
+  }
+
+  /*
+   * Clic en una hora libre de la grilla: MISMO formulario de reserva nueva, con
+   * la cancha y la hora del hueco ya puestas y el día que se está viendo. El
+   * formulario decide si el hueco sigue siendo reservable; acá solo se abre.
+   */
+  function abrirHueco(nuevoHueco) {
+    if (!esAdmin) return
+    setClaseSelId(null)
+    setClaseEdit(null)
+    setHueco(nuevoHueco)
     setMostrarForm(true)
   }
 
@@ -132,12 +152,14 @@ export default function Agenda() {
     if (!esAdmin) return
     setClaseSelId(null)
     setClaseEdit(clase)
+    setHueco(null)
     setMostrarForm(true)
   }
 
   function cerrarFormulario() {
     setMostrarForm(false)
     setClaseEdit(null)
+    setHueco(null)
   }
 
   /*
@@ -149,6 +171,7 @@ export default function Agenda() {
   function alCrear() {
     setMostrarForm(false)
     setClaseEdit(null)
+    setHueco(null)
     setClaseSelId(null)
     recargar()
   }
@@ -158,6 +181,15 @@ export default function Agenda() {
     d.setMonth(d.getMonth() + delta)
     setMes(aISO(d))
   }
+
+  /*
+   * Un formulario por contexto: la reprogramación va por clase, el clic en un
+   * hueco por cancha+hora, y la reserva nueva "pelada" por defecto. Cambiar de
+   * contexto remonta el formulario, así el prellenado y la foto inicial de
+   * "sin cambios" se recalculan desde cero.
+   */
+  const claveForm =
+    claseEdit?.id ?? (hueco ? `hueco-${hueco.canchaId}-${hueco.horaInicio}` : 'nueva')
 
   if (!membresiaLista) {
     return <EstadoMensaje titulo="Cargando…" />
@@ -218,6 +250,7 @@ export default function Agenda() {
           totalClases={clases.filter((c) => c.canchaId === canchaSel?.id).length}
           sinCerrar={sinCerrar}
           onSelectClase={seleccionarClase}
+          onSelectHueco={abrirHueco}
           puedeReservar={esAdmin}
           onNuevaReserva={abrirFormulario}
         />
@@ -237,13 +270,14 @@ export default function Agenda() {
         ) : null}
         {mostrarForm && esAdmin ? (
           <NuevaReserva
-            key={claseEdit?.id ?? "nueva"}
+            key={claveForm}
             tenantId={academia}
             sede={sede}
             canchas={canchas}
             fecha={fecha}
             clases={clases}
             clase={claseEdit}
+            hueco={hueco}
             onClose={cerrarFormulario}
             onCreated={alCrear}
           />
@@ -288,8 +322,10 @@ export default function Agenda() {
             sede={sede}
             canchas={canchas}
             clases={clases}
+            fecha={fecha}
             escala={1}
             onSelect={seleccionarClase}
+            onSelectHueco={abrirHueco}
           />
 
           {claseSel ? (
@@ -309,13 +345,14 @@ export default function Agenda() {
 
           {mostrarForm && esAdmin ? (
             <NuevaReserva
-              key={claseEdit?.id ?? "nueva"}
+              key={claveForm}
               tenantId={academia}
               sede={sede}
               canchas={canchas}
               fecha={fecha}
               clases={clases}
               clase={claseEdit}
+              hueco={hueco}
               onClose={cerrarFormulario}
               onCreated={alCrear}
             />

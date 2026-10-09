@@ -151,20 +151,32 @@ export function tituloClase(clase) {
 }
 
 /*
+ * Instante local (calendario del negocio) de una fecha "YYYY-MM-DD" más unos
+ * minutos del día. Mismo criterio que `instanteLocal` de la capa de datos
+ * (src/firebase/db.js): se usan las partes LOCALES del Date, nunca
+ * toISOString() — con Caracas (UTC-4) UTC adelantaría el día. Devuelve null si
+ * la fecha no es válida.
+ */
+function instanteDeFecha(fecha, minutos) {
+  const [y, m, d] = String(fecha ?? '').split('-').map(Number)
+  if (!y || !m || !d) return null
+  const instante = new Date(y, m - 1, d, 0, 0, 0, 0)
+  instante.setMinutes(minutos)
+  return instante
+}
+
+/*
  * "Sin cerrar": una clase que quedó `reservada` y cuya hora de fin YA pasó, es
  * decir que se dictó (o debía dictarse) y nadie registró la asistencia.
- * Se compara en calendario/hora LOCAL. Nunca se usa toISOString(): pasaría a
- * UTC y con Caracas (UTC-4) adelantaría el día. `ahora` es inyectable para
- * poder probarlo.
+ * Se compara en calendario/hora LOCAL. `ahora` es inyectable para poder
+ * probarlo.
  */
 export function estaSinCerrar(clase, ahora = new Date()) {
   if (clase?.estado !== 'reservada' || !clase.fecha) return false
   const fin = aMinutos(clase.horaFin)
   if (fin === null) return false
-  const [y, m, d] = String(clase.fecha).split('-').map(Number)
-  if (!y || !m || !d) return false
-  const finFecha = new Date(y, m - 1, d, 0, 0, 0, 0)
-  finFecha.setMinutes(fin)
+  const finFecha = instanteDeFecha(clase.fecha, fin)
+  if (!finFecha) return false
   return finFecha.getTime() < ahora.getTime()
 }
 
@@ -264,4 +276,52 @@ export function lineasDeFranja(rango) {
     lineas.push({ minuto: m, horaEntera: m % 60 === 0 })
   }
   return lineas
+}
+
+/*
+ * Hueco de la grilla a partir de un clic: `minutosDesdeInicioGrilla` son los
+ * minutos medidos desde el borde superior de la grilla (`rango.horaInicio`), no
+ * desde la hora en punto, porque el clic puede caer en cualquier punto de la
+ * celda (la grilla dibuja las medias horas). Se redondea HACIA ABAJO a la hora
+ * en punto: 5:30 PM y 5:59 PM caen los dos en las 5:00 PM. `horaInicio` sale en
+ * el mismo formato interno de 24 h ("HH:mm") que usan las opciones del
+ * formulario de reserva. Devuelve null si el cálculo no da una hora válida.
+ */
+export function huecoDeClic({ canchaId, minutosDesdeInicioGrilla, rango }) {
+  const horasGrilla = rango?.horaInicio
+  if (!Number.isInteger(horasGrilla) || !Number.isFinite(minutosDesdeInicioGrilla)) return null
+  const minuto = Math.floor((horasGrilla * 60 + minutosDesdeInicioGrilla) / 60) * 60
+  if (minuto < 0) return null
+  return { canchaId, horaInicio: aHoraHHmm(minuto) }
+}
+
+/*
+ * ¿Se puede reservar todavía ese hueco? Misma regla que la validación de la
+ * capa de datos (`validarInicioNoPasado` en src/firebase/db.js): el borde
+ * exacto (inicio === ahora) SÍ se admite, solo es pasado lo anterior. `ahora`
+ * es inyectable para poder probarlo.
+ */
+export function esHuecoReservable(hueco, fecha, ahora = new Date()) {
+  const minutos = aMinutos(hueco?.horaInicio)
+  if (minutos === null) return false
+  const inicio = instanteDeFecha(fecha, minutos)
+  if (!inicio) return false
+  return inicio.getTime() >= ahora.getTime()
+}
+
+/*
+ * ¿El hueco está LIBRE? Una clase no cancelada de esa cancha que se solape con
+ * la hora del hueco lo ocupa; una cancelada NO ocupa nada (la cancha queda
+ * libre aunque el bloque siga dibujado en la grilla).
+ */
+export function huecoLibre(clases, hueco) {
+  const inicio = aMinutos(hueco?.horaInicio)
+  if (!hueco || inicio === null) return false
+  const fin = inicio + 60
+  return !(clases ?? []).some((clase) => {
+    if (clase?.canchaId !== hueco.canchaId || clase.estado === 'cancelada') return false
+    const rango = rangoClase(clase)
+    if (!rango) return false
+    return rango.inicio < fin && inicio < rango.fin
+  })
 }
