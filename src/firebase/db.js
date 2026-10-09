@@ -34,19 +34,29 @@ import {
   updateDoc,
   where,
 } from 'firebase/firestore'
-import { CATEGORIAS, HORARIO_DEFAULT, formatHora12, horarioDeSede } from '../lib/agenda.js'
+import {
+  CATEGORIAS,
+  DURACIONES_VALIDAS,
+  HORARIO_DEFAULT,
+  MINUTOS_BLOQUE,
+  formatHora12,
+  horarioDeSede,
+} from '../lib/agenda.js'
 
 /**
- * Granularidad de la ocupación: 60 minutos (un bloque por hora en punto).
- * Ver docs/modelo-datos.md §4.1.
+ * Granularidad de la ocupación: 30 minutos. La definición vive en
+ * src/lib/agenda.js (`MINUTOS_BLOQUE`), que es el módulo puro compartido con la
+ * grilla y el formulario; acá se reexporta para no romper a quien la importa de
+ * la capa de datos. Ver docs/modelo-datos.md §4.1.
  */
-export const MINUTOS_BLOQUE = 60
+export { MINUTOS_BLOQUE }
 
 /*
  * Reglas de horario de una clase (se aplican en la capa de datos, no solo en el
  * formulario):
- * - arranca en una hora en punto dentro de la franja de la SEDE;
- * - dura 1 h o 2 h exactas;
+ * - arranca en punto o a y media (múltiplo de MINUTOS_BLOQUE) dentro de la
+ *   franja de la SEDE;
+ * - dura 1 h, 1 h 30 o 2 h exactas (ver DURACIONES_VALIDAS);
  * - no puede terminar después del cierre de la SEDE, así que la última hora de
  *   inicio depende de la duración.
  *
@@ -55,10 +65,13 @@ export const MINUTOS_BLOQUE = 60
  * todavía no tienen el campo (ver `horarioDeSede`). Las dos son puras y viven en
  * src/lib/agenda.js; acá se reexportan para no romper a quien las importa de la
  * capa de datos.
+ *
+ * NOTA (Fase 2): la franja de la sede sigue en HORAS ENTERAS. Poder configurar
+ * apertura/cierre en medias horas es la Fase 2 y toca el modelo de sedes.
  */
 export const HORA_APERTURA = HORARIO_DEFAULT.apertura * 60
 export const HORA_CIERRE = HORARIO_DEFAULT.cierre * 60
-export const DURACIONES_VALIDAS = [60, 120]
+export { DURACIONES_VALIDAS }
 
 /** Tope de largo del nombre de una cancha (después de recortar). */
 export const LIMITE_NOMBRE_CANCHA = 100
@@ -464,6 +477,10 @@ function bloqueProfesorId({ profesorId, fecha, minuto }) {
  * determinista y los campos del documento. Función pura: no toca Firestore.
  * Se exporta para poder probar el cálculo sin base de datos.
  *
+ * Los bloques son de MINUTOS_BLOQUE (30) minutos: una clase de 90 minutos ocupa
+ * 3 bloques de cancha + 3 de profesor. Como el inicio siempre cae en la grilla
+ * y la duración es múltiplo de 30, el rango se cubre exacto.
+ *
  * `horario` es la franja de la sede (`{apertura, cierre}` en horas enteras).
  * Por defecto usa 07:00-23:00: los llamadores que tengan la sede le pasan el
  * horario real (ver `horarioDeSede`).
@@ -482,14 +499,17 @@ export function bloquesDeClase(datos, horario = HORARIO_DEFAULT) {
   const duracion = fin - inicio
   if (fin <= inicio || !DURACIONES_VALIDAS.includes(duracion)) {
     throw new ClaseInvalidaError(
-      `La duración debe ser 1 h o 2 h (${formatHora12(horaInicio)}-${formatHora12(horaFin)})`,
+      `La duración debe ser ${DURACIONES_VALIDAS.map((m) => `${m} min`).join(', ')} ` +
+        `(${formatHora12(horaInicio)}-${formatHora12(horaFin)})`,
     )
   }
-  if (inicio % 60 !== 0) {
-    // Solo horas EN PUNTO: con bloques de 60 min, un inicio a las 19:30 ocuparía
-    // un bloque con ID de las 19:00 y se saldría de la rejilla.
+  if (inicio % MINUTOS_BLOQUE !== 0) {
+    // El inicio tiene que caer en la grilla de bloques: un inicio a las 19:15
+    // ocuparía bloques a las 19:00 y 19:30 y no chocaría con una clase de
+    // 18:00-19:30, aunque en la realidad se pisan. Ver docs/modelo-datos.md §4.1.
     throw new ClaseInvalidaError(
-      `horaInicio debe ser una hora en punto (recibido ${formatHora12(horaInicio)})`,
+      `horaInicio debe ser en punto o a y media (múltiplo de ${MINUTOS_BLOQUE} min) ` +
+        `(recibido ${formatHora12(horaInicio)})`,
     )
   }
   validarFranjaEnHorario(horaInicio, horaFin, horario)
@@ -1283,9 +1303,13 @@ export async function getClasesDeSedePorFecha(db, tenantId, sedeId, fecha) {
 /* --------------------------------------------------------------------- */
 
 /**
- * Crea una clase y ocupa todos sus bloques de 60 minutos (cancha + profesor) en
- * UNA transacción. Si algún bloque ya existe, aborta con `SolapamientoError` y
- * no escribe nada.
+ * Crea una clase y ocupa todos sus bloques de MINUTOS_BLOQUE (30) minutos
+ * (cancha + profesor) en UNA transacción. Si algún bloque ya existe, aborta con
+ * `SolapamientoError` y no escribe nada.
+ *
+ * El solapamiento sale de los bloques, que son de minutos REALES: una clase de
+ * 7:30 a 9:00 (3 bloques) choca con una de 8:00 a 9:00 (2 bloques) y NO choca
+ * con una de 9:00 a 10:00 (el borde exacto se toca, no se solapa).
  *
  * `datos` acepta los campos de `clases/{claseId}` (ver docs/modelo-datos.md §4).
  * Las series fijas (`tipo: 'fija'`) NO están implementadas: sin definir.
@@ -1778,8 +1802,9 @@ export async function getMiMembresia(db, tenantId, uid) {
 }
 
 /**
- * Estado de ocupación de un bloque concreto de 60 minutos. Útil para pintar la
- * grilla de la agenda sin traer todas las clases del día. 1 lectura.
+ * Estado de ocupación de un bloque concreto de MINUTOS_BLOQUE (30) minutos.
+ * Útil para pintar la grilla de la agenda sin traer todas las clases del día.
+ * 1 lectura.
  */
 export async function getBloque(db, tenantId, bloqueId) {
   const snap = await getDoc(refBloque(db, tenantId, bloqueId))

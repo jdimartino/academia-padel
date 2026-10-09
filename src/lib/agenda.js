@@ -9,6 +9,21 @@
  */
 export const HORARIO_DEFAULT = Object.freeze({ apertura: 7, cierre: 23 })
 
+/**
+ * Granularidad de la ocupación: 30 minutos. ÚNICA definición del tamaño de
+ * bloque del proyecto: de acá la reexporta la capa de datos (src/firebase/db.js)
+ * para los IDs deterministas y el solapamiento, y de acá la toman la grilla y el
+ * formulario de reserva. Nada de 30 repetido a mano.
+ * Ver docs/modelo-datos.md §4.1.
+ */
+export const MINUTOS_BLOQUE = 30
+
+/**
+ * Duraciones de clase admitidas, en minutos. La capa de datos valida contra esta
+ * misma lista, así el formulario y la transacción nunca se contradicen.
+ */
+export const DURACIONES_VALIDAS = [60, 90, 120]
+
 const RE_HHMM = /^([01]\d|2[0-3]):([0-5]\d)$/
 
 /**
@@ -203,6 +218,25 @@ export function horasDeFranja(rango) {
   return horas
 }
 
+/** Redondea HACIA ABAJO a la grilla de bloques (múltiplo de MINUTOS_BLOQUE). */
+export function aBloqueDeGrilla(minutos) {
+  return Math.floor(minutos / MINUTOS_BLOQUE) * MINUTOS_BLOQUE
+}
+
+/**
+ * Rótulo humano de una duración en minutos: "1 h", "1 h 30 min", "2 h".
+ * Es SOLO presentación: los datos, la validación y los IDs siguen en minutos.
+ */
+export function etiquetaDuracion(minutos) {
+  const total = Number(minutos)
+  if (!Number.isFinite(total) || total <= 0) return ''
+  const horas = Math.floor(total / 60)
+  const resto = total % 60
+  if (horas === 0) return `${resto} min`
+  if (resto === 0) return `${horas} h`
+  return `${horas} h ${resto} min`
+}
+
 /*
  * Última hora en la que puede TERMINAR una clase. El formato "HH:mm" no expresa
  * las 24:00, así que con una sede que cierra a las 24 la última clase termina
@@ -233,7 +267,8 @@ export function rangoHorasAgenda(horario, clasesDeLaSemana = []) {
     if (clase?.estado === 'cancelada') continue
     const rango = rangoClase(clase)
     if (!rango) continue
-    // Se redondea hacia afuera porque la grilla se dibuja por horas enteras.
+    // Se redondea hacia afuera a la hora: las ETIQUETAS de la grilla son horas
+    // enteras (las líneas finas de media hora van dentro de cada hora).
     if (rango.inicio < horaInicio * 60) horaInicio = Math.floor(rango.inicio / 60)
     const finEnHoras = Math.ceil(rango.fin / 60)
     if (finEnHoras > horaFin) horaFin = finEnHoras
@@ -244,35 +279,68 @@ export function rangoHorasAgenda(horario, clasesDeLaSemana = []) {
 
 /*
  * Horas de INICIO que admite una clase, según su duración (en minutos) y la
- * franja de la sede (horas enteras): solo horas en punto, desde la apertura, y
- * sin que la clase termine después del cierre. Es la misma regla que aplica la
- * capa de datos (src/firebase/db.js: duración 1 h o 2 h y horario de la sede);
- * acá se usa para armar el selector del formulario. No confundir con el rango
- * que DIBUJA la grilla de la agenda (ver `rangoHorasAgenda`).
+ * franja de la sede (horas enteras): en punto o a y media (paso de
+ * MINUTOS_BLOQUE), desde la apertura, y sin que la clase termine después del
+ * cierre. Es la misma regla que aplica la capa de datos (src/firebase/db.js:
+ * duración 60/90/120 y horario de la sede); acá se usa para armar el selector
+ * del formulario. No confundir con el rango que DIBUJA la grilla de la agenda
+ * (ver `rangoHorasAgenda`).
  *
  * `horario` es `{apertura, cierre}` en horas enteras (el de la sede). Sin él se
  * usa la franja histórica 07:00-23:00.
+ *
+ * `ocupadas` (opcional) es la lista de clases ya cargadas del día: si una hora
+ * de inicio choca con alguna (misma cancha o mismo profesor, ver
+ * `chocaConAlguna`), no se ofrece. El filtro es OPCIONAL: sin lista se devuelven
+ * todas las horas que caben en la franja, que es lo que necesitan los usos
+ * puramente horarios (la grilla, los tests de franja).
  *
  * El formato "HH:mm" no expresa las 24:00, así que el fin de clase nunca puede
  * caer exactamente en la medianoche: con cierre 24 la última hora de inicio
  * efectiva es la que termina a las 23:00 (igual que con cierre 23).
  */
-export function opcionesDeInicio(duracion = 60, horario = null) {
+export function opcionesDeInicio(duracion = 60, horario = null, ocupadas = null) {
   const opciones = []
-  const apertura = (Number.isInteger(horario?.apertura) ? horario.apertura : HORARIO_DEFAULT.apertura) * 60
+  const apertura =
+    (Number.isInteger(horario?.apertura) ? horario.apertura : HORARIO_DEFAULT.apertura) * 60
   const cierreHoras = Number.isInteger(horario?.cierre) ? horario.cierre : HORA_CIERRE_CLASE
   const cierre = Math.min(cierreHoras, HORA_CIERRE_CLASE) * 60
   if (!Number.isFinite(duracion) || duracion <= 0) return opciones
-  for (let minuto = apertura; minuto + duracion <= cierre; minuto += 60) {
+  for (let minuto = apertura; minuto + duracion <= cierre; minuto += MINUTOS_BLOQUE) {
+    if (ocupadas && chocaConAlguna(ocupadas, minuto, minuto + duracion)) continue
     opciones.push(aHoraHHmm(minuto))
   }
   return opciones
 }
 
-/** Líneas de fondo: cada 30 min, marcando cuáles son hora en punto. */
+/**
+ * ¿El rango [inicio, fin) choca con alguna de las clases dadas? Mismo criterio
+ * que la validación de la capa de datos y que el formulario: se solapan si
+ * `inicio < otroFin && otroInicio < fin`. El borde exacto (una clase que termina
+ * justo cuando empieza la otra) NO es choque. Las canceladas no ocupan nada y
+ * una clase con horas corruptas se ignora.
+ */
+export function chocaConAlguna(clases, inicio, fin) {
+  return (clases ?? []).some((clase) => {
+    if (clase?.estado === 'cancelada') return false
+    const otroInicio = aMinutos(clase?.horaInicio)
+    const otroFin = aMinutos(clase?.horaFin)
+    if (otroInicio === null || otroFin === null) return false
+    return otroInicio < fin && inicio < otroFin
+  })
+}
+
+/**
+ * Líneas de fondo de la grilla: cada MINUTOS_BLOQUE (30) minutos. `horaEntera`
+ * distingue las líneas de hora en punto (más marcadas) de las de media hora.
+ */
 export function lineasDeFranja(rango) {
   const lineas = []
-  for (let m = rango.horaInicio * 60; m <= rango.horaFin * 60; m += 30) {
+  for (
+    let m = rango.horaInicio * 60;
+    m <= rango.horaFin * 60;
+    m += MINUTOS_BLOQUE
+  ) {
     lineas.push({ minuto: m, horaEntera: m % 60 === 0 })
   }
   return lineas
@@ -282,15 +350,15 @@ export function lineasDeFranja(rango) {
  * Hueco de la grilla a partir de un clic: `minutosDesdeInicioGrilla` son los
  * minutos medidos desde el borde superior de la grilla (`rango.horaInicio`), no
  * desde la hora en punto, porque el clic puede caer en cualquier punto de la
- * celda (la grilla dibuja las medias horas). Se redondea HACIA ABAJO a la hora
- * en punto: 5:30 PM y 5:59 PM caen los dos en las 5:00 PM. `horaInicio` sale en
- * el mismo formato interno de 24 h ("HH:mm") que usan las opciones del
- * formulario de reserva. Devuelve null si el cálculo no da una hora válida.
+ * celda. Se redondea HACIA ABAJO al bloque de MINUTOS_BLOQUE: 5:30 PM y 5:59 PM
+ * caen los dos en las 5:30 PM, y 5:00 PM en las 5:00 PM. `horaInicio` sale en el
+ * mismo formato interno de 24 h ("HH:mm") que usan las opciones del formulario
+ * de reserva. Devuelve null si el cálculo no da una hora válida.
  */
 export function huecoDeClic({ canchaId, minutosDesdeInicioGrilla, rango }) {
   const horasGrilla = rango?.horaInicio
   if (!Number.isInteger(horasGrilla) || !Number.isFinite(minutosDesdeInicioGrilla)) return null
-  const minuto = Math.floor((horasGrilla * 60 + minutosDesdeInicioGrilla) / 60) * 60
+  const minuto = aBloqueDeGrilla(horasGrilla * 60 + minutosDesdeInicioGrilla)
   if (minuto < 0) return null
   return { canchaId, horaInicio: aHoraHHmm(minuto) }
 }
@@ -311,13 +379,14 @@ export function esHuecoReservable(hueco, fecha, ahora = new Date()) {
 
 /*
  * ¿El hueco está LIBRE? Una clase no cancelada de esa cancha que se solape con
- * la hora del hueco lo ocupa; una cancelada NO ocupa nada (la cancha queda
- * libre aunque el bloque siga dibujado en la grilla).
+ * el bloque lo ocupa; una cancelada NO ocupa nada (la cancha queda libre aunque
+ * el bloque siga dibujado en la grilla). El hueco abarca un bloque de
+ * MINUTOS_BLOQUE (30) minutos, que es lo que dura la celda clicable.
  */
 export function huecoLibre(clases, hueco) {
   const inicio = aMinutos(hueco?.horaInicio)
   if (!hueco || inicio === null) return false
-  const fin = inicio + 60
+  const fin = inicio + MINUTOS_BLOQUE
   return !(clases ?? []).some((clase) => {
     if (clase?.canchaId !== hueco.canchaId || clase.estado === 'cancelada') return false
     const rango = rangoClase(clase)

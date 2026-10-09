@@ -11,9 +11,11 @@ import {
 } from '../firebase/db'
 import {
   CATEGORIAS,
+  DURACIONES_VALIDAS,
   aHoraHHmm,
   aMinutos,
   etiquetaCategoria,
+  etiquetaDuracion,
   formatHora12,
   opcionesDeInicio,
 } from '../lib/agenda'
@@ -23,7 +25,6 @@ import useCierreSeguro from '../hooks/useCierreSeguro'
 import { CloseIcon } from './Icons'
 import SelectorAlumnos from './SelectorAlumnos'
 
-const DURACIONES = [60, 120]
 const MODALIDADES = ['Grupal', 'Individual']
 
 /*
@@ -33,11 +34,12 @@ const MODALIDADES = ['Grupal', 'Individual']
  * La validación de choques se hace ANTES de enviar contra las clases ya
  * cargadas del día; la transacción de db.js vuelve a validar igual.
  *
- * `hueco` (opcional) es una reserva nueva prellenada desde el clic en una hora
- * libre de la agenda: `{canchaId, horaInicio}` en el formato interno de 24 h,
- * duración 1 h. Se aplica en los valores INICIALES del estado, así la foto de
- * `instantanea()` (la del cierre seguro) ya los incluye: un formulario recién
- * abierto cierra directo con Escape, sin "¿Salir sin guardar?".
+ * `hueco` (opcional) es una reserva nueva prellenada desde el clic en un bloque
+ * libre de la agenda: `{canchaId, horaInicio}` en el formato interno de 24 h
+ * (puede caer en media hora), duración 1 h. Se aplica en los valores INICIALES
+ * del estado, así la foto de `instantanea()` (la del cierre seguro) ya los
+ * incluye: un formulario recién abierto cierra directo con Escape, sin "¿Salir
+ * sin guardar?".
  */
 export default function NuevaReserva({
   tenantId,
@@ -54,18 +56,22 @@ export default function NuevaReserva({
   const esEdicion = Boolean(clase)
   // Franja de la sede: el formulario solo ofrece horas dentro de su horario.
   const horario = useMemo(() => horarioDeSede(sede), [sede])
-  const horas60 = opcionesDeInicio(60, horario)
+  // Inicios posibles con la duración MÁS CORTA: sirve de default cuando todavía
+  // no hay duración elegida (una reserva nueva arranca en 60 min).
+  const iniciosBase = opcionesDeInicio(DURACIONES_VALIDAS[0], horario)
   const [canchaId, setCanchaId] = useState(
     clase?.canchaId ?? hueco?.canchaId ?? canchas[0]?.id ?? null,
   )
   const [horaInicio, setHoraInicio] = useState(() => {
     if (clase?.horaInicio) return clase.horaInicio
+    // El hueco del clic manda: conserva el inicio EXACTO, incluida la media hora.
     if (hueco?.horaInicio) return hueco.horaInicio
     // Default histórico 18:00; si la sede abre/cierra antes, la última hora útil.
-    if (horas60.includes('18:00')) return '18:00'
-    return horas60[horas60.length - 1] ?? '07:00'
+    if (iniciosBase.includes('18:00')) return '18:00'
+    return iniciosBase[iniciosBase.length - 1] ?? '07:00'
   })
   // Una reserva nueva (con hueco o sin él) dura 1 h, que ya es el default de acá.
+  // Al reprogramar se toma la duración REAL de la clase (60, 90 o 120 min).
   const [duracion, setDuracion] = useState(
     clase ? (aMinutos(clase.horaFin) ?? 0) - (aMinutos(clase.horaInicio) ?? 0) : 60,
   )
@@ -126,8 +132,35 @@ export default function NuevaReserva({
   const fin = inicio + duracion
   const cupo = modalidad === 'Individual' ? 1 : 4
   const profesor = profesores?.find((p) => p.id === profesorId) ?? null
-  // Solo horas en punto dentro del horario de la sede y según la duración.
-  const horas = opcionesDeInicio(duracion, horario)
+  // Al reprogramar, la propia clase no cuenta como conflicto consigo misma.
+  const otrasClases = useMemo(
+    () => (esEdicion ? clases.filter((c) => c.id !== clase.id) : clases),
+    [clases, clase?.id, esEdicion],
+  )
+  /*
+   * Clases que le quitan horas de inicio a esta reserva: las de la cancha
+   * elegida o las del profesor elegido (una clase de otra cancha con otro
+   * profesor no bloquea nada). Se le pasan a `opcionesDeInicio`, que descarta
+   * todo inicio que se solape con ellas.
+   */
+  const clasesQueOcupan = useMemo(
+    () =>
+      otrasClases.filter(
+        (c) => c.estado !== 'cancelada' && (c.canchaId === canchaId || c.profesorId === profesorId),
+      ),
+    [otrasClases, canchaId, profesorId],
+  )
+  /*
+   * Inicios ofrecidos: cada MINUTOS_BLOQUE (30 min) dentro del horario de la
+   * sede, filtrando los que no caben antes del cierre con la duración elegida y
+   * los que chocan con otra clase del día en la misma cancha o con el mismo
+   * profesor. Al cambiar la duración (o la cancha o el profesor) la lista se
+   * recalcula sola.
+   */
+  const horas = useMemo(
+    () => opcionesDeInicio(duracion, horario, clasesQueOcupan),
+    [duracion, horario, clasesQueOcupan],
+  )
 
   /*
    * Opciones del selector de cancha: solo las ACTIVAS (la sede puede tener N).
@@ -146,13 +179,18 @@ export default function NuevaReserva({
   // Con la sede sin canchas activas no hay nada que elegir: no se puede guardar.
   const sinCanchasActivas = !canchas.some((cancha) => cancha.activa !== false)
 
-  // Al acortar la duración (o cambiar la franja de la sede), la hora elegida
-  // podría quedar fuera de la lista.
+  /*
+   * Al cambiar la duración (o la franja de la sede, o la cancha/profesor), la
+   * hora elegida podría quedar fuera de la lista de inicios posibles. Si sigue
+   * estando se conserva TAL CUAL (así el hueco precargado por clic mantiene su
+   * media hora exacta); si no, se cae a la última hora que sí cabe.
+   */
   useEffect(() => {
     setHoraInicio((hora) => (horas.includes(hora) ? hora : (horas[horas.length - 1] ?? hora)))
-    // `horas` se recalcula con la duración y el horario; solo interesa cuando cambian.
+    // `horas` se recalcula con la duración, el horario, la cancha y el profesor;
+    // solo interesa cuando cambia la lista resultante.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [duracion, horario.apertura, horario.cierre])
+  }, [horas])
 
   // Al cambiar de modalidad la selección no puede quedar por encima del cupo.
   function elegirModalidad(opcion) {
@@ -160,8 +198,6 @@ export default function NuevaReserva({
     setModalidad(opcion)
     setAlumnosSel((prev) => (prev.length > nuevoCupo ? prev.slice(0, nuevoCupo) : prev))
   }
-  // Al reprogramar, la propia clase no cuenta como conflicto consigo misma.
-  const otrasClases = esEdicion ? clases.filter((c) => c.id !== clase.id) : clases
 
   const problemas = useMemo(() => {
     const lista = []
@@ -327,7 +363,7 @@ export default function NuevaReserva({
         <div className="form__field">
           <span className="form__label">Duración</span>
           <div className="chips-row">
-            {DURACIONES.map((minutos) => (
+            {DURACIONES_VALIDAS.map((minutos) => (
               <button
                 type="button"
                 key={minutos}
@@ -335,7 +371,7 @@ export default function NuevaReserva({
                 aria-pressed={minutos === duracion}
                 onClick={() => setDuracion(minutos)}
               >
-                {minutos / 60} h
+                {etiquetaDuracion(minutos)}
               </button>
             ))}
           </div>

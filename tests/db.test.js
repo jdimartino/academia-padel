@@ -175,28 +175,77 @@ beforeEach(async () => {
 })
 
 describe('ids deterministas', () => {
-  it('una clase de 2 horas ocupa 2 bloques de cancha + 2 de profesor (1 por hora)', () => {
+  it('una clase de 2 horas ocupa 4 bloques de cancha + 4 de profesor (1 por media hora)', () => {
     const bloques = bloquesDeClase(clase({ horaFin: '20:00' }))
-    assert.equal(bloques.length, 4)
+    assert.equal(bloques.length, 8)
     assert.deepEqual(
       bloques.filter((b) => b.data.tipo === 'cancha').map((b) => b.id),
-      [`traki_c1_${FECHA}_1800`, `traki_c1_${FECHA}_1900`],
+      [
+        `traki_c1_${FECHA}_1800`,
+        `traki_c1_${FECHA}_1830`,
+        `traki_c1_${FECHA}_1900`,
+        `traki_c1_${FECHA}_1930`,
+      ],
     )
     assert.deepEqual(
       bloques.filter((b) => b.data.tipo === 'profesor').map((b) => b.id),
-      [`prof_p1_${FECHA}_1800`, `prof_p1_${FECHA}_1900`],
+      [
+        `prof_p1_${FECHA}_1800`,
+        `prof_p1_${FECHA}_1830`,
+        `prof_p1_${FECHA}_1900`,
+        `prof_p1_${FECHA}_1930`,
+      ],
     )
   })
 
-  it('la granularidad es de 60 minutos', () => {
-    assert.equal(MINUTOS_BLOQUE, 60)
+  it('una clase de 90 min que arranca a y media ocupa 3 bloques por recurso', () => {
+    const bloques = bloquesDeClase(clase({ horaInicio: '18:30', horaFin: '20:00' }))
+    assert.equal(bloques.length, 6)
+    assert.deepEqual(
+      bloques.filter((b) => b.data.tipo === 'cancha').map((b) => b.id),
+      [`traki_c1_${FECHA}_1830`, `traki_c1_${FECHA}_1900`, `traki_c1_${FECHA}_1930`],
+    )
+  })
+
+  it('la granularidad es de 30 minutos', () => {
+    assert.equal(MINUTOS_BLOQUE, 30)
+  })
+
+  it('acepta los inicios en punto y a y media', () => {
+    assert.equal(bloquesDeClase(clase({ horaInicio: '07:00', horaFin: '08:00' })).length, 4)
+    assert.equal(bloquesDeClase(clase({ horaInicio: '07:30', horaFin: '08:30' })).length, 4)
+  })
+
+  it('rechaza un inicio que no cae en la grilla de 30 min (7:15)', () => {
+    assert.throws(
+      () => bloquesDeClase(clase({ horaInicio: '07:15', horaFin: '08:15' })),
+      /media|múltiplo de 30/i,
+    )
+  })
+
+  it('acepta las duraciones 60, 90 y 120', () => {
+    assert.equal(bloquesDeClase(clase({ horaInicio: '18:00', horaFin: '19:00' })).length, 4)
+    assert.equal(bloquesDeClase(clase({ horaInicio: '18:00', horaFin: '19:30' })).length, 6)
+    assert.equal(bloquesDeClase(clase({ horaInicio: '18:00', horaFin: '20:00' })).length, 8)
+  })
+
+  it('rechaza las duraciones 45 y 150', () => {
+    assert.throws(
+      () => bloquesDeClase(clase({ horaInicio: '18:00', horaFin: '18:45' })),
+      /duración|válida/i,
+    )
+    assert.throws(
+      () => bloquesDeClase(clase({ horaInicio: '18:00', horaFin: '20:30' })),
+      /duración|válida/i,
+    )
   })
 })
 
 describe('crearClase', () => {
-  it('horario libre → ALLOW: crea la clase y sus 2 bloques', async () => {
+  it('horario libre → ALLOW: crea la clase y sus 4 bloques de 30 min', async () => {
     const { claseId, bloques } = await reservar()
-    assert.equal(bloques.length, 2)
+    // 1 h = 2 bloques de cancha + 2 de profesor.
+    assert.equal(bloques.length, 4)
 
     const creada = await getClase(adminDb, T1, claseId)
     assert.equal(creada.estado, 'reservada')
@@ -237,8 +286,64 @@ describe('crearClase', () => {
     assert.ok((await reservar({ horaInicio: '18:00', horaFin: '19:00' })).claseId)
   })
 
-  it('hora de inicio a la media hora → DENY (solo se reserva en punto)', async () => {
-    await assert.rejects(() => reservar({ horaInicio: '19:30', horaFin: '20:30' }), /en punto|múltiplo de 60/)
+  it('solapamiento 17:30-19:00 contra 18:00-19:00 → DENY (minutos reales, no bloques de hora)', async () => {
+    // La clase larga arranca a y media: con el redondeo a la hora en punto de
+    // antes, los bloques no se habrían cruzado.
+    await reservar({ horaInicio: '17:30', horaFin: '19:00' })
+    // Mismo profesor (p1) en otra cancha, en una franja que se pisa.
+    await assert.rejects(
+      () => reservar({ canchaId: 'c2', horaInicio: '18:00', horaFin: '19:00' }),
+      SolapamientoError,
+    )
+  })
+
+  it('borde exacto 17:30-19:00 contra 19:00-20:00 → ALLOW (no se solapan)', async () => {
+    await reservar({ horaInicio: '17:30', horaFin: '19:00' })
+    assert.ok(
+      (
+        await reservar({ canchaId: 'c2', profesorId: 'p2', horaInicio: '19:00', horaFin: '20:00' })
+      ).claseId,
+    )
+  })
+
+  it('solapamiento 17:00-18:30 contra 18:00-19:00 → DENY', async () => {
+    await reservar({ horaInicio: '17:00', horaFin: '18:30' })
+    await assert.rejects(
+      () => reservar({ horaInicio: '18:00', horaFin: '19:00' }),
+      SolapamientoError,
+    )
+  })
+
+  it('una clase a y media libera solo sus propios bloques', async () => {
+    // 18:30-20:00 ocupa 18:30, 19:00 y 19:30.
+    await reservar({ horaInicio: '18:30', horaFin: '20:00' })
+    // 18:00-19:00 pisa la clase larga en la misma cancha: no entra.
+    await assert.rejects(
+      () => reservar({ horaInicio: '18:00', horaFin: '19:00' }),
+      SolapamientoError,
+    )
+    // 20:00-21:00 arranca justo cuando termina: entra.
+    assert.ok(
+      (
+        await reservar({ canchaId: 'c2', profesorId: 'p2', horaInicio: '20:00', horaFin: '21:00' })
+      ).claseId,
+    )
+  })
+
+  it('hora de inicio a la media hora (19:30-20:30) → ALLOW y ocupa 2 bloques', async () => {
+    const { bloques } = await reservar({ horaInicio: '19:30', horaFin: '20:30' })
+    assert.deepEqual(bloques.filter((id) => id.startsWith('traki_')), [
+      `traki_c1_${FECHA}_1930`,
+      `traki_c1_${FECHA}_2000`,
+    ])
+  })
+
+  it('hora de inicio en un cuarto de hora (19:15) → DENY (no cae en la grilla)', async () => {
+    await assert.rejects(
+      () => reservar({ horaInicio: '19:15', horaFin: '20:15' }),
+      /media|múltiplo de 30/i,
+    )
+    assert.equal((await bloque(`traki_c1_${FECHA}_1900`)).exists(), false)
   })
 
   it('solapamiento con el mismo horario pero otro profesor → DENY (la cancha manda)', async () => {
@@ -303,10 +408,23 @@ describe('crearClase', () => {
     assert.ok((await reservar({ canchaId: 'c2', profesorId: 'p2' })).claseId)
   })
 
-  it('duración de 90 minutos → DENY (solo 1 h o 2 h)', async () => {
+  it('duración de 90 minutos (18:00-19:30) → ALLOW y ocupa 6 bloques', async () => {
+    const { bloques } = await reservar({ horaInicio: '18:00', horaFin: '19:30' })
+    // 1 h 30 = 3 bloques de cancha + 3 de profesor.
+    assert.equal(bloques.length, 6)
+  })
+
+  it('duración de 45 minutos → DENY (no está entre las válidas)', async () => {
     await assert.rejects(
-      () => reservar({ horaInicio: '18:00', horaFin: '19:30' }),
-      /duración|1 h o 2 h|hora en punto/i,
+      () => reservar({ horaInicio: '18:00', horaFin: '18:45' }),
+      /duración|60 min|válida/i,
+    )
+  })
+
+  it('duración de 150 minutos → DENY (no está entre las válidas)', async () => {
+    await assert.rejects(
+      () => reservar({ horaInicio: '18:00', horaFin: '20:30' }),
+      /duración|válida/i,
     )
   })
 
@@ -322,9 +440,9 @@ describe('crearClase', () => {
     assert.equal((await bloque(`traki_c1_${FECHA}_1800`)).exists(), false)
   })
 
-  it('2 horas: 18:00-20:00 → ALLOW y ocupa 4 bloques', async () => {
+  it('2 horas: 18:00-20:00 → ALLOW y ocupa 8 bloques (4 por recurso)', async () => {
     const { bloques } = await reservar({ horaFin: '20:00' })
-    assert.equal(bloques.length, 4)
+    assert.equal(bloques.length, 8)
   })
 
   it('inicio a las 22:00 con 1 h → ALLOW (termina 23:00)', async () => {
@@ -427,7 +545,8 @@ describe('cancelarClase', () => {
   it('cancelar libera también los bloques del profesor', async () => {
     const { claseId, bloques } = await reservar()
     const deProfesor = bloques.filter((id) => id.startsWith('prof_'))
-    assert.equal(deProfesor.length, 1)
+    // Una clase de 1 h ocupa 2 bloques de 30 min de profesor.
+    assert.equal(deProfesor.length, 2)
 
     await cancelarClase(adminDb, T1, claseId, { uid: ADMIN })
 
@@ -520,19 +639,49 @@ describe('reprogramarClase', () => {
     )
   })
 
-  it('reprogramar a una duración de 90 minutos → DENY', async () => {
+  it('reprogramar a una duración de 90 minutos → ALLOW', async () => {
     const { claseId } = await reservar()
-    await assert.rejects(
-      () => reprogramarClase(adminDb, T1, claseId, { horaFin: '19:30' }, { uid: ADMIN, ahora: AHORA_RESERVA }),
-      /duración|1 h o 2 h|en punto/i,
+    await reprogramarClase(
+      adminDb,
+      T1,
+      claseId,
+      { horaFin: '19:30' },
+      { uid: ADMIN, ahora: AHORA_RESERVA },
     )
+    const movida = await getClase(adminDb, T1, claseId)
+    assert.equal(movida.horaFin, '19:30')
+    assert.equal(movida.bloques.length, 6)
   })
 
-  it('reprogramar a un inicio de media hora → DENY', async () => {
+  it('reprogramar a un inicio de media hora → ALLOW', async () => {
+    const { claseId } = await reservar()
+    await reprogramarClase(
+      adminDb,
+      T1,
+      claseId,
+      { horaInicio: '18:30', horaFin: '19:30' },
+      { uid: ADMIN, ahora: AHORA_RESERVA },
+    )
+    const movida = await getClase(adminDb, T1, claseId)
+    assert.equal(movida.horaInicio, '18:30')
+    assert.deepEqual(movida.bloques.filter((id) => id.startsWith('traki_')), [
+      `traki_c1_${FECHA}_1830`,
+      `traki_c1_${FECHA}_1900`,
+    ])
+  })
+
+  it('reprogramar a un inicio en cuarto de hora (18:15) → DENY', async () => {
     const { claseId } = await reservar()
     await assert.rejects(
-      () => reprogramarClase(adminDb, T1, claseId, { horaInicio: '18:30', horaFin: '19:30' }, { uid: ADMIN, ahora: AHORA_RESERVA }),
-      /en punto|múltiplo de 60/i,
+      () =>
+        reprogramarClase(
+          adminDb,
+          T1,
+          claseId,
+          { horaInicio: '18:15', horaFin: '19:15' },
+          { uid: ADMIN, ahora: AHORA_RESERVA },
+        ),
+      /media|múltiplo de 30/i,
     )
   })
 
@@ -1265,7 +1414,7 @@ describe('carreras', () => {
     assert.ok(perdedoras[0].reason instanceof SolapamientoError)
 
     const creada = await getClase(adminDb, T1, ganadoras[0].value.claseId)
-    assert.equal(creada.bloques.length, 2)
+    assert.equal(creada.bloques.length, 4)
   })
 })
 

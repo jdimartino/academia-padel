@@ -1,6 +1,7 @@
 import { useMemo } from 'react'
 import ClassBlock from './ClassBlock'
 import {
+  MINUTOS_BLOQUE,
   esHuecoReservable,
   formatHora12,
   horarioDeSede,
@@ -14,8 +15,9 @@ import {
 
 /*
  * `onSelectHueco` es opcional: sin él (o sin `fecha`) la grilla es solo de
- * lectura. Con él, cada hora LIBRE de cada cancha activa es una celda
- * enfocable que abre el formulario de reserva prellenado.
+ * lectura. Con él, cada bloque LIBRE de MINUTOS_BLOQUE (30) minutos de cada
+ * cancha activa es una celda enfocable que abre el formulario de reserva
+ * prellenado.
  */
 export default function TimeGrid({
   sede,
@@ -37,24 +39,53 @@ export default function TimeGrid({
   const minutoInicio = rango.horaInicio * 60
   const alto = (rango.horaFin - rango.horaInicio) * 60 * escala
   const lineas = lineasDeFranja(rango)
+  // Etiquetas: solo las horas en punto; las medias horas son líneas finas.
   const horas = horasDeFranja(rango)
 
-  // Solo son clicables las horas de inicio que admite una reserva de 1 h en la
-  // sede: la última hora del rango es el borde de cierre y no admite clase.
-  const horasReservables = useMemo(
+  /*
+   * Bloques de inicio que admite una reserva de 1 h en la sede: la última hora
+   * del rango es el borde de cierre y no admite clase. Es una lista de "HH:mm"
+   * cada MINUTOS_BLOQUE, no solo horas en punto.
+   */
+  const iniciosReservables = useMemo(
     () => new Set(opcionesDeInicio(60, horarioDeSede(sede))),
     [sede],
   )
 
   /*
+   * Las celdas de hueco libre son de 30 minutos: se arman desde las líneas de la
+   * franja (que ya vienen cada MINUTOS_BLOQUE) y no desde las horas enteras, así
+   * la media hora también es clicable.
+   */
+  const bloquesDeGrilla = useMemo(
+    () =>
+      lineas
+        .filter((linea) => linea.minuto < rango.horaFin * 60)
+        .map((linea) => {
+          const desde = linea.minuto - minutoInicio
+          const hueco = huecoDeClic({
+            canchaId: null,
+            minutosDesdeInicioGrilla: desde,
+            rango,
+          })
+          return { desde, horaInicio: hueco?.horaInicio ?? null }
+        })
+        .filter((bloque) => bloque.horaInicio !== null),
+    [lineas, minutoInicio, rango],
+  )
+
+  /*
    * El clic puede caer en cualquier punto de la celda: se le pasan a
    * `huecoDeClic` los minutos del clic dentro de la celda para que redondee
-   * hacia abajo a la hora en punto.
+   * hacia abajo al bloque de 30 min.
    */
   function alClicHueco(event, canchaId, minutosDeLaCelda) {
     const offset = Number(event?.nativeEvent?.offsetY)
-    // Tope de 59: el último píxel de la celda sigue siendo la misma hora.
-    const dentro = Number.isFinite(offset) ? Math.min(Math.max(offset, 0) / escala, 59) : 0
+    // Tope de MINUTOS_BLOQUE - 1: el último píxel de la celda sigue siendo el
+    // mismo bloque.
+    const dentro = Number.isFinite(offset)
+      ? Math.min(Math.max(offset, 0) / escala, MINUTOS_BLOQUE - 1)
+      : 0
     const hueco = huecoDeClic({
       canchaId,
       minutosDesdeInicioGrilla: minutosDeLaCelda + dentro,
@@ -104,31 +135,27 @@ export default function TimeGrid({
                 />
               ))}
               {onSelectHueco && fecha && cancha.activa !== false
-                ? horas
-                    .filter((h) => h < rango.horaFin)
-                    .map((h) => {
-                      const desde = h * 60 - minutoInicio
-                      const hueco = huecoDeClic({
-                        canchaId: cancha.id,
-                        minutosDesdeInicioGrilla: desde,
-                        rango,
-                      })
-                      if (!hueco || !horasReservables.has(hueco.horaInicio)) return null
-                      // Ocupada por una clase no cancelada, o ya pasada: sin celda.
-                      if (!huecoLibre(clases, hueco) || !esHuecoReservable(hueco, fecha)) {
-                        return null
-                      }
-                      return (
-                        <button
-                          key={`hueco-${cancha.id}-${h}`}
-                          type="button"
-                          className="grid__hueco"
-                          style={{ top: `${desde * escala}px`, height: `${60 * escala}px` }}
-                          aria-label={`Reservar ${cancha.nombre}, ${formatHora12(hueco.horaInicio)}`}
-                          onClick={(event) => alClicHueco(event, cancha.id, desde)}
-                        />
-                      )
-                    })
+                ? bloquesDeGrilla.map((bloque) => {
+                    const hueco = { canchaId: cancha.id, horaInicio: bloque.horaInicio }
+                    if (!iniciosReservables.has(hueco.horaInicio)) return null
+                    // Ocupada por una clase no cancelada, o ya pasada: sin celda.
+                    if (!huecoLibre(clases, hueco) || !esHuecoReservable(hueco, fecha)) {
+                      return null
+                    }
+                    return (
+                      <button
+                        key={`hueco-${cancha.id}-${bloque.horaInicio}`}
+                        type="button"
+                        className="grid__hueco"
+                        style={{
+                          top: `${bloque.desde * escala}px`,
+                          height: `${MINUTOS_BLOQUE * escala}px`,
+                        }}
+                        aria-label={`Reservar ${cancha.nombre}, ${formatHora12(hueco.horaInicio)}`}
+                        onClick={(event) => alClicHueco(event, cancha.id, bloque.desde)}
+                      />
+                    )
+                  })
                 : null}
               {clases
                 .filter((c) => c.canchaId === cancha.id)

@@ -123,22 +123,30 @@
   border-left: 1px solid rgba(255, 255, 255, 0.1);
 }
 
+/*
+ * Líneas de fondo: una cada 30 min. Las de MEDIA hora son finas y tenues; las
+ * de HORA EN PUNTO (`is-hora`) más marcadas, para que la grilla se lea de un
+ * vistazo aunque las filas sean de media hora.
+ */
 .grid__linea {
   position: absolute;
   left: 0;
   right: 0;
-  border-top: 1px solid rgba(255, 255, 255, 0.06);
+  border-top: 1px solid rgba(255, 255, 255, 0.045);
 }
 
 .grid__linea.is-hora {
-  border-top-color: rgba(255, 255, 255, 0.14);
+  border-top-color: rgba(255, 255, 255, 0.18);
 }
 
 /*
- * Celda de una hora LIBRE de la grilla: se ve igual que antes (el botón es
- * transparente, así que las líneas de fondo siguen a la vista), solo agrega el
- * cursor y el foco visible. Va antes de los bloques en el DOM para que un
- * bloque de clase quede SIEMPRE por encima y siga abriendo su detalle.
+ * Celda de un bloque LIBRE de 30 min de la grilla: se ve igual que antes (el
+ * botón es transparente, así que las líneas de fondo siguen a la vista), solo
+ * agrega el cursor y el foco visible. Va antes de los bloques en el DOM para que
+ * un bloque de clase quede SIEMPRE por encima y siga abriendo su detalle.
+ * En móvil el bloque mide ~33px de alto con la escala 1.1: se estira el área
+ * táctil con un pseudo-elemento invisible en vez de agrandar el botón, así no se
+ * roban el clic las celdas vecinas ni los bloques de clase.
  */
 .grid__hueco {
   position: absolute;
@@ -148,6 +156,12 @@
   border: 0;
   background: transparent;
   cursor: pointer;
+}
+
+.grid__hueco::after {
+  content: '';
+  position: absolute;
+  inset: -4px 0;
 }
 
 .grid__hueco:focus-visible {

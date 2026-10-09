@@ -97,12 +97,12 @@ function diaRelativo(dias) {
 }
 
 /**
- * Crea una clase con sus bloques de 60 min (uno por hora en punto),
- * reutilizando el mismo cálculo puro que usa `crearClase` en src/firebase/db.js.
- * El seed escribe por REST con token "owner" (único lugar autorizado a saltear
- * reglas), así que no puede llamar la transacción del SDK; reusa
- * `bloquesDeClase` para que la clase sea dueña de sus bloques igual que en la
- * app. Horario: arranque en punto, duración 1 h o 2 h, fin máximo 23:00.
+ * Crea una clase con sus bloques de 30 min, reutilizando el mismo cálculo puro
+ * que usa `crearClase` en src/firebase/db.js. El seed escribe por REST con token
+ * "owner" (único lugar autorizado a saltear reglas), así que no puede llamar la
+ * transacción del SDK; reusa `bloquesDeClase` para que la clase sea dueña de sus
+ * bloques igual que en la app. Horario: arranque en punto o a y media (múltiplo
+ * de 30), duración 60/90/120 min, fin máximo 23:00.
  */
 async function crearClaseEnSeed(datos) {
   const bloques = bloquesDeClase(datos)
@@ -620,8 +620,8 @@ async function main() {
   /*
    * Fixture de la regla "no se reserva en el pasado": una clase reservada de
    * ayer. Sirve para ejercitar el rechazo sin fabricar fechas a mano en los
-   * tests de la app. Todas las clases del seed arrancan en hora en punto y
-   * duran 1 h o 2 h, con al menos un alumno.
+   * tests de la app. Todas las clases del seed arrancan en punto o a y media y
+   * duran 60, 90 o 120 min, con al menos un alumno.
    */
   await crearClaseEnSeed({
     id: 'c0',
@@ -675,6 +675,25 @@ async function main() {
       { alumnoId: 'a2', estado: 'ausente_sin_aviso', motivo: 'enfermedad', registradoPor: 'seed', registradoEn: new Date() },
     ],
     estado: 'pendiente_cobro',
+  })
+
+  // Clase de 90 min que ARRANCA A Y MEDIA (18:30-20:00): ocupa 3 bloques de 30
+  // min de cancha + 3 de profesor. Es el fixture de la grilla de media hora.
+  // Va en c2 y con p1, que sí dicta en traki (ver PROFESORES).
+  await crearClaseEnSeed({
+    id: 'c3',
+    sedeId: 'traki',
+    sedeNombre: 'Traki',
+    canchaId: 'c2',
+    profesorId: 'p1',
+    profesorNombre: nombreCompleto(PROFESORES_POR_ID.p1),
+    fecha: diaRelativo(1),
+    horaInicio: '18:30',
+    horaFin: '20:00',
+    cupo: 2,
+    categoria: '5a',
+    alumnosIds: ['a1', 'a2'],
+    estado: 'reservada',
   })
 
   const periodo = diaRelativo(0).slice(0, 7)

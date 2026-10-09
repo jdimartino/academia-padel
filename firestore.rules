@@ -125,8 +125,10 @@ service cloud.firestore {
       }
 
       // Ocupación de 30 minutos de cancha o de profesor, con ID determinista
-      // (§4.1 de docs/modelo-datos.md). Solo admin los escribe: los crea y
-      // borra la misma transacción que la clase.
+      // (§4.1 de docs/modelo-datos.md). El tamaño del bloque (MINUTOS_BLOQUE) y
+      // la validación de duración/inicio viven en la capa de datos (db.js), que
+      // es la única que escribe estos documentos: acá no se repiten. Solo admin
+      // los escribe: los crea y borra la misma transacción que la clase.
       match /bloques/{bloqueId} {
         allow read, write: if esAdmin(tenantId);
       }
