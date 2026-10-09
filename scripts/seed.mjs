@@ -192,17 +192,17 @@ const USUARIOS = [
 ]
 
 /*
- * Sedes del tenant de ensayo: 4 canchas ACTIVAS cada una y horario POR DÍA DE LA
- * SEMANA, en MINUTOS (0 = lunes … 6 = domingo), con `null` = cerrado.
+ * Sedes del tenant de ensayo, con su horario POR DÍA DE LA SEMANA en MINUTOS
+ * (0 = lunes … 6 = domingo) y `null` = cerrado, y la cantidad de canchas que
+ * tiene cada una (Traki 5, UNE 2, Santa Rosa 4 y Capital 4). Las canchas se
+ * numeran c1..cN.
  *
  * Traki es la sede que ilustra las medias horas: abre 7:30 y cierra 15:30 de
  * lunes a viernes, el sábado 8:00-13:00 y el domingo está CERRADA. Sus clases de
  * ejemplo caen siempre dentro de ese horario (ver `diaRelativoAbierto`).
- * Boleíta usa el default 07:00-23:00 todos los días; Santa Rosa y Capital
- * muestran otros horarios, con Capital cerrada los domingos.
- * Las canchas se numeran c1..c4.
+ * UNE usa el default 07:00-23:00 todos los días; Santa Rosa y Capital muestran
+ * otros horarios, con Capital cerrada los domingos.
  */
-const CANCHAS_POR_SEDE = 4
 
 /** Shorthand: franja en horas locales del negocio → minutos desde medianoche. */
 const franja = (apertura, cierre) => ({
@@ -214,6 +214,7 @@ const SEDES = [
   {
     id: 'traki',
     nombre: 'Traki',
+    canchas: 5,
     horario: {
       0: franja(7.5, 15.5),
       1: franja(7.5, 15.5),
@@ -225,8 +226,9 @@ const SEDES = [
     },
   },
   {
-    id: 'boleita',
-    nombre: 'Boleíta',
+    id: 'une',
+    nombre: 'UNE',
+    canchas: 2,
     horario: {
       0: franja(7, 23),
       1: franja(7, 23),
@@ -240,6 +242,7 @@ const SEDES = [
   {
     id: 'santa-rosa',
     nombre: 'Santa Rosa',
+    canchas: 4,
     horario: {
       0: franja(9, 21),
       1: franja(9, 21),
@@ -253,6 +256,7 @@ const SEDES = [
   {
     id: 'capital',
     nombre: 'Capital',
+    canchas: 4,
     horario: {
       0: franja(8, 22),
       1: franja(8, 22),
@@ -281,7 +285,7 @@ const PROFESORES = [
     email: 'profe@ensayo.test',
     telefono: '+58 000 000 0011',
     documento: { tipo: 'cedula', numero: 'V-00000011' },
-    sedes: ['traki', 'boleita'],
+    sedes: ['traki', 'une'],
     notas: '',
     activo: true,
   },
@@ -674,7 +678,7 @@ async function main() {
       orden: SEDES.indexOf(sede),
       horario: sede.horario,
     })
-    for (let i = 1; i <= CANCHAS_POR_SEDE; i += 1) {
+    for (let i = 1; i <= sede.canchas; i += 1) {
       await setDoc(`${tenant}/sedes/${sede.id}/canchas/c${i}`, {
         nombre: `Cancha ${i}`,
         numero: i,
@@ -683,7 +687,10 @@ async function main() {
       })
     }
   }
-  console.log(`· ${SEDES.length} sedes y ${CANCHAS_POR_SEDE} canchas activas cada una`)
+  const totalCanchas = SEDES.reduce((total, sede) => total + sede.canchas, 0)
+  console.log(
+    `· ${SEDES.length} sedes (${SEDES.map((sede) => `${sede.nombre} ${sede.canchas}`).join(', ')}) y ${totalCanchas} canchas activas`,
+  )
 
   // La tarifa por hora queda SIN DEFINIR: no se escribe ningún campo de tarifa.
   for (const profesor of PROFESORES) {
