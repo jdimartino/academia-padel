@@ -8,6 +8,8 @@ import assert from 'node:assert/strict'
 import { describe, it } from 'node:test'
 import {
   CATEGORIAS_GRUPO,
+  EJE_HORARIO,
+  MARCAS_EJE_HORARIO,
   contarSinCerrar,
   diaDeFecha,
   esHuecoReservable,
@@ -18,6 +20,7 @@ import {
   etiquetaDuracion,
   formatHora12,
   formatMinutos,
+  fraccionEnEje,
   franjaValida,
   horarioDeSede,
   horarioDelDia,
@@ -27,7 +30,10 @@ import {
   modalidadDeClase,
   opcionesDeInicio,
   rangoHorasAgenda,
+  resumenDiaSede,
+  resumenHoy,
   tituloClase,
+  tramoEnEje,
 } from '../src/lib/agenda.js'
 import { aISO, hoyISO } from '../src/lib/fechas.js'
 // Helpers puros de db.js: no tocan Firestore, así que se prueban acá sin emulador.
@@ -788,5 +794,110 @@ describe('hueco libre (clases que ocupan la cancha)', () => {
   it('un hueco inválido nunca está libre', () => {
     assert.equal(huecoLibre([], null), false)
     assert.equal(huecoLibre([], { canchaId: 'c2', horaInicio: 'n/a' }), false)
+  })
+})
+
+/** Compara dos fracciones 0..1 tolerando el error de la división. */
+const casi = (actual, esperado) => {
+  assert.ok(
+    Math.abs(actual - esperado) < 1e-9,
+    `se esperaba ${esperado} (±1e-9) y llegó ${actual}`,
+  )
+}
+
+describe('eje y barra del horario (6 AM a medianoche)', () => {
+  it('el eje por defecto va de las 6:00 AM a la medianoche', () => {
+    assert.deepEqual(EJE_HORARIO, { inicio: 360, fin: 1440 })
+  })
+
+  it('las marcas del eje caen en 0, 1/3, 2/3 y 1', () => {
+    assert.deepEqual(
+      MARCAS_EJE_HORARIO.map((marca) => marca.etiqueta),
+      ['6 AM', '12 PM', '6 PM', '12 AM'],
+    )
+    assert.deepEqual(
+      MARCAS_EJE_HORARIO.map((marca) => marca.minutos),
+      [360, 720, 1080, 1440],
+    )
+    MARCAS_EJE_HORARIO.forEach((marca, i) => {
+      casi(fraccionEnEje(marca.minutos), i / 3)
+    })
+  })
+
+  it('fraccionEnEje recorta a los bordes y rechaza un eje inválido', () => {
+    casi(fraccionEnEje(360), 0)
+    casi(fraccionEnEje(1440), 1)
+    casi(fraccionEnEje(720), 1 / 3)
+    // Fuera del eje: se recorta al borde.
+    casi(fraccionEnEje(0), 0)
+    casi(fraccionEnEje(2000), 1)
+    assert.equal(fraccionEnEje('7:30'), null)
+    assert.equal(fraccionEnEje(720, { inicio: 1440, fin: 360 }), null)
+    assert.equal(fraccionEnEje(720, null), null)
+  })
+
+  it('tramoEnEje ubica una franja en fracciones 0..1', () => {
+    // 7:30-15:30 dentro del eje 6:00-24:00: arranca en 90/1080 y dura 480/1080.
+    const manana = tramoEnEje({ apertura: 450, cierre: 930 })
+    casi(manana.izquierda, 90 / 1080)
+    casi(manana.ancho, 480 / 1080)
+    casi(manana.izquierda + manana.ancho, 570 / 1080)
+
+    // 7:00-23:00, el default de la sede.
+    const completo = tramoEnEje({ apertura: 420, cierre: 1380 })
+    casi(completo.izquierda, 60 / 1080)
+    casi(completo.ancho, 960 / 1080)
+
+    // Cierra a medianoche: la barra llega justo al borde derecho.
+    const nocturno = tramoEnEje({ apertura: 1200, cierre: 1440 })
+    casi(nocturno.izquierda + nocturno.ancho, 1)
+  })
+
+  it('tramoEnEje recorta la franja al eje', () => {
+    // Abre a las 5:00 (antes del eje): la barra arranca en el borde izquierdo.
+    const madrugada = tramoEnEje({ apertura: 300, cierre: 480 })
+    casi(madrugada.izquierda, 0)
+    casi(madrugada.ancho, 120 / 1080)
+  })
+
+  it('tramoEnEje devuelve null cuando la barra debe ir vacía', () => {
+    // Franja inválida (cierre <= apertura) o con minutos fuera de la grilla.
+    assert.equal(tramoEnEje({ apertura: 600, cierre: 600 }), null)
+    assert.equal(tramoEnEje({ apertura: 600, cierre: 300 }), null)
+    assert.equal(tramoEnEje({ apertura: 601, cierre: 900 }), null)
+    assert.equal(tramoEnEje(null), null)
+    assert.equal(tramoEnEje({ apertura: 450, cierre: 930 }, { inicio: 0, fin: 0 }), null)
+    // Totalmente fuera del eje: 0:00-1:00 no toca las 6:00-24:00.
+    assert.equal(tramoEnEje({ apertura: 0, cierre: 60 }), null)
+  })
+})
+
+describe('resumen de una sede ("Hoy ..." y canchas)', () => {
+  it('una sede abierta hoy muestra la franja y la cantidad de canchas', () => {
+    assert.equal(resumenDiaSede(SEDE_MEDIA_HORA, LUNES), 'Hoy 7:30 AM – 3:30 PM')
+    assert.equal(resumenHoy(SEDE_MEDIA_HORA, 5, LUNES), 'Hoy 7:30 AM – 3:30 PM · 5 canchas')
+    assert.equal(resumenHoy(SEDE_MEDIA_HORA, [1, 2], LUNES), 'Hoy 7:30 AM – 3:30 PM · 2 canchas')
+    assert.equal(resumenHoy(SEDE_MEDIA_HORA, 1, LUNES), 'Hoy 7:30 AM – 3:30 PM · 1 cancha')
+  })
+
+  it('un día cerrado dice "Hoy cerrada"', () => {
+    assert.equal(resumenDiaSede(SEDE_MEDIA_HORA, DOMINGO), 'Hoy cerrada')
+    assert.equal(resumenHoy(SEDE_MEDIA_HORA, 0, DOMINGO), 'Hoy cerrada · 0 canchas')
+  })
+
+  it('una sede inactiva se resume solo como "Inactiva"', () => {
+    const inactiva = { ...SEDE_MEDIA_HORA, activa: false }
+    assert.equal(resumenDiaSede(inactiva, LUNES), 'Inactiva')
+    assert.equal(resumenHoy(inactiva, 4, LUNES), 'Inactiva')
+  })
+
+  it('una sede que cierra a medianoche muestra las 12:00 AM', () => {
+    const sede = { horario: { ...SEMANA_MEDIA_HORA, 0: dia(8, 24) } }
+    assert.equal(resumenDiaSede(sede, LUNES), 'Hoy 8:00 AM – 12:00 AM')
+  })
+
+  it('una fecha inválida se comporta como día cerrado', () => {
+    assert.equal(resumenDiaSede(SEDE_MEDIA_HORA, '2026-02-31'), 'Hoy cerrada')
+    assert.equal(resumenDiaSede(SEDE_MEDIA_HORA, ''), 'Hoy cerrada')
   })
 })

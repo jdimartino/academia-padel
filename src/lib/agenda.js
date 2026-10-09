@@ -1,4 +1,4 @@
-import { DIAS_CORTOS, DIAS_LARGOS, diaSemana } from './fechas.js'
+import { DIAS_CORTOS, DIAS_LARGOS, diaSemana, hoyISO } from './fechas.js'
 
 /*
  * Helpers puros de la agenda: horario de las sedes, grilla horaria, estados y
@@ -223,6 +223,95 @@ export function formatHora12(hora) {
   const sufijo = h24 < 12 ? 'AM' : 'PM'
   const h12 = h24 % 12 === 0 ? 12 : h24 % 12
   return `${h12}:${String(minutos).padStart(2, '0')} ${sufijo}`
+}
+
+/* ------------------------------------------------------------------ */
+/* Resumen de una sede y eje de la barra del horario                    */
+/* (pantalla de Configuración: lista de sedes y editor semanal)         */
+/* ------------------------------------------------------------------ */
+
+/**
+ * Eje horizontal de la barra del horario de un día: de las 6:00 AM (360) a la
+ * medianoche (1440). Es solo una regla de DIBUJO: los minutos guardados siguen
+ * siendo los de la franja de la sede.
+ */
+export const EJE_HORARIO = Object.freeze({ inicio: 6 * 60, fin: MINUTOS_DIA })
+
+/**
+ * Marcas del eje de la barra, con sus minutos y su etiqueta CORTA ("6 AM", no
+ * "6:00 AM": es un eje, no un selector). Las fracciones 0..1 salen de
+ * `fraccionEnEje`.
+ */
+export const MARCAS_EJE_HORARIO = Object.freeze([
+  { minutos: 6 * 60, etiqueta: '6 AM' },
+  { minutos: 12 * 60, etiqueta: '12 PM' },
+  { minutos: 18 * 60, etiqueta: '6 PM' },
+  { minutos: MINUTOS_DIA, etiqueta: '12 AM' },
+])
+
+/** Fracción 0..1 de unos minutos dentro de un eje (recortada a los bordes). */
+export function fraccionEnEje(minutos, eje = EJE_HORARIO) {
+  const inicio = eje?.inicio
+  const fin = eje?.fin
+  if (!Number.isFinite(inicio) || !Number.isFinite(fin) || fin <= inicio) return null
+  if (!Number.isFinite(minutos)) return null
+  return Math.min(Math.max((minutos - inicio) / (fin - inicio), 0), 1)
+}
+
+/**
+ * Posición de una franja de la sede (minutos) dentro de un eje horizontal, en
+ * fracciones 0..1: `{izquierda, ancho}`. La franja se RECORTA al eje: una sede
+ * que abre antes del inicio del eje arranca en el borde y una que cierra
+ * después termina en el borde. `null` si la franja es inválida (cierre <=
+ * apertura) o queda totalmente fuera del eje, que es cuando la barra va vacía.
+ */
+export function tramoEnEje(franja, eje = EJE_HORARIO) {
+  const inicio = eje?.inicio
+  const fin = eje?.fin
+  if (!Number.isFinite(inicio) || !Number.isFinite(fin) || fin <= inicio) return null
+  const valida = franjaValida(franja)
+  if (!valida) return null
+  const desde = Math.max(valida.apertura, inicio)
+  const hasta = Math.min(valida.cierre, fin)
+  if (hasta <= desde) return null
+  const total = fin - inicio
+  return { izquierda: (desde - inicio) / total, ancho: (hasta - desde) / total }
+}
+
+/** Cuenta de canchas, tanto si llega la lista como si llega el número. */
+function contarCanchas(canchas) {
+  if (Array.isArray(canchas)) return canchas.length
+  const total = Number(canchas)
+  return Number.isFinite(total) && total > 0 ? Math.floor(total) : 0
+}
+
+/** "1 cancha" / "5 canchas". */
+function etiquetaCanchas(canchas) {
+  const total = contarCanchas(canchas)
+  return `${total} ${total === 1 ? 'cancha' : 'canchas'}`
+}
+
+/*
+ * ¿Está abierta la sede HOY? `fecha` es "YYYY-MM-DD" en calendario LOCAL
+ * (default: hoy) y la franja sale de `horarioDeSede` + `horarioDelDia`, los
+ * mismos helpers que usan la agenda y la capa de datos. Una sede inactiva no
+ * tiene "hoy": se resume como "Inactiva".
+ */
+export function resumenDiaSede(sede, fecha = hoyISO()) {
+  if (sede?.activa === false) return 'Inactiva'
+  const franja = horarioDelDia(fecha, horarioDeSede(sede))
+  if (!franja) return 'Hoy cerrada'
+  return `Hoy ${formatMinutos(franja.apertura)} – ${formatMinutos(franja.cierre)}`
+}
+
+/**
+ * Sublinea de una sede en la lista: "Hoy 7:30 AM – 3:30 PM · 5 canchas",
+ * "Hoy cerrada · 2 canchas" o "Inactiva". `canchas` acepta la lista de canchas
+ * o su cantidad.
+ */
+export function resumenHoy(sede, canchas = 0, fecha = hoyISO()) {
+  if (sede?.activa === false) return 'Inactiva'
+  return `${resumenDiaSede(sede, fecha)} · ${etiquetaCanchas(canchas)}`
 }
 
 /** Minutos de inicio/fin de una clase, recortados a la franja visible. */

@@ -1,0 +1,724 @@
+/*
+ * Configuración — "Sedes y canchas".
+ *
+ * Mobile-first: el celular ve un selector de sede arriba y el detalle debajo
+ * (una sola columna, con la barra de cambios pegada abajo); desde 48rem aparece
+ * la lista de sedes a la izquierda y el detalle a la derecha, y el editor del
+ * horario pasa a una fila compacta por día con la barra en el mismo renglón.
+ *
+ * Solo tokens del proyecto (ver styles/tokens.css). El acento lima queda
+ * reservado a la ÚNICA acción primaria de la pantalla: "Guardar".
+ */
+
+.config {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  padding-bottom: 24px;
+}
+
+/* ============================================================
+   Selector de sede (mobile) + lista de sedes (desktop)
+   ============================================================ */
+
+.config__selector {
+  position: relative;
+  display: flex;
+  align-items: stretch;
+  gap: 8px;
+}
+
+.config__selector-btn {
+  flex: 1 1 auto;
+  min-width: 0;
+  min-height: 56px;
+  padding: 8px 12px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  border-radius: 16px;
+  border: 1px solid rgba(255, 255, 255, 0.2);
+  background: rgba(255, 255, 255, 0.09);
+  color: var(--texto);
+  text-align: left;
+  -webkit-backdrop-filter: blur(20px) saturate(160%);
+  backdrop-filter: blur(20px) saturate(160%);
+}
+
+.config__selector-texto {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+}
+
+.config__selector-nombre {
+  font-weight: 700;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.config__selector-hoy {
+  font-size: 12px;
+  color: var(--texto-muted);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.config__selector-lista {
+  position: absolute;
+  top: calc(100% + 6px);
+  left: 0;
+  right: 0;
+  z-index: 20;
+  padding: 12px;
+  border-radius: 18px;
+  max-height: 60dvh;
+  overflow-y: auto;
+  /* Más opaca que el resto del vidrio: la lista tapa las filas del horario. */
+  background: rgba(10, 20, 36, 0.94);
+}
+
+.config__lista {
+  display: none;
+}
+
+.lista-sedes {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.lista-sedes__cab {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.lista-sedes__titulo {
+  font-size: 15px;
+  font-weight: 700;
+}
+
+.lista-sedes__alta {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.lista-sedes__items {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.item-sede {
+  width: 100%;
+  min-height: 56px;
+  padding: 8px 10px;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  border-radius: 14px;
+  border: 1px solid transparent;
+  background: transparent;
+  color: var(--texto);
+  text-align: left;
+}
+
+.item-sede.is-sel {
+  background: rgba(255, 255, 255, 0.16);
+  border-color: rgba(255, 255, 255, 0.3);
+}
+
+.item-sede.is-inactiva {
+  opacity: 0.6;
+}
+
+.item-sede__punto {
+  flex: 0 0 auto;
+  width: 9px;
+  height: 9px;
+  border-radius: 50%;
+  background: var(--estado-ejecutada-bg);
+}
+
+.item-sede__punto.is-off {
+  background: rgba(226, 234, 246, 0.35);
+}
+
+.item-sede__texto {
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+  min-width: 0;
+}
+
+.item-sede__nombre {
+  font-weight: 700;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.item-sede__resumen {
+  font-size: 12px;
+  color: var(--texto-muted);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* ============================================================
+   Detalle de la sede
+   ============================================================ */
+
+.detalle {
+  min-width: 0;
+  padding: 14px;
+  border-radius: 24px;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+/* En mobile el encabezado del detalle lo reemplaza el selector de arriba. */
+.detalle__cab {
+  display: none;
+  align-items: center;
+  gap: 8px;
+}
+
+.detalle__nombre {
+  flex: 1 1 auto;
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 18px;
+  font-weight: 800;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.detalle__inactiva {
+  flex: 0 0 auto;
+  padding: 2px 8px;
+  border-radius: var(--radio-pill);
+  font-size: 11px;
+  font-weight: 700;
+  color: var(--estado-cancelada-texto);
+  background: var(--estado-cancelada-bg);
+  border: var(--estado-cancelada-border);
+}
+
+.nombre-form {
+  flex: 1 1 10rem;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.detalle__tabs {
+  display: flex;
+  gap: 4px;
+  padding: 4px;
+  border-radius: var(--radio-pill);
+  background: rgba(255, 255, 255, 0.08);
+  border: 1px solid rgba(255, 255, 255, 0.16);
+}
+
+.detalle__tab {
+  flex: 1 1 0;
+  min-width: 0;
+  min-height: 44px;
+  padding: 4px 8px;
+  border: none;
+  border-radius: var(--radio-pill);
+  background: transparent;
+  color: var(--texto-muted);
+  font-size: 13px;
+  font-weight: 700;
+  white-space: nowrap;
+}
+
+.detalle__tab.is-sel {
+  background: var(--texto);
+  color: #0a1626;
+}
+
+.detalle__panel {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+/* ============================================================
+   Horario: una fila compacta por día
+   ============================================================ */
+
+.horario-rejilla {
+  display: flex;
+  flex-direction: column;
+}
+
+.horario-eje {
+  display: none;
+}
+
+.horario-dia {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto auto;
+  grid-template-areas:
+    "nombre rango switch"
+    "barra barra barra"
+    "horas horas horas"
+    "error error error";
+  align-items: center;
+  column-gap: 8px;
+  row-gap: 2px;
+  padding: 5px 0;
+  border-top: 1px solid rgba(255, 255, 255, 0.1);
+}
+
+.horario-dia:first-of-type {
+  border-top: 0;
+}
+
+.horario-dia__nombre {
+  grid-area: nombre;
+  min-width: 0;
+  font-weight: 600;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.horario-dia__rango {
+  grid-area: rango;
+  display: flex;
+  justify-content: flex-end;
+}
+
+.horario-dia__rango-btn {
+  min-height: 44px;
+  padding: 0 4px;
+  border: none;
+  background: transparent;
+  color: var(--texto);
+  font-weight: 700;
+  white-space: nowrap;
+}
+
+.horario-dia__rango-texto {
+  display: inline-flex;
+  align-items: center;
+  min-height: 44px;
+  color: var(--texto-muted);
+  white-space: nowrap;
+}
+
+.switch-celda {
+  grid-area: switch;
+  display: grid;
+  place-items: center;
+  min-width: 56px;
+  min-height: 44px;
+}
+
+/* Interruptor on/off: pista clara cuando está abierto, nunca en lima. */
+.switch {
+  appearance: none;
+  -webkit-appearance: none;
+  position: relative;
+  width: 46px;
+  height: 26px;
+  margin: 0;
+  border-radius: var(--radio-pill);
+  border: 1px solid rgba(255, 255, 255, 0.28);
+  background: rgba(255, 255, 255, 0.16);
+  cursor: pointer;
+  transition: background 0.15s ease, border-color 0.15s ease;
+}
+
+.switch::after {
+  content: '';
+  position: absolute;
+  top: 2px;
+  left: 2px;
+  width: 20px;
+  height: 20px;
+  border-radius: 50%;
+  background: rgba(244, 247, 251, 0.85);
+  transition: left 0.15s ease, background 0.15s ease;
+}
+
+.switch:checked {
+  background: rgba(244, 247, 251, 0.3);
+  border-color: rgba(255, 255, 255, 0.6);
+}
+
+.switch:checked::after {
+  left: 22px;
+  background: var(--texto);
+}
+
+.horario-dia__horas {
+  grid-area: horas;
+  display: none;
+  align-items: center;
+  gap: 6px;
+}
+
+.horario-dia__horas.is-abierto {
+  display: flex;
+}
+
+.horario-dia__cerrado {
+  color: var(--texto-muted);
+}
+
+/* Selectores de hora: apenas más anchos que su contenido ("12:00 PM"). */
+.form__input--hora {
+  width: 6.25rem;
+  min-width: 0;
+  min-height: 2.5rem;
+  padding: 0.35rem 0.4rem;
+}
+
+.horario-dia__barra {
+  grid-area: barra;
+  position: relative;
+  height: 4px;
+  border-radius: var(--radio-pill);
+  background: rgba(255, 255, 255, 0.12);
+  overflow: hidden;
+}
+
+.horario-dia__tramo {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  border-radius: var(--radio-pill);
+  background: rgba(244, 247, 251, 0.6);
+}
+
+.horario-dia__error {
+  grid-area: error;
+  font-size: 12px;
+  font-weight: 600;
+  color: #fca5a5;
+}
+
+.horario-dia.is-error .form__input--hora {
+  border-color: #fca5a5;
+  box-shadow: inset 0 0 0 1px rgba(248, 113, 113, 0.5);
+}
+
+/* ============================================================
+   Cambios sin guardar: pegada abajo en mobile, en línea en desktop
+   ============================================================ */
+
+.barra-cambios {
+  position: sticky;
+  bottom: 0;
+  z-index: 5;
+  padding: 10px 12px;
+  border-radius: 16px;
+  border: 1px solid rgba(255, 190, 112, 0.5);
+  background: rgba(58, 30, 0, 0.72);
+  -webkit-backdrop-filter: blur(20px) saturate(160%);
+  backdrop-filter: blur(20px) saturate(160%);
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.barra-cambios__texto {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  font-size: 14px;
+}
+
+.barra-cambios__error {
+  font-size: 13px;
+  font-weight: 600;
+  color: #fca5a5;
+}
+
+.barra-cambios__acciones {
+  display: flex;
+  gap: 8px;
+}
+
+.barra-cambios .btn,
+.barra-cambios .btn-cta {
+  width: auto;
+  flex: 1 1 0;
+  min-height: 44px;
+}
+
+/* ============================================================
+   Canchas: filas densas, sin tarjetas por cancha
+   ============================================================ */
+
+.canchas-lista {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.cancha-fila {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-height: 52px;
+  padding: 6px 10px;
+  border-radius: 12px;
+  border: 1px solid rgba(255, 255, 255, 0.16);
+  background: rgba(255, 255, 255, 0.05);
+}
+
+.cancha-fila__nombre {
+  flex: 1 1 auto;
+  min-width: 0;
+  font-weight: 600;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.cancha-fila .nombre-form {
+  flex: 1 1 auto;
+}
+
+.pill-estado {
+  flex: 0 0 auto;
+  padding: 3px 10px;
+  border-radius: var(--radio-pill);
+  font-size: 11px;
+  font-weight: 700;
+  color: var(--estado-ejecutada-texto);
+  background: var(--estado-ejecutada-bg);
+}
+
+.pill-estado.is-off {
+  color: var(--estado-cancelada-texto);
+  background: var(--estado-cancelada-bg);
+  border: var(--estado-cancelada-border);
+}
+
+.canchas-nueva {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+}
+
+.canchas-nueva .form__input {
+  flex: 1 1 12rem;
+  min-width: 0;
+}
+
+.canchas-nueva .btn {
+  width: auto;
+  flex: 0 0 auto;
+}
+
+.canchas-nueva__error {
+  flex: 1 1 100%;
+}
+
+/* ============================================================
+   Pestaña General
+   ============================================================ */
+
+.general__bloque {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 12px;
+  border-radius: 14px;
+  border: 1px solid rgba(255, 255, 255, 0.16);
+  background: rgba(255, 255, 255, 0.05);
+}
+
+.general__label {
+  font-size: 11px;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--texto-muted);
+}
+
+.general__estado {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.general__valor {
+  font-weight: 700;
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.general__estado .btn {
+  width: auto;
+}
+
+.general__nota {
+  font-size: 13px;
+  color: var(--texto-muted);
+}
+
+/* ============================================================
+   Menú "⋯" anclado al botón (nunca fixed)
+   ============================================================ */
+
+.menu-ancla {
+  position: relative;
+  flex: 0 0 auto;
+}
+
+.menu-flotante {
+  position: absolute;
+  top: calc(100% + 6px);
+  right: 0;
+  z-index: 25;
+  min-width: 11rem;
+  padding: 6px;
+  border-radius: 14px;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.menu-flotante__item {
+  min-height: 40px;
+  padding: 8px 10px;
+  border: none;
+  border-radius: 10px;
+  background: transparent;
+  color: var(--texto);
+  font-weight: 600;
+  text-align: left;
+}
+
+.menu-flotante__item:hover {
+  background: rgba(255, 255, 255, 0.12);
+}
+
+.form__input--compacto {
+  min-height: 2.5rem;
+  padding: 0.4rem 0.6rem;
+}
+
+/* ============================================================
+   DESKTOP (>= 48rem): dos columnas
+   ============================================================ */
+
+@media (min-width: 48rem) {
+  .config {
+    display: grid;
+    grid-template-columns: minmax(14rem, 17rem) minmax(0, 1fr);
+    gap: 16px;
+    align-items: start;
+  }
+
+  .config__selector {
+    display: none;
+  }
+
+  .config__lista {
+    display: block;
+    padding: 14px;
+    border-radius: 24px;
+  }
+
+  .detalle__cab {
+    display: flex;
+  }
+
+  .barra-cambios {
+    position: static;
+    flex-direction: row;
+    align-items: center;
+    justify-content: space-between;
+  }
+
+  .barra-cambios .btn,
+  .barra-cambios .btn-cta {
+    flex: 0 0 auto;
+  }
+}
+
+/*
+ * La fila de día pasa a una sola línea (horas en selects + barra con eje) solo
+ * cuando la TARJETA del detalle es ancha de verdad: con el sidebar del shell y
+ * la lista de sedes al lado, entre 48rem y ~75rem la tarjeta queda angosta y la
+ * barra no tendría ni para rotular el eje. Ahí se usa el mismo renglón compacto
+ * del celular, que sigue funcionando con mouse. La consulta es de CONTENEDOR
+ * (no de viewport) porque lo que importa es el ancho de la tarjeta.
+ */
+.detalle {
+  container-type: inline-size;
+  container-name: detalle;
+}
+
+@container detalle (min-width: 34rem) {
+  .horario-eje {
+    display: grid;
+    grid-template-columns: 5.25rem 3.5rem 14rem minmax(0, 1fr);
+    column-gap: 8px;
+  }
+
+  .horario-eje__marcas {
+    grid-column: 4;
+    position: relative;
+    height: 1rem;
+  }
+
+  .horario-eje__marca {
+    position: absolute;
+    top: 0;
+    font-size: 11px;
+    color: var(--texto-muted);
+    white-space: nowrap;
+  }
+
+  .horario-dia {
+    grid-template-columns: 5.25rem 3.5rem 14rem minmax(0, 1fr);
+    grid-template-areas:
+      "nombre switch horas barra"
+      "error error error error";
+    column-gap: 8px;
+    row-gap: 2px;
+    padding: 4px 0;
+  }
+
+  .horario-dia__rango {
+    display: none;
+  }
+
+  .horario-dia__horas {
+    display: flex;
+  }
+
+  .horario-dia__barra {
+    height: 8px;
+  }
+}
