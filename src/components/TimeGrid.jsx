@@ -2,10 +2,10 @@ import { useMemo } from 'react'
 import ClassBlock from './ClassBlock'
 import {
   MINUTOS_BLOQUE,
+  aHoraHHmm,
   esHuecoReservable,
   formatHora12,
   horarioDeSede,
-  horasDeFranja,
   huecoDeClic,
   huecoLibre,
   lineasDeFranja,
@@ -39,8 +39,6 @@ export default function TimeGrid({
   const minutoInicio = rango.horaInicio * 60
   const alto = (rango.horaFin - rango.horaInicio) * 60 * escala
   const lineas = lineasDeFranja(rango)
-  // Etiquetas: solo las horas en punto; las medias horas son líneas finas.
-  const horas = horasDeFranja(rango)
 
   /*
    * Bloques de inicio que admite una reserva de 1 h en la sede: la última hora
@@ -113,14 +111,20 @@ export default function TimeGrid({
             )
           })}
 
+          {/*
+            * Eje de horas: una etiqueta por línea de la franja, o sea cada
+            * MINUTOS_BLOQUE (30 min). Se reutilizan `lineas` (lineasDeFranja) y
+            * el formateador de 12 h de siempre; `horaEntera` decide el peso
+            * visual (la media hora va más chica y tenue, ver agenda.css).
+            */}
           <div className="grid__times" style={{ height: `${alto}px` }}>
-            {horas.map((h) => (
+            {lineas.map((linea) => (
               <span
-                key={h}
-                className="grid__hora"
-                style={{ top: `${(h * 60 - minutoInicio) * escala}px` }}
+                key={linea.minuto}
+                className={`grid__hora${linea.horaEntera ? ' is-hora' : ' is-media'}`}
+                style={{ top: `${(linea.minuto - minutoInicio) * escala}px` }}
               >
-                {formatHora12(h)}
+                {formatHora12(aHoraHHmm(linea.minuto))}
               </span>
             ))}
           </div>

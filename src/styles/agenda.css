@@ -75,7 +75,14 @@
 
 .grid {
   display: grid;
-  grid-template-columns: 60px repeat(var(--ncanchas), minmax(160px, 1fr));
+  /*
+   * Columna del eje de horas: 68px alcanzan para "10:00 AM" a 12px en una sola
+   * línea. Antes eran 60px, que dejaban ~52px útiles y partían la etiqueta en
+   * dos líneas ("10:00" / "AM"). En móvil (~375px) la columna se queda con
+   * ~18% y la cancha única conserva el resto; en escritorio el costo es
+   * despreciable frente a las canchas de minmax(160px, 1fr).
+   */
+  grid-template-columns: 68px repeat(var(--ncanchas), minmax(160px, 1fr));
   min-width: 100%;
 }
 
@@ -106,12 +113,26 @@
   position: relative;
 }
 
+/*
+ * Etiquetas del eje de horas: una por línea de la franja, o sea cada 30 min
+ * (ver `lineasDeFranja`). La HORA en punto conserva el tamaño y el contraste de
+ * siempre; la MEDIA hora (`.is-media`) va un punto más chica y más tenue, así la
+ * jerarquía se lee de un vistazo aunque las filas sean de 30 min.
+ * `white-space: nowrap` es obligatorio: "10:00 AM" y "12:00 PM" nunca se parten
+ * en dos líneas.
+ */
 .grid__hora {
   position: absolute;
   right: 8px;
   transform: translateY(-50%);
+  white-space: nowrap;
   font-size: 12px;
   color: var(--texto-muted);
+}
+
+.grid__hora.is-media {
+  font-size: 11px;
+  opacity: 0.65;
 }
 
 .grid__hora:first-child {
