@@ -136,7 +136,7 @@ carga por su cuenta.
 
 | Campo | Tipo | Nota |
 | --- | --- | --- |
-| `nombre` | string | "Traki", "Boleíta", "Santa Rosa", "Capital" (tenant de ensayo). Requerido, normalizado y único en el tenant (sin distinguir caja, espacios de más ni acentos) |
+| `nombre` | string | "Traki" (5 canchas), "UNE" (2), "Santa Rosa" (4) y "Capital" (4) (tenant de ensayo). Requerido, normalizado y único en el tenant (sin distinguir caja, espacios de más ni acentos) |
 | `direccion` | string | *sin definir formato* |
 | `activa` | bool | |
 | `orden` | number | Para ordenar en la UI |
@@ -387,8 +387,8 @@ academias/{tenantId}/bloques/{bloqueId}
 
 ### ID determinista
 
-La granularidad es de **30 minutos** (la mitad del bloque de pádel más corto
-que se vende).
+La granularidad es de **`MINUTOS_BLOQUE = 30`** minutos (la mitad del bloque de
+pádel más corto que se vende).
 
 - **Cancha:** `{sedeId}_{canchaId}_{YYYY-MM-DD}_{HHmm}`
   (p. ej. `traki_c1_2026-10-03_1800`).
@@ -428,13 +428,13 @@ Y en `clases/{claseId}` se agrega:
 
 ### Crear una clase (una sola transacción)
 
-1. Se calcula la lista de bloques: la duración debe ser **múltiplo de 30
-   minutos** y la hora de inicio debe caer en la grilla (múltiplo de 30 desde
-   medianoche); si no, la reserva se rechaza. Sin esa alineación una clase de
-   19:15 bloquearía 19:15/19:45 y no chocaría con una que ocupa 18:00-19:30,
-   aunque en la realidad se pisan. Con la grilla, `(horaFin - horaInicio) / 30`
-   bloques de cancha **y** los mismos de profesor. Una clase de 90 minutos =
-   3 + 3 = 6.
+1. Se calcula la lista de bloques: la duración debe estar en
+   **`DURACIONES_VALIDAS = [60, 90, 120]`** minutos y la hora de inicio debe
+   caer en la grilla (**múltiplo de `MINUTOS_BLOQUE` (30) desde medianoche**);
+   si no, la reserva se rechaza. Sin esa alineación una clase de 19:15
+   bloquearía 19:15/19:45 y no chocaría con una que ocupa 18:00-19:30, aunque en
+   la realidad se pisan. Con la grilla, `(horaFin - horaInicio) / 30` bloques de
+   cancha **y** los mismos de profesor. Una clase de 90 minutos = 3 + 3 = 6.
 2. `runTransaction`:
    - **Todas las lecturas primero** (Firestore exige que en una transacción no
      se lea después de escribir). Se hace `get()` de los 6 documentos por ID.

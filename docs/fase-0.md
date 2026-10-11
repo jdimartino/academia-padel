@@ -166,7 +166,7 @@ dependencias nuevas, consistente con AGENTS.md.
 
 Estas no se resuelven en Fase 0 y no deben inventarse:
 
-1. **Estructura de sedes:** ¿las 4 sedes (Traki, Boleíta, Santa Rosa, Capital)
+1. **Estructura de sedes:** ¿las 4 sedes (Traki, UNE, Santa Rosa, Capital)
    son del primer tenant o son un catálogo global compartido? Se asumió que
    **cada tenant define sus propias sedes**. Confirmar.
 2. **Monorepo vs single app:** ¿una sola app React que resuelve el tenant por
