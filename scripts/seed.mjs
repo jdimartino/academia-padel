@@ -603,6 +603,50 @@ const ALUMNOS = [
     activo: true,
     notas: '',
   },
+  // Par de hermanos (menores) con el MISMO representante: ejercita el descuento
+  // de hermanos y la sugerencia en la ficha (Phase 5).
+  {
+    id: 'a16',
+    tipo: 'menor',
+    nombre: 'Mateo',
+    apellidos: 'Hermanos',
+    nivel: 'principiante',
+    email: null,
+    telefono: null,
+    documento: null,
+    contactoEmergencia: null,
+    representante: {
+      nombre: 'Carla',
+      apellidos: 'Hermanos',
+      email: 'carla.hermanos@ensayo.test',
+      telefono: '+58 000 000 0016',
+    },
+    fechaIngreso: diaRelativo(-40),
+    avisosActivos: true,
+    activo: true,
+    notas: '',
+  },
+  {
+    id: 'a17',
+    tipo: 'menor',
+    nombre: 'Lucía',
+    apellidos: 'Hermanos',
+    nivel: 'principiante',
+    email: null,
+    telefono: null,
+    documento: null,
+    contactoEmergencia: null,
+    representante: {
+      nombre: 'Carla',
+      apellidos: 'Hermanos',
+      email: 'carla.hermanos@ensayo.test',
+      telefono: '+58 000 000 0016',
+    },
+    fechaIngreso: diaRelativo(-40),
+    avisosActivos: true,
+    activo: true,
+    notas: '',
+  },
 ]
 
 const ALUMNOS_POR_ID = Object.fromEntries(ALUMNOS.map((alumno) => [alumno.id, alumno]))
@@ -947,6 +991,164 @@ async function main() {
     metodoPago: null,
   })
   console.log('· Profesores, alumnos, clases, cargos y pago al profesor')
+
+  /*
+   * Mensualidades y créditos (Phase 5).
+   * - a1 (adulto): plan activo y un lote parcialmente usado por la clase c4
+   *   (cubierta por crédito, sin cargo para a1; el pago al profesor sigue).
+   * - a16/a17 (hermanos, mismo representante): plan de a16 con descuento de
+   *   hermanos y un lote de ejemplo.
+   * - a14: plan con un lote YA VENCIDO.
+   */
+  const PLANES_SEED = [
+    {
+      id: 'plan-a1',
+      alumnoId: 'a1',
+      nombre: 'Mensual 8 horas',
+      frecuencia: 'mensual',
+      minutosIncluidos: 480,
+      precioCents: 8000,
+      descuentoHermanos: false,
+      activo: true,
+    },
+    {
+      id: 'plan-a16',
+      alumnoId: 'a16',
+      nombre: 'Mensual 8 horas (hermanos)',
+      frecuencia: 'mensual',
+      minutosIncluidos: 480,
+      precioCents: 8000,
+      descuentoHermanos: true,
+      activo: true,
+    },
+    {
+      id: 'plan-a14',
+      alumnoId: 'a14',
+      nombre: 'Mensual 4 horas',
+      frecuencia: 'mensual',
+      minutosIncluidos: 240,
+      precioCents: 4500,
+      descuentoHermanos: false,
+      activo: true,
+    },
+  ]
+  for (const plan of PLANES_SEED) {
+    const { id, ...datos } = plan
+    await setDoc(`${tenant}/planesAlumno/${id}`, { ...datos, creadoEn })
+  }
+
+  const CREDITOS_SEED = [
+    {
+      id: 'cred-a1',
+      alumnoId: 'a1',
+      planId: 'plan-a1',
+      minutosComprados: 480,
+      minutosUsados: 60,
+      inicio: ayerAbierto,
+      venceEn: null,
+      cargoId: 'men_cred-a1',
+      estado: 'activo',
+    },
+    {
+      id: 'cred-a16',
+      alumnoId: 'a16',
+      planId: 'plan-a16',
+      minutosComprados: 480,
+      minutosUsados: 0,
+      inicio: diaRelativo(0),
+      venceEn: null,
+      cargoId: 'men_cred-a16',
+      estado: 'activo',
+    },
+    {
+      id: 'cred-a14',
+      alumnoId: 'a14',
+      planId: 'plan-a14',
+      minutosComprados: 240,
+      minutosUsados: 0,
+      inicio: diaRelativo(-30),
+      venceEn: diaRelativo(-5),
+      cargoId: 'men_cred-a14',
+      estado: 'vencido',
+    },
+  ]
+  for (const credito of CREDITOS_SEED) {
+    const { id, ...datos } = credito
+    await setDoc(`${tenant}/creditos/${id}`, { ...datos, creadoEn })
+  }
+
+  const CARGOS_MENSUALIDAD = [
+    { id: 'men_cred-a1', alumnoId: 'a1', creditoId: 'cred-a1', planId: 'plan-a1', planNombre: 'Mensual 8 horas', montoCents: 8000, fecha: ayerAbierto },
+    { id: 'men_cred-a16', alumnoId: 'a16', creditoId: 'cred-a16', planId: 'plan-a16', planNombre: 'Mensual 8 horas (hermanos)', montoCents: 7200, fecha: diaRelativo(0) },
+    { id: 'men_cred-a14', alumnoId: 'a14', creditoId: 'cred-a14', planId: 'plan-a14', planNombre: 'Mensual 4 horas', montoCents: 4500, fecha: diaRelativo(-30) },
+  ]
+  for (const cargo of CARGOS_MENSUALIDAD) {
+    const { id, alumnoId, ...resto } = cargo
+    await setDoc(`${tenant}/cargos/${id}`, {
+      claseId: null,
+      alumnoId,
+      alumnoNombre: nombreCompleto(ALUMNOS_POR_ID[alumnoId]),
+      sedeId: null,
+      concepto: 'mensualidad',
+      estado: 'pendiente',
+      pagadoEn: null,
+      metodoPago: null,
+      ...resto,
+      creadoEn,
+    })
+  }
+
+  // Clase c4 CERRADA y cubierta por crédito: a1 presente, sin cargo, con el
+  // movimiento `c4_a1` y el pago al profesor pendiente.
+  await crearClaseEnSeed({
+    id: 'c4',
+    sedeId: 'traki',
+    sedeNombre: 'Traki',
+    canchaId: 'c3',
+    profesorId: 'p1',
+    profesorNombre: nombreCompleto(PROFESORES_POR_ID.p1),
+    fecha: ayerAbierto,
+    horaInicio: '12:00',
+    horaFin: '13:00',
+    cupo: 4,
+    categoria: '4a',
+    alumnosIds: ['a1'],
+    asistencias: [
+      { alumnoId: 'a1', estado: 'presente', motivo: null, registradoPor: 'seed', registradoEn: creadoEn },
+    ],
+    estado: 'pendiente_cobro',
+    facturada: true,
+    cobro: {
+      perfilCobroId: 'cuatro',
+      modo: 'total',
+      tarifaHoraCents: 5500,
+      montoEstandarCents: 5500,
+      montoCents: 5500,
+      ajustado: false,
+      motivoAjuste: null,
+    },
+  })
+  await setDoc(`${tenant}/movimientosCredito/c4_a1`, {
+    claseId: 'c4',
+    alumnoId: 'a1',
+    minutos: 60,
+    asignaciones: [{ creditoId: 'cred-a1', minutos: 60 }],
+    motivo: 'clase',
+    creadoEn,
+  })
+  await setDoc(`${tenant}/pagosProfesor/c4`, {
+    claseId: 'c4',
+    profesorId: 'p1',
+    profesorNombre: nombreCompleto(PROFESORES_POR_ID.p1),
+    sedeId: 'traki',
+    fecha: ayerAbierto,
+    montoCents: 1500,
+    base: { modo: 'por_hora', minutos: 60 },
+    estado: 'pendiente',
+    pagadoEn: null,
+    metodoPago: null,
+  })
+  console.log('· Planes, créditos y consumo de ejemplo (a1, hermanos a16/a17 y lote vencido)')
 
   const ids = {}
   for (const usuario of USUARIOS) {
