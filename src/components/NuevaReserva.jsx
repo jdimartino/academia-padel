@@ -13,7 +13,6 @@ import {
 import {
   CATEGORIAS,
   CATEGORIAS_GRUPO,
-  DURACIONES_VALIDAS,
   aHoraHHmm,
   aMinutos,
   etiquetaCategoria,
@@ -23,6 +22,13 @@ import {
   formatMinutos,
   opcionesDeInicio,
 } from '../lib/agenda'
+import {
+  MOTIVOS_AJUSTE,
+  PARAMETROS_DEFAULT,
+  perfilPorCupo,
+  sugerirPrecioCents,
+} from '../lib/cobros'
+import { formatearUSD, parsearUSD } from '../lib/dinero'
 import { hayCambios } from '../lib/avisos'
 import { formatearFechaLarga } from '../lib/fechas'
 import useCierreSeguro from '../hooks/useCierreSeguro'
@@ -30,6 +36,14 @@ import { CloseIcon } from './Icons'
 import SelectorAlumnos from './SelectorAlumnos'
 
 const MODALIDADES = ['Grupal', 'Individual']
+
+/** Etiquetas de los motivos de ajuste del precio. */
+const MOTIVOS_LABEL = {
+  descuento: 'Descuento',
+  cortesia: 'Cortesía',
+  acuerdo: 'Acuerdo',
+  otro: 'Otro',
+}
 
 /*
  * Formulario de reserva. Con `clase` hace de reprogramación (prefill + update
@@ -53,11 +67,14 @@ export default function NuevaReserva({
   clases,
   clase = null,
   hueco = null,
+  parametros = null,
+  perfiles = null,
   onClose,
   onCreated,
 }) {
   const { user } = useAuth()
   const esEdicion = Boolean(clase)
+  const duraciones = parametros?.duracionesPermitidas ?? PARAMETROS_DEFAULT.duracionesPermitidas
   /*
    * Horario de la sede: el formulario solo ofrece horas dentro del horario del
    * DÍA que se está reservando (puede estar cerrado, con horarios distintos por
@@ -66,8 +83,8 @@ export default function NuevaReserva({
   const semana = useMemo(() => horarioDeSede(sede), [sede])
   const franja = useMemo(() => horarioDelDia(fecha, semana), [fecha, semana])
   // Inicios posibles con la duración MÁS CORTA: sirve de default cuando todavía
-  // no hay duración elegida (una reserva nueva arranca en 60 min).
-  const iniciosBase = opcionesDeInicio(DURACIONES_VALIDAS[0], franja)
+  // no hay duración elegida (una reserva nueva arranca con la primera opción).
+  const iniciosBase = opcionesDeInicio(duraciones[0], franja)
   const [canchaId, setCanchaId] = useState(
     clase?.canchaId ?? hueco?.canchaId ?? canchas[0]?.id ?? null,
   )
@@ -79,12 +96,20 @@ export default function NuevaReserva({
     if (iniciosBase.includes('18:00')) return '18:00'
     return iniciosBase[iniciosBase.length - 1] ?? '07:00'
   })
-  // Una reserva nueva (con hueco o sin él) dura 1 h, que ya es el default de acá.
-  // Al reprogramar se toma la duración REAL de la clase (60, 90 o 120 min).
+  // Una reserva nueva (con hueco o sin él) usa la primera duración permitida.
+  // Al reprogramar se toma la duración REAL de la clase (60, 90, 120…), que se
+  // agrega a las opciones si los parámetros ya no la incluyen.
   const [duracion, setDuracion] = useState(
-    clase ? (aMinutos(clase.horaFin) ?? 0) - (aMinutos(clase.horaInicio) ?? 0) : 60,
+    clase ? (aMinutos(clase.horaFin) ?? 0) - (aMinutos(clase.horaInicio) ?? 0) : duraciones[0],
   )
+  const opcionesDuracion = useMemo(() => {
+    const lista = [...duraciones]
+    if (duracion && !lista.includes(duracion)) lista.push(duracion)
+    return lista.sort((a, b) => a - b)
+  }, [duraciones, duracion])
   const [modalidad, setModalidad] = useState((clase?.cupo ?? 4) <= 1 ? 'Individual' : 'Grupal')
+  // El usuario tocó el perfil de cobro a mano: la modalidad ya no lo sigue.
+  const perfilTocado = useRef(false)
   const [categoria, setCategoria] = useState(clase?.categoria ?? '')
   // Categoría de GRUPO (infantil | junior | adulto), opcional y distinta del
   // nivel de `categoria`. Vacío = sin categoría de grupo (null).
@@ -96,6 +121,25 @@ export default function NuevaReserva({
     const nombres = clase?.alumnoNombres ?? []
     return ids.map((id, i) => ({ id, nombre: nombres[i] ?? id }))
   })
+  /*
+   * Cobro: perfil elegido (o "Sin precio"), monto en USD y motivo de ajuste. El
+   * perfil se preselecciona por cupo con `perfilPorCupo`; el monto sigue la
+   * sugerencia mientras no se ajuste a mano.
+   */
+  const perfilesActivos = useMemo(
+    () => (perfiles ?? []).filter((perfil) => perfil.activo !== false),
+    [perfiles],
+  )
+  const [perfilCobroId, setPerfilCobroId] = useState(
+    () => clase?.cobro?.perfilCobroId ?? perfilPorCupo(perfilesActivos, clase?.cupo ?? 4)?.id ?? null,
+  )
+  const [montoTexto, setMontoTexto] = useState(() =>
+    clase?.cobro ? formatearUSD(clase.cobro.montoCents) : '',
+  )
+  const [motivoAjuste, setMotivoAjuste] = useState(
+    clase?.cobro?.ajustado ? (clase.cobro.motivoAjuste ?? '') : '',
+  )
+  const [ajustadoManual, setAjustadoManual] = useState(Boolean(clase?.cobro?.ajustado))
   // Error de la LECTURA de profesores: se queda en línea (no es una acción).
   const [errorLectura, setErrorLectura] = useState('')
   const [enviando, setEnviando] = useState(false)
@@ -115,6 +159,7 @@ export default function NuevaReserva({
       categoriaGrupo,
       profesorId,
       alumnos: alumnosSel.map((alumno) => alumno.id),
+      cobro: { perfilCobroId, montoTexto, ajustado: ajustadoManual, motivoAjuste },
     }
   }
 
@@ -145,6 +190,38 @@ export default function NuevaReserva({
   const fin = inicio + duracion
   const cupo = modalidad === 'Individual' ? 1 : 4
   const profesor = profesores?.find((p) => p.id === profesorId) ?? null
+
+  /*
+   * Cobro: perfil elegido y tarifa por hora en la sede. `sugeridoCents` es el
+   * monto que sale de la tarifa × duración (× personas si el modo es
+   * `por_persona`); es `null` cuando la sede no tiene tarifa para ese perfil.
+   */
+  const perfil = perfilesActivos.find((p) => p.id === perfilCobroId) ?? null
+  const tarifaHoraCents = perfil ? (sede?.tarifas?.[perfil.id] ?? null) : null
+  const sugeridoCents =
+    perfil && Number.isInteger(tarifaHoraCents)
+      ? sugerirPrecioCents({
+          tarifaHoraCents,
+          duracionMin: duracion,
+          modo: perfil.modo,
+          cantidadAlumnos: alumnosSel.length,
+        })
+      : null
+  const montoCents = parsearUSD(montoTexto)
+  // ¿El monto final difiere del sugerido? Sin tarifa de sede, cualquier monto
+  // escrito es "ajustado" (no hay estándar con el que comparar).
+  const cobroAjustado = montoCents != null && montoCents !== sugeridoCents
+  const cobro = perfil
+    ? {
+        perfilCobroId: perfil.id,
+        modo: perfil.modo,
+        tarifaHoraCents: Number.isInteger(tarifaHoraCents) ? tarifaHoraCents : null,
+        montoEstandarCents: sugeridoCents,
+        montoCents: montoCents ?? 0,
+        ajustado: cobroAjustado,
+        motivoAjuste: cobroAjustado ? (motivoAjuste || null) : null,
+      }
+    : null
   // Al reprogramar, la propia clase no cuenta como conflicto consigo misma.
   const otrasClases = useMemo(
     () => (esEdicion ? clases.filter((c) => c.id !== clase.id) : clases),
@@ -205,11 +282,42 @@ export default function NuevaReserva({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [horas])
 
+  /*
+   * El monto sigue la sugerencia mientras el usuario no la ajuste a mano. Al
+   * cambiar de perfil, de duración o de cantidad de alumnos se recalcula solo.
+   */
+  useEffect(() => {
+    if (ajustadoManual) return
+    setMontoTexto(sugeridoCents == null ? '' : formatearUSD(sugeridoCents))
+  }, [sugeridoCents, ajustadoManual])
+
   // Al cambiar de modalidad la selección no puede quedar por encima del cupo.
   function elegirModalidad(opcion) {
     const nuevoCupo = opcion === 'Individual' ? 1 : 4
     setModalidad(opcion)
     setAlumnosSel((prev) => (prev.length > nuevoCupo ? prev.slice(0, nuevoCupo) : prev))
+    // Si el usuario no eligió perfil a mano, la modalidad arrastra el que encaja.
+    if (!perfilTocado.current) setPerfilCobroId(perfilPorCupo(perfilesActivos, nuevoCupo)?.id ?? null)
+  }
+
+  /** Cambia el perfil de cobro a mano ('' = sin precio). */
+  function elegirPerfil(id) {
+    perfilTocado.current = true
+    setPerfilCobroId(id || null)
+    setAjustadoManual(false)
+    setMotivoAjuste('')
+  }
+
+  /** El usuario escribe un monto: deja de seguir la sugerencia. */
+  function ajustarMonto(texto) {
+    setMontoTexto(texto)
+    setAjustadoManual(true)
+  }
+
+  /** Vuelve al monto sugerido por la tarifa de la sede. */
+  function usarSugerido() {
+    setAjustadoManual(false)
+    setMotivoAjuste('')
   }
 
   const problemas = useMemo(() => {
@@ -248,8 +356,12 @@ export default function NuevaReserva({
         )
       }
     }
+    // Con un perfil elegido hace falta un monto válido (o pasar a "Sin precio").
+    if (perfil && montoCents == null) {
+      lista.push('Escribí un monto para la clase o elegí "Sin precio".')
+    }
     return lista
-  }, [canchaId, fin, inicio, otrasClases, profesor, profesorId, franja])
+  }, [canchaId, fin, inicio, otrasClases, profesor, profesorId, franja, perfil, montoCents])
 
   const puedeEnviar = Boolean(canchaId && profesorId) && problemas.length === 0 && !enviando
 
@@ -285,6 +397,7 @@ export default function NuevaReserva({
         categoria: categoria || null,
         categoriaGrupo: categoriaGrupo || null,
         alumnos: alumnosSel.map((alumno) => alumno.id),
+        cobro,
       }
       let claseId
       if (esEdicion) {
@@ -381,7 +494,7 @@ export default function NuevaReserva({
         <div className="form__field">
           <span className="form__label">Duración</span>
           <div className="chips-row">
-            {DURACIONES_VALIDAS.map((minutos) => (
+            {opcionesDuracion.map((minutos) => (
               <button
                 type="button"
                 key={minutos}
@@ -486,6 +599,83 @@ export default function NuevaReserva({
           horaInicio={horaInicio}
           horaFin={aHoraHHmm(fin)}
         />
+
+        {perfilesActivos.length > 0 ? (
+          <div className="form__field">
+            <label className="form__label" htmlFor="nr-perfil">
+              Precio
+            </label>
+            <select
+              className="form__input"
+              id="nr-perfil"
+              value={perfilCobroId ?? ''}
+              onChange={(e) => elegirPerfil(e.target.value)}
+            >
+              <option value="">Sin precio</option>
+              {perfilesActivos.map((opcion) => (
+                <option key={opcion.id} value={opcion.id}>
+                  {opcion.nombre}
+                </option>
+              ))}
+            </select>
+
+            {perfil ? (
+              <>
+                <label className="form__label" htmlFor="nr-monto">
+                  Monto de la clase (USD)
+                </label>
+                <input
+                  className="form__input"
+                  id="nr-monto"
+                  type="text"
+                  inputMode="decimal"
+                  placeholder="0.00"
+                  value={montoTexto}
+                  onChange={(e) => ajustarMonto(e.target.value)}
+                />
+                {sugeridoCents == null ? (
+                  <p className="aviso">
+                    Esta sede no tiene tarifa para "{perfil.nombre}": escribí el monto a mano.
+                  </p>
+                ) : (
+                  <p className="aviso">
+                    Sugerido: {formatearUSD(sugeridoCents)}
+                    {cobroAjustado ? (
+                      <>
+                        {' '}
+                        <button type="button" className="link-btn" onClick={usarSugerido}>
+                          Usar sugerido
+                        </button>
+                      </>
+                    ) : null}
+                  </p>
+                )}
+                {cobroAjustado ? (
+                  <>
+                    <label className="form__label" htmlFor="nr-motivo">
+                      Motivo del ajuste
+                    </label>
+                    <select
+                      className="form__input"
+                      id="nr-motivo"
+                      value={motivoAjuste}
+                      onChange={(e) => setMotivoAjuste(e.target.value)}
+                    >
+                      <option value="">Sin motivo</option>
+                      {MOTIVOS_AJUSTE.map((valor) => (
+                        <option key={valor} value={valor}>
+                          {MOTIVOS_LABEL[valor] ?? valor}
+                        </option>
+                      ))}
+                    </select>
+                  </>
+                ) : null}
+              </>
+            ) : (
+              <p className="aviso">Esta clase se guarda sin precio.</p>
+            )}
+          </div>
+        ) : null}
 
         <button className="btn" type="submit" disabled={!puedeEnviar}>
           {enviando ? 'Guardando…' : esEdicion ? 'Guardar cambios' : 'Reservar clase'}

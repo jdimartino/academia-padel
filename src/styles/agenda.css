@@ -361,6 +361,13 @@
   border: var(--estado-cancelada-border);
 }
 
+/* Ajuste del precio: se muestra al lado del monto en el detalle. */
+.badge--ajuste {
+  margin-left: 8px;
+  background: rgba(255, 255, 255, 0.16);
+  color: var(--texto-muted);
+}
+
 .sheet__datos {
   margin: 0;
   display: flex;
@@ -489,6 +496,18 @@
   border-radius: var(--radio-pill);
   font-size: 13px;
   color: var(--texto-muted);
+}
+
+/* Botón de texto (p. ej. "Usar sugerido"): chico y sin fondo. */
+.link-btn {
+  min-height: 32px;
+  padding: 0;
+  border: none;
+  background: transparent;
+  color: var(--acento, #7ad0ff);
+  font-size: 13px;
+  font-weight: 700;
+  text-decoration: underline;
 }
 
 /* ============================================================

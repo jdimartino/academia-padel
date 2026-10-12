@@ -6,6 +6,7 @@ import { asignarAlumnos, cancelarClase, registrarAsistencia } from '../firebase/
 import useCierreSeguro from '../hooks/useCierreSeguro'
 import { CloseIcon } from './Icons'
 import { estadoDe, etiquetaCategoriaGrupo, formatHora12, tituloClase } from '../lib/agenda'
+import { formatearUSD } from '../lib/dinero'
 import { hayCambios } from '../lib/avisos'
 import { formatearFechaLarga } from '../lib/fechas'
 import SelectorAlumnos from './SelectorAlumnos'
@@ -20,6 +21,14 @@ const OPCIONES_ASISTENCIA = [
 
 /** Registro de asistencia por defecto de un alumno sin datos previos. */
 const ASISTENCIA_POR_DEFECTO = { estado: 'presente', motivo: '' }
+
+/** Etiquetas de los motivos de ajuste del precio de una clase. */
+const MOTIVOS_AJUSTE_LABEL = {
+  descuento: 'Descuento',
+  cortesia: 'Cortesía',
+  acuerdo: 'Acuerdo',
+  otro: 'Ajustado',
+}
 
 /** Empareja IDs de alumnos con sus nombres denormalizados. */
 function alumnosDeClase(clase) {
@@ -211,6 +220,19 @@ export default function DetailSheet({
             {alumnos.length} de {cupo}
           </dd>
         </div>
+        {clase.cobro ? (
+          <div className="sheet__fila">
+            <dt>Precio</dt>
+            <dd>
+              {formatearUSD(clase.cobro.montoCents)}
+              {clase.cobro.ajustado ? (
+                <span className="badge badge--ajuste">
+                  {MOTIVOS_AJUSTE_LABEL[clase.cobro.motivoAjuste] ?? 'Ajustado'}
+                </span>
+              ) : null}
+            </dd>
+          </div>
+        ) : null}
       </dl>
 
       {puedeAsignar ? (

@@ -10,7 +10,7 @@ import TimeGrid from '../components/TimeGrid'
 import { ChevronLeft, ChevronRight } from '../components/Icons'
 import { useAuth } from '../context/AuthContext'
 import { db } from '../firebase/config'
-import { getMiMembresia } from '../firebase/db'
+import { getMiMembresia, getParametros, listarPerfilesCobro } from '../firebase/db'
 import useAgenda from '../hooks/useAgenda'
 import useMediaQuery from '../hooks/useMediaQuery'
 import { contarSinCerrar } from '../lib/agenda'
@@ -32,6 +32,9 @@ export default function Agenda() {
 
   const [rol, setRol] = useState(null)
   const [membresiaLista, setMembresiaLista] = useState(false)
+  // Parámetros y perfiles de cobro: alimentan el formulario de reserva.
+  const [parametros, setParametros] = useState(null)
+  const [perfilesCobro, setPerfilesCobro] = useState(null)
 
   /*
    * Única lectura de un no-admin: su propia membresía. Hasta que no se confirme
@@ -57,6 +60,30 @@ export default function Agenda() {
 
   const esAdmin = rol === 'administrador'
   const habilitado = membresiaLista && esAdmin
+
+  /*
+   * Configuración de cobros: se lee UNA vez cuando se confirma el acceso de
+   * admin. Ambas lecturas son tolerantes a fallos: si fallan, el formulario
+   * simplemente no ofrece precio (sigue funcionando con los defaults).
+   */
+  useEffect(() => {
+    if (!habilitado) return undefined
+    let activo = true
+    Promise.all([getParametros(db, academia), listarPerfilesCobro(db, academia)])
+      .then(([params, perfiles]) => {
+        if (!activo) return
+        setParametros(params)
+        setPerfilesCobro(perfiles)
+      })
+      .catch(() => {
+        if (!activo) return
+        setParametros(null)
+        setPerfilesCobro([])
+      })
+    return () => {
+      activo = false
+    }
+  }, [academia, habilitado])
 
   const { sedes, sedeId, setSedeId, fecha, setFecha, clases, cargando, error, recargar } =
     useAgenda(academia, habilitado)
@@ -278,6 +305,8 @@ export default function Agenda() {
             clases={clases}
             clase={claseEdit}
             hueco={hueco}
+            parametros={parametros}
+            perfiles={perfilesCobro}
             onClose={cerrarFormulario}
             onCreated={alCrear}
           />
@@ -353,6 +382,8 @@ export default function Agenda() {
               clases={clases}
               clase={claseEdit}
               hueco={hueco}
+              parametros={parametros}
+              perfiles={perfilesCobro}
               onClose={cerrarFormulario}
               onCreated={alCrear}
             />
