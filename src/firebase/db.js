@@ -49,6 +49,26 @@ import {
   horarioDeSede,
   horarioDelDia,
 } from '../lib/agenda.js'
+import {
+  ALERTA_DIAS_MAX,
+  AUSENCIA_HORAS_MAX,
+  LIMITE_NOMBRE_PERFIL,
+  MODOS_COBRO,
+  PARAMETROS_DEFAULT,
+  PERSONAS_MAX,
+  PORCENTAJE_MAX,
+  VENCIMIENTO_DIAS_MAX,
+  alertaCobroValida,
+  duracionesValidas,
+  enteroEnRango,
+  leerParametros,
+  modoValido,
+  motivoValido,
+  pagoProfesorValido,
+  personasValidas,
+  vencimientoValido,
+} from '../lib/cobros.js'
+import { LIMITE_MONTO_CENTS, LIMITE_TARIFA_CENTS, centsValidos } from '../lib/dinero.js'
 
 /**
  * Granularidad de la ocupación: 30 minutos. La definición vive en
@@ -273,6 +293,21 @@ export class SedeInvalidaError extends Error {
     this.name = 'SedeInvalidaError'
   }
 }
+
+/**
+ * Error de negocio: la configuración de cobros es inválida (perfil sin nombre o
+ * repetido, modo/personas fuera del enum, tarifa o monto que no es un entero de
+ * centavos, parámetro fuera de rango, etc.).
+ */
+export class CobroInvalidoError extends Error {
+  constructor(mensaje) {
+    super(mensaje)
+    this.name = 'CobroInvalidoError'
+  }
+}
+
+/** Tope de perfiles de cobro que se listan de una academia. */
+export const LIMITE_PERFILES_COBRO = 50
 
 /* --------------------------------------------------------------------- */
 /* Utilidades de tiempo (puras, sin Firestore)                             */
@@ -590,7 +625,7 @@ function bloqueProfesorId({ profesorId, fecha, minuto }) {
  * tal como la devuelve `horarioDelDia` a partir del horario semanal de la sede.
  * Por defecto usa 07:00-23:00; con `null` (día cerrado) rechaza la clase.
  */
-export function bloquesDeClase(datos, horario = HORARIO_DEFAULT) {
+export function bloquesDeClase(datos, horario = HORARIO_DEFAULT, duraciones = DURACIONES_VALIDAS) {
   const { sedeId, canchaId, profesorId, fecha, horaInicio, horaFin } = datos
   if (!RE_FECHA.test(fecha ?? '')) {
     throw new ClaseInvalidaError(`Fecha inválida "${fecha}", se espera "YYYY-MM-DD"`)
@@ -599,12 +634,15 @@ export function bloquesDeClase(datos, horario = HORARIO_DEFAULT) {
   if (!canchaId) throw new ClaseInvalidaError('Falta canchaId')
   if (!profesorId) throw new ClaseInvalidaError('Falta profesorId')
 
+  // Duraciones admitidas: las de los parámetros de la academia (fuente de
+  // verdad, ver `duracionesPermitidas`), con DURACIONES_VALIDAS como fallback.
+  const validas = Array.isArray(duraciones) && duraciones.length ? duraciones : DURACIONES_VALIDAS
   const inicio = aMinutos(horaInicio)
   const fin = aMinutos(horaFin)
   const duracion = fin - inicio
-  if (fin <= inicio || !DURACIONES_VALIDAS.includes(duracion)) {
+  if (fin <= inicio || !validas.includes(duracion)) {
     throw new ClaseInvalidaError(
-      `La duración debe ser ${DURACIONES_VALIDAS.map((m) => `${m} min`).join(', ')} ` +
+      `La duración debe ser ${validas.map((m) => `${m} min`).join(', ')} ` +
         `(${formatHora12(horaInicio)}-${formatHora12(horaFin)})`,
     )
   }
@@ -686,6 +724,9 @@ const refProfesor = (db, tenantId, profesorId) =>
 const refSede = (db, tenantId, sedeId) => doc(db, 'academias', tenantId, 'sedes', sedeId)
 const refCancha = (db, tenantId, sedeId, canchaId) =>
   doc(db, 'academias', tenantId, 'sedes', sedeId, 'canchas', canchaId)
+const refPerfilCobro = (db, tenantId, perfilId) =>
+  doc(db, 'academias', tenantId, 'perfilesCobro', perfilId)
+const refParametros = (db, tenantId) => doc(db, 'academias', tenantId, 'config', 'parametros')
 
 /* --------------------------------------------------------------------- */
 /* Lecturas                                                               */
@@ -1083,6 +1124,370 @@ export async function setSedeHorario(db, tenantId, sedeId, horario, opciones = {
     actualizadoEn: Timestamp.fromDate(now),
   })
   return { sedeId, horario: semana }
+}
+
+/* --------------------------------------------------------------------- */
+/* Cobros: perfiles, tarifas por sede y parámetros (Fase 3)                */
+/* --------------------------------------------------------------------- */
+
+/*
+ * Fase 3: SOLO se guardan, configuran y sugieren precios. No se generan
+ * cargos, pagos, liquidaciones, créditos ni emails (Fases 4-5). Todo monto se
+ * guarda como ENTERO de centavos de USD (nunca floats).
+ */
+
+/**
+ * Valida y normaliza el nombre de un PERFIL DE COBRO con las MISMAS utilidades
+ * que el de una sede o cancha: no puede quedar vacío, tiene tope de largo y no
+ * se repite dentro del tenant (sin distinguir caja, espacios, acentos). Los
+ * perfiles inactivos también cuentan. Devuelve el nombre a guardar.
+ */
+export function validarNombrePerfil(nombre, perfiles = [], exceptoId = null) {
+  const texto = normalizarNombreCancha(nombre)
+  if (!texto) throw new CobroInvalidoError('El perfil de cobro necesita un nombre')
+  if (texto.length > LIMITE_NOMBRE_PERFIL) {
+    throw new CobroInvalidoError(
+      `El nombre del perfil no puede superar ${LIMITE_NOMBRE_PERFIL} caracteres`,
+    )
+  }
+  const clave = claveNombreCancha(texto)
+  const repetido = perfiles.find(
+    (perfil) => perfil.id !== exceptoId && claveNombreCancha(perfil.nombre) === clave,
+  )
+  if (repetido) {
+    throw new CobroInvalidoError(`Ya hay un perfil de cobro llamado "${repetido.nombre}"`)
+  }
+  return texto
+}
+
+/** Valida la cantidad de personas de un perfil: 1..PERSONAS_MAX o `null`. */
+function validarPersonas(personas) {
+  if (!personasValidas(personas)) {
+    throw new CobroInvalidoError(
+      `Las personas del perfil deben ser un entero entre 1 y ${PERSONAS_MAX}, o "cualquiera"`,
+    )
+  }
+}
+
+/** Valida el modo de cobro contra el enum. */
+function validarModo(modo) {
+  if (!modoValido(modo)) {
+    throw new CobroInvalidoError(`Modo de cobro inválido "${modo}". Permitidos: ${MODOS_COBRO.join(', ')}`)
+  }
+}
+
+/**
+ * Perfiles de cobro de una academia, activos e inactivos, ordenados por `orden`
+ * y después nombre. Acotado por tenant + limit (50). Hace falta ver los
+ * inactivos: la pantalla los reactiva y `setTarifasSede` valida contra todos.
+ */
+export async function listarPerfilesCobro(db, tenantId) {
+  const q = query(collection(db, 'academias', tenantId, 'perfilesCobro'), limit(LIMITE_PERFILES_COBRO))
+  const snap = await getDocs(q)
+  return snap.docs
+    .map((d) => ({ id: d.id, ...d.data() }))
+    .sort(
+      (a, b) =>
+        (Number(a.orden) || 0) - (Number(b.orden) || 0) ||
+        String(a.nombre ?? '').localeCompare(String(b.nombre ?? ''), 'es'),
+    )
+}
+
+/**
+ * Crea un perfil de cobro. El nombre se normaliza y debe ser único en el tenant
+ * (cuentan los inactivos); `modo` sale del enum y `personas` es 1..4 o `null`.
+ * `orden` es el siguiente entero salvo que se indique. `perfilId` es opcional:
+ * lo usa el seed para clonar los defaults con ids fijos.
+ */
+export async function crearPerfilCobro(db, tenantId, datos = {}, opciones = {}) {
+  const { uid = null, now = new Date(), perfilId = null } = opciones
+  const existentes = await listarPerfilesCobro(db, tenantId)
+  const nombre = validarNombrePerfil(datos.nombre, existentes, perfilId)
+  const modo = datos.modo ?? 'total'
+  validarModo(modo)
+  const personas = datos.personas ?? null
+  validarPersonas(personas)
+  const activo = datos.activo ?? true
+  if (typeof activo !== 'boolean') {
+    throw new CobroInvalidoError('activo debe ser booleano')
+  }
+  const orden = Number.isInteger(datos.orden)
+    ? datos.orden
+    : existentes.reduce((max, perfil) => Math.max(max, Number(perfil.orden) || 0), 0) + 1
+
+  const ref = perfilId
+    ? refPerfilCobro(db, tenantId, perfilId)
+    : doc(collection(db, 'academias', tenantId, 'perfilesCobro'))
+  await setDoc(ref, {
+    nombre,
+    personas,
+    modo,
+    activo,
+    orden,
+    creadoPor: uid,
+    creadoEn: Timestamp.fromDate(now),
+  })
+  return { perfilId: ref.id }
+}
+
+/**
+ * Actualiza un perfil de cobro (renombrar, cambiar modo/personas/orden). Los
+ * perfiles NUNCA se borran: se desactivan con `cambiarActivaPerfilCobro`.
+ */
+export async function actualizarPerfilCobro(db, tenantId, perfilId, cambios = {}, opciones = {}) {
+  const { uid = null, now = new Date() } = opciones
+  const snap = await getDoc(refPerfilCobro(db, tenantId, perfilId))
+  if (!snap.exists()) throw new CobroInvalidoError(`El perfil de cobro "${perfilId}" no existe`)
+  const existentes = await listarPerfilesCobro(db, tenantId)
+
+  const update = {}
+  if (cambios.nombre !== undefined) {
+    update.nombre = validarNombrePerfil(cambios.nombre, existentes, perfilId)
+  }
+  if (cambios.modo !== undefined) {
+    validarModo(cambios.modo)
+    update.modo = cambios.modo
+  }
+  if (cambios.personas !== undefined) {
+    validarPersonas(cambios.personas)
+    update.personas = cambios.personas
+  }
+  if (cambios.orden !== undefined) {
+    if (!Number.isInteger(cambios.orden)) {
+      throw new CobroInvalidoError('El orden del perfil debe ser un entero')
+    }
+    update.orden = cambios.orden
+  }
+  update.actualizadoPor = uid
+  update.actualizadoEn = Timestamp.fromDate(now)
+  await updateDoc(refPerfilCobro(db, tenantId, perfilId), update)
+  return { perfilId }
+}
+
+/** Activa o desactiva un perfil de cobro (soft delete: NUNCA se borra). */
+export async function cambiarActivaPerfilCobro(db, tenantId, perfilId, activa, opciones = {}) {
+  const { uid = null, now = new Date() } = opciones
+  const snap = await getDoc(refPerfilCobro(db, tenantId, perfilId))
+  if (!snap.exists()) throw new CobroInvalidoError(`El perfil de cobro "${perfilId}" no existe`)
+  const valor = Boolean(activa)
+  await updateDoc(refPerfilCobro(db, tenantId, perfilId), {
+    activo: valor,
+    actualizadoPor: uid,
+    actualizadoEn: Timestamp.fromDate(now),
+  })
+  return { perfilId, activo: valor }
+}
+
+/**
+ * Valida un mapa de tarifas por sede: claves = ids de perfiles CONOCIDOS (activos
+ * o inactivos), valores = enteros de centavos entre 0 y LIMITE_TARIFA_CENTS.
+ * Devuelve un mapa normalizado nuevo. Una clave ausente = "sin tarifa".
+ */
+export function validarTarifas(tarifas, perfiles = []) {
+  if (!tarifas || typeof tarifas !== 'object' || Array.isArray(tarifas)) {
+    throw new CobroInvalidoError('Las tarifas deben ser un mapa de perfil a precio por hora')
+  }
+  const conocidos = new Set(perfiles.map((perfil) => perfil.id))
+  const normalizado = {}
+  for (const clave of Object.keys(tarifas)) {
+    if (!conocidos.has(clave)) {
+      throw new CobroInvalidoError(`Perfil de cobro desconocido en las tarifas: "${clave}"`)
+    }
+    if (!centsValidos(tarifas[clave], LIMITE_TARIFA_CENTS)) {
+      throw new CobroInvalidoError(
+        `La tarifa de "${clave}" debe ser un entero de centavos entre 0 y ${LIMITE_TARIFA_CENTS}`,
+      )
+    }
+    normalizado[clave] = tarifas[clave]
+  }
+  return normalizado
+}
+
+/**
+ * Fija el mapa `tarifas` de una sede (perfil → centavos por hora). Reemplaza el
+ * mapa completo: las claves ausentes quedan sin tarifa. No toca el resto de la
+ * sede (renombrar, horario y activa siguen intactos).
+ */
+export async function setTarifasSede(db, tenantId, sedeId, tarifas, opciones = {}) {
+  const { uid = null, now = new Date() } = opciones
+  await exigirSede(db, tenantId, sedeId)
+  const perfiles = await listarPerfilesCobro(db, tenantId)
+  const normalizado = validarTarifas(tarifas, perfiles)
+  await updateDoc(refSede(db, tenantId, sedeId), {
+    tarifas: normalizado,
+    actualizadoPor: uid,
+    actualizadoEn: Timestamp.fromDate(now),
+  })
+  return { sedeId, tarifas: normalizado }
+}
+
+/**
+ * Lee los parámetros de la academia. Si el documento falta o algún campo está
+ * corrupto, `leerParametros` rellena con los defaults (nunca lanza). 1 lectura.
+ */
+export async function getParametros(db, tenantId) {
+  const snap = await getDoc(refParametros(db, tenantId))
+  return leerParametros(snap.exists() ? snap.data() : null)
+}
+
+/**
+ * Valida un documento completo de parámetros (obligatorio antes de escribir):
+ * tipos, enums, rangos y duraciones. Rechaza campos desconocidos y devuelve el
+ * mapa normalizado con TODOS los campos (los que no vengan usan su default).
+ */
+export function validarParametros(entrada) {
+  const d = entrada ?? {}
+  const conocidos = new Set([
+    'avisoAusenciaHoras',
+    'porcentajeFaltaSinAviso',
+    'pagoProfesor',
+    'descuentoHermanosPct',
+    'duracionesPermitidas',
+    'vencimientoCreditoDias',
+    'alertaCobro',
+    'restringirCategoriaPorFranja',
+  ])
+  for (const clave of Object.keys(d)) {
+    if (!conocidos.has(clave)) {
+      throw new CobroInvalidoError(`Campo de parámetros desconocido: "${clave}"`)
+    }
+  }
+
+  const aviso = d.avisoAusenciaHoras ?? PARAMETROS_DEFAULT.avisoAusenciaHoras
+  if (!enteroEnRango(aviso, 0, AUSENCIA_HORAS_MAX)) {
+    throw new CobroInvalidoError(`avisoAusenciaHoras debe ser un entero entre 0 y ${AUSENCIA_HORAS_MAX}`)
+  }
+  const porcentaje = d.porcentajeFaltaSinAviso ?? PARAMETROS_DEFAULT.porcentajeFaltaSinAviso
+  if (!enteroEnRango(porcentaje, 0, PORCENTAJE_MAX)) {
+    throw new CobroInvalidoError(`porcentajeFaltaSinAviso debe ser un entero entre 0 y ${PORCENTAJE_MAX}`)
+  }
+  const pago = d.pagoProfesor ?? PARAMETROS_DEFAULT.pagoProfesor
+  if (!pagoProfesorValido(pago)) {
+    throw new CobroInvalidoError(
+      `pagoProfesor debe ser { modo: "por_hora" | "por_clase", montoCents } con montoCents entero entre 0 y ${LIMITE_MONTO_CENTS}`,
+    )
+  }
+  const descuento = d.descuentoHermanosPct ?? PARAMETROS_DEFAULT.descuentoHermanosPct
+  if (!enteroEnRango(descuento, 0, PORCENTAJE_MAX)) {
+    throw new CobroInvalidoError(`descuentoHermanosPct debe ser un entero entre 0 y ${PORCENTAJE_MAX}`)
+  }
+  const duraciones = d.duracionesPermitidas ?? [...PARAMETROS_DEFAULT.duracionesPermitidas]
+  if (!duracionesValidas(duraciones)) {
+    throw new CobroInvalidoError(
+      'duracionesPermitidas debe ser una lista no vacía, sin repetidos, ascendente, con múltiplos de ' +
+        `${MINUTOS_BLOQUE} min entre 60 y 240 (p. ej. [60, 90, 120])`,
+    )
+  }
+  const vencimiento = d.vencimientoCreditoDias ?? PARAMETROS_DEFAULT.vencimientoCreditoDias
+  if (!vencimientoValido(vencimiento)) {
+    throw new CobroInvalidoError(
+      `vencimientoCreditoDias debe ser null (no vence) o un entero entre 1 y ${VENCIMIENTO_DIAS_MAX}`,
+    )
+  }
+  const alerta = d.alertaCobro ?? PARAMETROS_DEFAULT.alertaCobro
+  if (!alertaCobroValida(alerta)) {
+    throw new CobroInvalidoError(
+      `alertaCobro debe ser { dias: entero entre 0 y ${ALERTA_DIAS_MAX}, referencia: "clase" | "vencimiento" }`,
+    )
+  }
+  const restringir = d.restringirCategoriaPorFranja ?? PARAMETROS_DEFAULT.restringirCategoriaPorFranja
+  if (typeof restringir !== 'boolean') {
+    throw new CobroInvalidoError('restringirCategoriaPorFranja debe ser booleano')
+  }
+
+  return {
+    avisoAusenciaHoras: aviso,
+    porcentajeFaltaSinAviso: porcentaje,
+    pagoProfesor: { modo: pago.modo, montoCents: pago.montoCents },
+    descuentoHermanosPct: descuento,
+    duracionesPermitidas: [...duraciones],
+    vencimientoCreditoDias: vencimiento,
+    alertaCobro: { dias: alerta.dias, referencia: alerta.referencia },
+    restringirCategoriaPorFranja: restringir,
+  }
+}
+
+/**
+ * Escribe los parámetros de la academia. Acepta cambios parciales: se mezclan
+ * sobre los valores actuales (o los defaults) y se validan completos antes de
+ * escribir `academias/{tenant}/config/parametros`.
+ */
+export async function setParametros(db, tenantId, cambios = {}, opciones = {}) {
+  const { uid = null, now = new Date() } = opciones
+  const snapparam = await getDoc(refParametros(db, tenantId))
+  const actuales = leerParametros(snapparam.exists() ? snapparam.data() : null)
+  const normalizado = validarParametros({ ...actuales, ...cambios })
+  await setDoc(refParametros(db, tenantId), {
+    ...normalizado,
+    actualizadoPor: uid,
+    actualizadoEn: Timestamp.fromDate(now),
+  })
+  return normalizado
+}
+
+/**
+ * Valida y normaliza el SNAPSHOT de cobro de una clase (opcional). Debe traer
+ * exactamente las claves del modelo; `montoCents` es obligatorio y entero >= 0.
+ * Los montos son centavos de USD. Devuelve `null` si no hay cobro.
+ */
+export function validarCobro(cobro) {
+  if (cobro === undefined || cobro === null) return null
+  if (typeof cobro !== 'object' || Array.isArray(cobro)) {
+    throw new CobroInvalidoError('El cobro de la clase debe ser un objeto')
+  }
+  const claves = [
+    'perfilCobroId',
+    'modo',
+    'tarifaHoraCents',
+    'montoEstandarCents',
+    'montoCents',
+    'ajustado',
+    'motivoAjuste',
+  ]
+  const extra = Object.keys(cobro).filter((clave) => !claves.includes(clave))
+  if (extra.length) {
+    throw new CobroInvalidoError(`El cobro tiene campos de más: ${extra.join(', ')}`)
+  }
+  const perfilCobroId = cobro.perfilCobroId ?? null
+  if (perfilCobroId !== null && typeof perfilCobroId !== 'string') {
+    throw new CobroInvalidoError('perfilCobroId debe ser texto o null')
+  }
+  const modo = cobro.modo ?? null
+  if (modo !== null && !modoValido(modo)) {
+    throw new CobroInvalidoError(`Modo de cobro inválido "${modo}". Permitidos: ${MODOS_COBRO.join(', ')}`)
+  }
+  const tarifaHoraCents = cobro.tarifaHoraCents ?? null
+  if (tarifaHoraCents !== null && !centsValidos(tarifaHoraCents, LIMITE_TARIFA_CENTS)) {
+    throw new CobroInvalidoError(
+      `La tarifa por hora debe ser un entero de centavos entre 0 y ${LIMITE_TARIFA_CENTS}`,
+    )
+  }
+  const montoEstandarCents = cobro.montoEstandarCents ?? null
+  if (montoEstandarCents !== null && !centsValidos(montoEstandarCents, LIMITE_MONTO_CENTS)) {
+    throw new CobroInvalidoError(
+      `El monto estándar debe ser un entero de centavos entre 0 y ${LIMITE_MONTO_CENTS}`,
+    )
+  }
+  if (!centsValidos(cobro.montoCents, LIMITE_MONTO_CENTS)) {
+    throw new CobroInvalidoError(
+      `El monto de la clase debe ser un entero de centavos entre 0 y ${LIMITE_MONTO_CENTS}`,
+    )
+  }
+  const motivoAjuste = cobro.motivoAjuste ?? null
+  if (!motivoValido(motivoAjuste)) {
+    throw new CobroInvalidoError(
+      `Motivo de ajuste inválido "${motivoAjuste}". Permitidos: descuento, cortesia, acuerdo, otro (o null)`,
+    )
+  }
+  return {
+    perfilCobroId,
+    modo,
+    tarifaHoraCents,
+    montoEstandarCents,
+    montoCents: cobro.montoCents,
+    ajustado: Boolean(cobro.ajustado),
+    motivoAjuste,
+  }
 }
 
 /** Estados admitidos por los filtros de listado. */
@@ -1566,6 +1971,9 @@ export async function crearClase(db, tenantId, datos, opciones = {}) {
   validarCategoria(datos.categoria)
   validarCategoriaGrupo(datos.categoriaGrupo)
   validarCupo(datos.cupo)
+  // El cobro es un SNAPSHOT opcional: se valida ya (tipos/enums/montos) y se
+  // guarda tal cual. Cambios de tarifa posteriores NO lo modifican.
+  const cobro = validarCobro(datos.cobro)
   // La franja, los bloques y el "no reservar en el pasado" se validan DENTRO de
   // la transacción: la franja ya no es global y necesita el horario de la sede
   // (ver `horarioDeSede`). El orden importa: primero la franja (horario de la
@@ -1581,6 +1989,9 @@ export async function crearClase(db, tenantId, datos, opciones = {}) {
   const sedeRef = refSede(db, tenantId, datos.sedeId)
   const canchaRef = refCancha(db, tenantId, datos.sedeId, datos.canchaId)
   const profRef = refProfesor(db, tenantId, datos.profesorId)
+  // Parámetros: fuente de verdad de las duraciones permitidas. Se lee en la
+  // misma transacción (1 lectura extra). Si falta el documento, defaults.
+  const parametrosRef = refParametros(db, tenantId)
   let bloques = []
 
   await runTransaction(db, async (tx) => {
@@ -1589,11 +2000,13 @@ export async function crearClase(db, tenantId, datos, opciones = {}) {
 
     // Leer sede, cancha y profesor para validar existencia y actividad,
     // y tomar los nombres denormalizados de los documentos.
-    const [snapSede, snapCancha, snapProfesor] = await Promise.all([
+    const [snapSede, snapCancha, snapProfesor, snapParametros] = await Promise.all([
       tx.get(sedeRef),
       tx.get(canchaRef),
       tx.get(profRef),
+      tx.get(parametrosRef),
     ])
+    const parametros = leerParametros(snapParametros.exists() ? snapParametros.data() : null)
     if (!snapSede.exists() || !estaActivo(snapSede.data())) {
       throw new ClaseInvalidaError(`La sede "${datos.sedeId}" no existe o no está activa`)
     }
@@ -1615,6 +2028,7 @@ export async function crearClase(db, tenantId, datos, opciones = {}) {
     bloques = bloquesDeClase(
       datos,
       horarioDelDia(datos.fecha, horarioDeSede(snapSede.data())),
+      parametros.duracionesPermitidas,
     )
     validarInicioNoPasado(datos.fecha, datos.horaInicio, ahora)
 
@@ -1654,6 +2068,8 @@ export async function crearClase(db, tenantId, datos, opciones = {}) {
       fecha: datos.fecha,
       horaInicio: datos.horaInicio,
       horaFin: datos.horaFin,
+      // Snapshot de cobro (opcional; null en clases sin precio).
+      cobro,
       bloques: bloques.map((b) => b.id),
       creadoPor: uid,
       creadoEn: Timestamp.fromDate(now),
@@ -1760,6 +2176,11 @@ export async function reprogramarClase(db, tenantId, claseId, nuevoCambio = {}, 
       throw new ClaseInvalidaError('La clase necesita al menos un alumno asignado')
     }
   }
+  // Cobro: si viene en el cambio, se valida y se guarda como snapshot nuevo. Si
+  // no viene, el cobro existente queda intacto (una reprogramación que no toca
+  // el precio no lo pisa).
+  const cobro = nuevoCambio.cobro !== undefined ? validarCobro(nuevoCambio.cobro) : undefined
+  const parametrosRef = refParametros(db, tenantId)
 
   await runTransaction(db, async (tx) => {
     const snap = await tx.get(claseRef)
@@ -1790,11 +2211,13 @@ export async function reprogramarClase(db, tenantId, claseId, nuevoCambio = {}, 
     // activo), y el profesor está asignado a la sede. La cancha inactiva rechaza
     // la reprogramación HACIA ella; las clases que ya están en una cancha
     // inactiva no se tocan.
-    const [snapSede, snapCancha, snapProfesor] = await Promise.all([
+    const [snapSede, snapCancha, snapProfesor, snapParametros] = await Promise.all([
       tx.get(refSede(db, tenantId, futura.sedeId)),
       tx.get(refCancha(db, tenantId, futura.sedeId, futura.canchaId)),
       tx.get(refProfesor(db, tenantId, futura.profesorId)),
+      tx.get(parametrosRef),
     ])
+    const parametros = leerParametros(snapParametros.exists() ? snapParametros.data() : null)
     if (!snapSede.exists() || !estaActivo(snapSede.data())) {
       throw new ClaseInvalidaError(`La sede "${futura.sedeId}" no existe o no está activa`)
     }
@@ -1818,6 +2241,7 @@ export async function reprogramarClase(db, tenantId, claseId, nuevoCambio = {}, 
     const bloquesNuevos = bloquesDeClase(
       futura,
       horarioDelDia(futura.fecha, horarioDeSede(snapSede.data())),
+      parametros.duracionesPermitidas,
     )
     validarInicioNoPasado(futura.fecha, futura.horaInicio, ahora)
 
@@ -1888,6 +2312,7 @@ export async function reprogramarClase(db, tenantId, claseId, nuevoCambio = {}, 
     ]) {
       if (nuevoCambio[clave] !== undefined) cambios[clave] = nuevoCambio[clave]
     }
+    if (cobro !== undefined) cambios.cobro = cobro
     // Los nombres SIEMPRE salen del documento, no del cliente.
     cambios.sedeNombre = snapSede.data().nombre ?? null
     cambios.profesorNombre = nombreCompleto(snapProfesor.data())

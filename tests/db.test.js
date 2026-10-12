@@ -17,18 +17,22 @@ import {
   MINUTOS_BLOQUE,
   SolapamientoError,
   ClaseInvalidaError,
+  CobroInvalidoError,
   FichaInvalidaError,
   SedeInvalidaError,
   actualizarAlumno,
+  actualizarPerfilCobro,
   actualizarProfesor,
   asignarAlumnos,
   bloquesDeClase,
   buscarAlumnos,
   cambiarActivaCancha,
+  cambiarActivaPerfilCobro,
   cancelarClase,
   crearAlumno,
   crearCancha,
   crearClase,
+  crearPerfilCobro,
   crearProfesor,
   crearSede,
   desactivarSede,
@@ -37,6 +41,7 @@ import {
   getCanchas,
   getClase,
   getClasesDeSedePorFecha,
+  getParametros,
   getProfesores,
   getSede,
   getSedes,
@@ -44,6 +49,7 @@ import {
   horarioDelDia,
   listarAlumnos,
   listarCanchas,
+  listarPerfilesCobro,
   listarSedes,
   nombreCompleto,
   nombreDeCancha,
@@ -52,9 +58,15 @@ import {
   renombrarCancha,
   renombrarSede,
   reprogramarClase,
+  setParametros,
   setSedeHorario,
+  setTarifasSede,
+  validarCobro,
   validarHorario,
+  validarParametros,
+  validarTarifas,
 } from '../src/firebase/db.js'
+import { PARAMETROS_DEFAULT } from '../src/lib/cobros.js'
 
 const PROJECT_ID = 'academia-padel-jdm'
 const T1 = 't1'
@@ -2825,5 +2837,244 @@ describe('[F2] categoría de grupo en la clase', () => {
       (error) =>
         error instanceof ClaseInvalidaError && /Categoría de grupo inválida/.test(error.message),
     )
+  })
+})
+
+/* --------------------------------------------------------------------- */
+/* [F3] Cobros: perfiles, tarifas por sede, parámetros y cobro de clase    */
+/* --------------------------------------------------------------------- */
+
+/** Crea un perfil con id fijo (como el seed) y devuelve el resultado. */
+const sembrarPerfil = (perfilId, datos = {}) =>
+  crearPerfilCobro(
+    adminDb,
+    T1,
+    { nombre: `Perfil ${perfilId}`, modo: 'total', personas: null, ...datos },
+    { uid: ADMIN, perfilId },
+  )
+
+describe('[F3] perfiles de cobro', () => {
+  it('una academia sin perfiles lista vacío', async () => {
+    assert.deepEqual(await listarPerfilesCobro(adminDb, T1), [])
+  })
+
+  it('crea un perfil con orden automático y lo devuelve en el listado', async () => {
+    await crearPerfilCobro(
+      adminDb,
+      T1,
+      { nombre: '  Individual  ', personas: 1, modo: 'total' },
+      { uid: ADMIN },
+    )
+    const lista = await listarPerfilesCobro(adminDb, T1)
+    assert.equal(lista.length, 1)
+    assert.equal(lista[0].nombre, 'Individual')
+    assert.equal(lista[0].orden, 1)
+    assert.equal(lista[0].activo, true)
+    assert.equal(lista[0].personas, 1)
+  })
+
+  it('crea con id fijo (seed) y ordena por `orden`', async () => {
+    await sembrarPerfil('b', { nombre: 'Segundo', orden: 2 })
+    await sembrarPerfil('a', { nombre: 'Primero', orden: 1 })
+    const ids = (await listarPerfilesCobro(adminDb, T1)).map((p) => p.id)
+    assert.deepEqual(ids, ['a', 'b'])
+  })
+
+  it('rechaza un nombre duplicado (sin importar mayúsculas/espacios)', async () => {
+    await crearPerfilCobro(adminDb, T1, { nombre: 'Pareja' }, { uid: ADMIN })
+    await assert.rejects(
+      () => crearPerfilCobro(adminDb, T1, { nombre: '  pareja ' }, { uid: ADMIN }),
+      CobroInvalidoError,
+    )
+  })
+
+  it('rechaza nombre vacío, modo y personas inválidos', async () => {
+    await assert.rejects(
+      () => crearPerfilCobro(adminDb, T1, { nombre: '   ' }, { uid: ADMIN }),
+      CobroInvalidoError,
+    )
+    await assert.rejects(
+      () => crearPerfilCobro(adminDb, T1, { nombre: 'X', modo: 'mitad' }, { uid: ADMIN }),
+      CobroInvalidoError,
+    )
+    await assert.rejects(
+      () => crearPerfilCobro(adminDb, T1, { nombre: 'X', personas: 5 }, { uid: ADMIN }),
+      CobroInvalidoError,
+    )
+  })
+
+  it('actualiza campos y desactiva (soft delete: nunca se borra)', async () => {
+    await sembrarPerfil('p', { nombre: 'Pareja', personas: 2, modo: 'total' })
+    await actualizarPerfilCobro(
+      adminDb,
+      T1,
+      'p',
+      { nombre: 'Duplas', modo: 'por_persona' },
+      { uid: ADMIN },
+    )
+    const guardado = (await listarPerfilesCobro(adminDb, T1)).find((p) => p.id === 'p')
+    assert.equal(guardado.nombre, 'Duplas')
+    assert.equal(guardado.modo, 'por_persona')
+
+    await cambiarActivaPerfilCobro(adminDb, T1, 'p', false, { uid: ADMIN })
+    const inactivo = (await listarPerfilesCobro(adminDb, T1)).find((p) => p.id === 'p')
+    assert.equal(inactivo.activo, false)
+  })
+
+  it('actualizar un perfil inexistente → CobroInvalidoError', async () => {
+    await assert.rejects(
+      () => actualizarPerfilCobro(adminDb, T1, 'nope', { nombre: 'X' }, { uid: ADMIN }),
+      CobroInvalidoError,
+    )
+    await assert.rejects(
+      () => cambiarActivaPerfilCobro(adminDb, T1, 'nope', false, { uid: ADMIN }),
+      CobroInvalidoError,
+    )
+  })
+})
+
+describe('[F3] tarifas por sede', () => {
+  it('validaTarifas normaliza el mapa y rechaza lo inválido', () => {
+    const perfiles = [{ id: 'a' }, { id: 'b' }]
+    assert.deepEqual(validarTarifas({ a: 4000 }, perfiles), { a: 4000 })
+    assert.throws(() => validarTarifas({ a: 4000, z: 100 }, perfiles), CobroInvalidoError)
+    assert.throws(() => validarTarifas({ a: -1 }, perfiles), CobroInvalidoError)
+    assert.throws(() => validarTarifas(null, perfiles), CobroInvalidoError)
+  })
+
+  it('fija y REEMPLAZA el mapa completo de una sede', async () => {
+    await sembrarPerfil('a', { nombre: 'A' })
+    await sembrarPerfil('b', { nombre: 'B' })
+    await setTarifasSede(adminDb, T1, 'traki', { a: 4000, b: 4500 }, { uid: ADMIN })
+    assert.deepEqual((await getSede(adminDb, T1, 'traki')).tarifas, { a: 4000, b: 4500 })
+
+    // Reemplazo: la clave ausente queda sin tarifa.
+    await setTarifasSede(adminDb, T1, 'traki', { a: 5000 }, { uid: ADMIN })
+    assert.deepEqual((await getSede(adminDb, T1, 'traki')).tarifas, { a: 5000 })
+  })
+
+  it('rechaza una tarifa de un perfil desconocido', async () => {
+    await sembrarPerfil('a', { nombre: 'A' })
+    await assert.rejects(
+      () => setTarifasSede(adminDb, T1, 'traki', { z: 100 }, { uid: ADMIN }),
+      CobroInvalidoError,
+    )
+  })
+
+  it('rechaza montos que no son enteros de centavos válidos', async () => {
+    await sembrarPerfil('a', { nombre: 'A' })
+    await assert.rejects(
+      () => setTarifasSede(adminDb, T1, 'traki', { a: -5 }, { uid: ADMIN }),
+      CobroInvalidoError,
+    )
+  })
+})
+
+describe('[F3] parámetros de la academia', () => {
+  it('getParametros devuelve los defaults cuando no existe el documento', async () => {
+    assert.deepEqual(await getParametros(adminDb, T1), { ...PARAMETROS_DEFAULT })
+  })
+
+  it('validarParametros completa con defaults y valida rangos', () => {
+    const normal = validarParametros({})
+    assert.deepEqual(normal, { ...PARAMETROS_DEFAULT })
+    assert.throws(() => validarParametros({ porcentajeFaltaSinAviso: 101 }), CobroInvalidoError)
+    assert.throws(() => validarParametros({ duracionesPermitidas: [] }), CobroInvalidoError)
+    assert.throws(() => validarParametros({ alertaCobro: { dias: -1 } }), CobroInvalidoError)
+    assert.throws(() => validarParametros({ campoRaro: 1 }), CobroInvalidoError)
+  })
+
+  it('setParametros mezcla cambios parciales sobre los actuales', async () => {
+    await setParametros(adminDb, T1, { avisoAusenciaHoras: 48 }, { uid: ADMIN })
+    let guardados = await getParametros(adminDb, T1)
+    assert.equal(guardados.avisoAusenciaHoras, 48)
+    assert.equal(guardados.porcentajeFaltaSinAviso, PARAMETROS_DEFAULT.porcentajeFaltaSinAviso)
+
+    await setParametros(
+      adminDb,
+      T1,
+      { pagoProfesor: { modo: 'por_clase', montoCents: 3000 }, vencimientoCreditoDias: 30 },
+      { uid: ADMIN },
+    )
+    guardados = await getParametros(adminDb, T1)
+    assert.deepEqual(guardados.pagoProfesor, { modo: 'por_clase', montoCents: 3000 })
+    assert.equal(guardados.vencimientoCreditoDias, 30)
+    // El cambio previo sigue intacto (mezcla, no reemplazo).
+    assert.equal(guardados.avisoAusenciaHoras, 48)
+  })
+
+  it('setParametros rechaza valores inválidos y no escribe', async () => {
+    await assert.rejects(
+      () => setParametros(adminDb, T1, { porcentajeFaltaSinAviso: -1 }, { uid: ADMIN }),
+      CobroInvalidoError,
+    )
+    assert.deepEqual(await getParametros(adminDb, T1), { ...PARAMETROS_DEFAULT })
+  })
+})
+
+describe('[F3] cobro de la clase (snapshot)', () => {
+  const cobroValido = {
+    perfilCobroId: 'cuatro',
+    modo: 'total',
+    tarifaHoraCents: 5500,
+    montoEstandarCents: 5500,
+    montoCents: 5500,
+    ajustado: false,
+    motivoAjuste: null,
+  }
+
+  it('validarCobro normaliza y rechaza formas inválidas', () => {
+    assert.deepEqual(validarCobro(cobroValido), cobroValido)
+    assert.equal(validarCobro(null), null)
+    assert.equal(validarCobro(undefined), null)
+    assert.throws(() => validarCobro({ ...cobroValido, montoCents: -1 }), CobroInvalidoError)
+    assert.throws(() => validarCobro({ ...cobroValido, modo: 'mitad' }), CobroInvalidoError)
+    assert.throws(() => validarCobro({ ...cobroValido, extra: 1 }), CobroInvalidoError)
+  })
+
+  it('crearClase guarda el snapshot de cobro tal cual', async () => {
+    const { claseId } = await reservar({ cobro: { ...cobroValido, ajustado: true, motivoAjuste: 'descuento' } })
+    const guardada = await getClase(adminDb, T1, claseId)
+    assert.deepEqual(guardada.cobro, { ...cobroValido, ajustado: true, motivoAjuste: 'descuento' })
+  })
+
+  it('crearClase sin cobro lo deja en null', async () => {
+    const { claseId } = await reservar()
+    assert.equal((await getClase(adminDb, T1, claseId)).cobro, null)
+  })
+
+  it('crearClase con un cobro inválido → CobroInvalidoError y no escribe', async () => {
+    await assert.rejects(
+      () => reservar({ cobro: { ...cobroValido, montoCents: 'gratis' } }),
+      CobroInvalidoError,
+    )
+    assert.equal((await bloque(`traki_c1_${FECHA}_1800`)).exists(), false)
+  })
+
+  it('reprogramar sin `cobro` conserva el existente', async () => {
+    const { claseId } = await reservar({ cobro: cobroValido })
+    await reprogramarClase(adminDb, T1, claseId, { horaInicio: '20:00', horaFin: '21:00' }, {
+      uid: ADMIN,
+      ahora: AHORA_RESERVA,
+    })
+    assert.deepEqual((await getClase(adminDb, T1, claseId)).cobro, cobroValido)
+  })
+
+  it('reprogramar con `cobro: null` lo limpia', async () => {
+    const { claseId } = await reservar({ cobro: cobroValido })
+    await reprogramarClase(adminDb, T1, claseId, { cobro: null }, { uid: ADMIN, ahora: AHORA_RESERVA })
+    assert.equal((await getClase(adminDb, T1, claseId)).cobro, null)
+  })
+
+  it('crearClase respeta duracionesPermitidas de los parámetros', async () => {
+    // Solo 120 min: la clase de 1 h (18:00-19:00) debe fallar.
+    await setParametros(adminDb, T1, { duracionesPermitidas: [120] }, { uid: ADMIN })
+    await assert.rejects(
+      () => reservar(),
+      (error) => error instanceof ClaseInvalidaError && /duración debe ser/.test(error.message),
+    )
+    // Y una de 2 h sí se crea.
+    const { claseId } = await reservar({ horaInicio: '18:00', horaFin: '20:00' })
+    assert.equal((await getClase(adminDb, T1, claseId)).horaFin, '20:00')
   })
 })

@@ -1,7 +1,9 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { useParams, useSearchParams } from 'react-router-dom'
 import PageChrome from '../components/PageChrome'
-import { ChevronDown, MoreIcon, PencilIcon, PlusIcon } from '../components/Icons'
+import ConfigCobros from '../components/ConfigCobros'
+import MenuAcciones from '../components/MenuAcciones'
+import { ChevronDown, PencilIcon, PlusIcon } from '../components/Icons'
 import { useAuth } from '../context/AuthContext'
 import { useAvisos } from '../context/AvisosContext'
 import { db } from '../firebase/config'
@@ -12,6 +14,7 @@ import {
   desactivarSede,
   horarioDeSede,
   listarCanchas,
+  listarPerfilesCobro,
   listarSedes,
   nombreDeCancha,
   nombreDeSede,
@@ -20,6 +23,7 @@ import {
   renombrarCancha,
   renombrarSede,
   setSedeHorario,
+  setTarifasSede,
   validarHorario,
 } from '../firebase/db'
 import {
@@ -36,6 +40,7 @@ import {
   resumenHoy,
   tramoEnEje,
 } from '../lib/agenda'
+import { formatearUSD, parsearUSD } from '../lib/dinero'
 import { esErrorDeNegocio, hayCambios } from '../lib/avisos'
 import useMediaQuery from '../hooks/useMediaQuery'
 
@@ -50,7 +55,7 @@ const MINUTOS_HORA = Array.from(
   (_, i) => i * MINUTOS_BLOQUE,
 )
 
-const IDS_TABS = ['horario', 'canchas', 'general']
+const IDS_TABS = ['horario', 'canchas', 'tarifas', 'general']
 
 const MENSAJE_TECNICO_INLINE = 'No se pudo guardar. Inténtalo de nuevo.'
 
@@ -115,68 +120,6 @@ function diaInvalido(fila) {
 /* ------------------------------------------------------------------ */
 /* Piezas compartidas                                                  */
 /* ------------------------------------------------------------------ */
-
-/*
- * Botón "⋯" con un menú de acciones (desactivar/reactivar, renombrar…). El menú
- * va anclado al botón (nunca fixed, para no romper el scroll del celular) y se
- * cierra con Escape, al elegir una acción o al tocar fuera.
- */
-function MenuAcciones({ etiqueta, items }) {
-  const [abierto, setAbierto] = useState(false)
-  const contenedorRef = useRef(null)
-
-  useEffect(() => {
-    if (!abierto) return undefined
-    function alTeclear(event) {
-      if (event.key === 'Escape') {
-        event.stopPropagation()
-        setAbierto(false)
-      }
-    }
-    function alApuntar(event) {
-      if (!contenedorRef.current?.contains(event.target)) setAbierto(false)
-    }
-    window.addEventListener('keydown', alTeclear, true)
-    window.addEventListener('pointerdown', alApuntar)
-    return () => {
-      window.removeEventListener('keydown', alTeclear, true)
-      window.removeEventListener('pointerdown', alApuntar)
-    }
-  }, [abierto])
-
-  return (
-    <div className="menu-ancla" ref={contenedorRef}>
-      <button
-        type="button"
-        className="icon-btn"
-        aria-label={etiqueta}
-        aria-haspopup="menu"
-        aria-expanded={abierto}
-        onClick={() => setAbierto((valor) => !valor)}
-      >
-        <MoreIcon size={18} />
-      </button>
-      {abierto ? (
-        <div className="menu-flotante glass-strong" role="menu" aria-label={etiqueta}>
-          {items.map((item) => (
-            <button
-              key={item.clave ?? item.etiqueta}
-              type="button"
-              role="menuitem"
-              className="menu-flotante__item"
-              onClick={() => {
-                setAbierto(false)
-                item.onSelect()
-              }}
-            >
-              {item.etiqueta}
-            </button>
-          ))}
-        </div>
-      ) : null}
-    </div>
-  )
-}
 
 /** Una sede en la lista (desktop) o en el selector (mobile). */
 function ItemSede({ sede, canchas, seleccionada, onSeleccionar }) {
@@ -326,16 +269,27 @@ function FormNombreSede({ valor, error, disabled, onChange, onSubmit, onCancelar
 /* Detalle de la sede                                                  */
 /* ------------------------------------------------------------------ */
 
+/** Tarifas de una sede como textos de input, para los perfiles indicados. */
+function textoTarifas(tarifas, perfiles) {
+  return Object.fromEntries(
+    perfiles.map((perfil) => [
+      perfil.id,
+      tarifas?.[perfil.id] != null ? formatearUSD(tarifas[perfil.id]) : '',
+    ]),
+  )
+}
+
 /*
  * Detalle de la sede elegida: encabezado con renombre en línea y menú "⋯",
- * pestañas (Horario / Canchas / General) y, en Horario, el editor semanal
- * compacto con la barra de cambios sin guardar.
+ * pestañas (Horario / Canchas / Tarifas / General) y, en Horario, el editor
+ * semanal compacto con la barra de cambios sin guardar. En Tarifas, una fila
+ * por perfil de cobro activo con su precio por hora en USD.
  *
- * El borrador del horario vive acá y no se pierde al cambiar de pestaña; el
- * componente se remonta solo cuando cambia de sede (key = id), así que cada
- * sede arranca de lo guardado.
+ * El borrador del horario y el de las tarifas viven acá y no se pierden al
+ * cambiar de pestaña; el componente se remonta solo cuando cambia de sede
+ * (key = id), así que cada sede arranca de lo guardado.
  */
-function DetalleSede({ tenantId, sede, canchas, onChanged, onSucio, onAlternarSede }) {
+function DetalleSede({ tenantId, sede, canchas, perfiles, onChanged, onSucio, onAlternarSede }) {
   const { user } = useAuth()
   const { mostrarExito, mostrarErrorTecnico, confirmar } = useAvisos()
   const esDesktop = useMediaQuery('(min-width: 48rem)')
@@ -354,6 +308,25 @@ function DetalleSede({ tenantId, sede, canchas, onChanged, onSucio, onAlternarSe
   const [editor, setEditor] = useState(() => editorDeSede(sede))
   const franjaSede = useMemo(() => franjaPorDefecto(guardado), [guardado])
 
+  const perfilesActivos = useMemo(
+    () => (perfiles ?? []).filter((perfil) => perfil.activo !== false),
+    [perfiles],
+  )
+
+  /*
+   * Tarifas: `tarifasGuardadas` es el mapa de Firestore como TEXTO de input
+   * (centavos → "$45.00"), la base del "hay cambios". El borrador se siembra al
+   * montar y se actualiza al guardar. Vacío = sin tarifa para ese perfil.
+   */
+  const [tarifasGuardadas, setTarifasGuardadas] = useState(() =>
+    textoTarifas(sede.tarifas, perfilesActivos),
+  )
+  const [tarifasDraft, setTarifasDraft] = useState(() =>
+    textoTarifas(sede.tarifas, perfilesActivos),
+  )
+  const [errorTarifas, setErrorTarifas] = useState('')
+  const [guardandoTarifas, setGuardandoTarifas] = useState(false)
+
   const [tab, setTab] = useState('horario')
   const [diaExpandido, setDiaExpandido] = useState(null)
   const [errorHorario, setErrorHorario] = useState('')
@@ -370,7 +343,12 @@ function DetalleSede({ tenantId, sede, canchas, onChanged, onSucio, onAlternarSe
   const [enviando, setEnviando] = useState(false)
 
   const borrador = useMemo(() => horarioDelEditor(editor), [editor])
-  const sucio = useMemo(() => hayCambios(guardado, borrador), [guardado, borrador])
+  const sucioHorario = useMemo(() => hayCambios(guardado, borrador), [guardado, borrador])
+  const sucioTarifas = useMemo(
+    () => hayCambios(tarifasGuardadas, tarifasDraft),
+    [tarifasGuardadas, tarifasDraft],
+  )
+  const sucio = sucioHorario || sucioTarifas
 
   useEffect(() => {
     onSucio(sucio)
@@ -445,9 +423,60 @@ function DetalleSede({ tenantId, sede, canchas, onChanged, onSucio, onAlternarSe
     }
   }
 
+  function descartarTarifas() {
+    setTarifasDraft(tarifasGuardadas)
+    setErrorTarifas('')
+  }
+
+  async function guardarTarifas() {
+    // Parse de los textos: vacío = sin tarifa; un texto inválido corta el guardado.
+    const mapa = {}
+    for (const perfil of perfilesActivos) {
+      const texto = tarifasDraft[perfil.id] ?? ''
+      if (!texto.trim()) continue
+      const cents = parsearUSD(texto)
+      if (cents === null) {
+        setErrorTarifas(`El precio de ${perfil.nombre} no es un monto válido`)
+        return
+      }
+      mapa[perfil.id] = cents
+    }
+    setGuardandoTarifas(true)
+    setErrorTarifas('')
+    try {
+      // Se conservan las tarifas de perfiles que no se muestran (inactivos).
+      const conservadas = Object.fromEntries(
+        Object.entries(sede.tarifas ?? {}).filter(
+          ([id]) => !perfilesActivos.some((perfil) => perfil.id === id),
+        ),
+      )
+      const resultado = await setTarifasSede(
+        db,
+        tenantId,
+        sede.id,
+        { ...conservadas, ...mapa },
+        { uid },
+      )
+      const texto = textoTarifas(resultado.tarifas, perfilesActivos)
+      setTarifasGuardadas(texto)
+      setTarifasDraft(texto)
+      mostrarExito(`Tarifas de ${nombre} guardadas`)
+      onChanged()
+    } catch (err) {
+      if (esErrorDeNegocio(err)) {
+        setErrorTarifas(err.message)
+      } else {
+        setErrorTarifas(MENSAJE_TECNICO_INLINE)
+        mostrarErrorTecnico('guardar-tarifas', err)
+      }
+    } finally {
+      setGuardandoTarifas(false)
+    }
+  }
+
   async function cambiarTab(nuevo) {
     if (nuevo === tab) return
-    if (sucio) {
+    if (tab === 'horario' && sucioHorario) {
       const descartar = await confirmar({
         titulo: '¿Descartar cambios?',
         mensaje: 'Tienes cambios sin guardar en el horario.',
@@ -456,6 +485,15 @@ function DetalleSede({ tenantId, sede, canchas, onChanged, onSucio, onAlternarSe
       })
       if (!descartar) return
       descartarHorario()
+    } else if (tab === 'tarifas' && sucioTarifas) {
+      const descartar = await confirmar({
+        titulo: '¿Descartar cambios?',
+        mensaje: 'Tienes cambios sin guardar en las tarifas.',
+        textoCancelar: 'Seguir editando',
+        textoConfirmar: 'Descartar cambios',
+      })
+      if (!descartar) return
+      descartarTarifas()
     }
     setTab(nuevo)
   }
@@ -600,6 +638,7 @@ function DetalleSede({ tenantId, sede, canchas, onChanged, onSucio, onAlternarSe
         {[
           { id: 'horario', etiqueta: 'Horario' },
           { id: 'canchas', etiqueta: `Canchas (${canchas.length})` },
+          { id: 'tarifas', etiqueta: 'Tarifas' },
           { id: 'general', etiqueta: 'General' },
         ].map((item) => (
           <button
@@ -900,6 +939,86 @@ function DetalleSede({ tenantId, sede, canchas, onChanged, onSucio, onAlternarSe
         </div>
       ) : null}
 
+      {tab === 'tarifas' ? (
+        <div
+          className="detalle__panel"
+          role="tabpanel"
+          id="panel-tarifas"
+          aria-labelledby="tab-tarifas"
+        >
+          <p className="general__nota">
+            Precio por hora de cada perfil de cobro en esta sede. Vacío = sin tarifa (al reservar
+            se pedirá un monto manual).
+          </p>
+          {perfilesActivos.length === 0 ? (
+            <p className="aviso">
+              No hay perfiles de cobro activos. Creálos en la sección Cobros.
+            </p>
+          ) : (
+            <ul className="tarifas-lista">
+              {perfilesActivos.map((perfil) => (
+                <li className="tarifa-fila" key={perfil.id}>
+                  <span className="tarifa-fila__nombre">{perfil.nombre}</span>
+                  <label className="tarifa-fila__monto">
+                    <span className="visually-hidden">{`Tarifa por hora de ${perfil.nombre}`}</span>
+                    <span className="tarifa-fila__simbolo" aria-hidden="true">
+                      $
+                    </span>
+                    <input
+                      className="form__input form__input--compacto"
+                      type="text"
+                      inputMode="decimal"
+                      placeholder="—"
+                      value={tarifasDraft[perfil.id] ?? ''}
+                      disabled={guardandoTarifas}
+                      onChange={(event) => {
+                        setErrorTarifas('')
+                        setTarifasDraft((prev) => ({ ...prev, [perfil.id]: event.target.value }))
+                      }}
+                    />
+                  </label>
+                </li>
+              ))}
+            </ul>
+          )}
+
+          {sucioTarifas ? (
+            <div className="barra-cambios" role="status">
+              <div className="barra-cambios__texto">
+                <strong>Cambios sin guardar</strong>
+                {errorTarifas ? (
+                  <span className="barra-cambios__error" role="alert">
+                    {errorTarifas}
+                  </span>
+                ) : null}
+              </div>
+              <div className="barra-cambios__acciones">
+                <button
+                  type="button"
+                  className="btn btn--secondary"
+                  disabled={guardandoTarifas}
+                  onClick={descartarTarifas}
+                >
+                  Descartar
+                </button>
+                <button
+                  type="button"
+                  className="btn-cta"
+                  disabled={guardandoTarifas}
+                  onClick={guardarTarifas}
+                >
+                  Guardar
+                </button>
+              </div>
+            </div>
+          ) : errorTarifas ? (
+            <p className="alert alert--error" role="alert">
+              {errorTarifas}
+            </p>
+          ) : null}
+        </div>
+      ) : null}
+
       {tab === 'general' ? (
         <div
           className="detalle__panel general"
@@ -959,7 +1078,8 @@ function DetalleSede({ tenantId, sede, canchas, onChanged, onSucio, onAlternarSe
           </div>
 
           <p className="general__nota">
-            Los precios de esta sede se van a configurar acá en una próxima fase.
+            Los precios por perfil de esta sede se editan en la pestaña Tarifas. Los perfiles y
+            los parámetros de la academia están en la sección Cobros.
           </p>
         </div>
       ) : null}
@@ -985,12 +1105,18 @@ export default function Configuracion() {
   const [searchParams, setSearchParams] = useSearchParams()
   // `null` = todavía no cargó.
   const [sedes, setSedes] = useState(null)
+  const [perfiles, setPerfiles] = useState(null)
   const [error, setError] = useState('')
   const [version, setVersion] = useState(0)
   const [listaAbierta, setListaAbierta] = useState(false)
-  // "Hay cambios sin guardar en el horario": lo reporta el detalle y lo usa el
-  // guardia al cambiar de sede.
+  // Sección visible: "sedes" (layout de siempre) o "cobros" (perfiles y
+  // parámetros). Queda en la URL (?area=) para que un reload la conserve.
+  const [area, setArea] = useState(() => (searchParams.get('area') === 'cobros' ? 'cobros' : 'sedes'))
+  // "Hay cambios sin guardar": los reportan el detalle de sede (horario y
+  // tarifas) y la sección de cobros (parámetros). Los usan los guardias al
+  // cambiar de sede y al cambiar de sección.
   const sucioRef = useRef(false)
+  const sucioCobrosRef = useRef(false)
 
   const uid = user?.uid ?? null
 
@@ -998,14 +1124,19 @@ export default function Configuracion() {
     let activo = true
     async function cargar() {
       try {
-        const lista = await listarSedes(db, academia)
+        const [lista, listaPerfiles] = await Promise.all([
+          listarSedes(db, academia),
+          listarPerfilesCobro(db, academia),
+        ])
         const canchas = await Promise.all(lista.map((sede) => listarCanchas(db, academia, sede.id)))
         if (!activo) return
         setSedes(lista.map((sede, i) => ({ ...sede, canchas: canchas[i] })))
+        setPerfiles(listaPerfiles)
         setError('')
       } catch (err) {
         if (!activo) return
         setSedes([])
+        setPerfiles([])
         setError(err.message)
       }
     }
@@ -1019,6 +1150,34 @@ export default function Configuracion() {
   const reportarSucio = useCallback((valor) => {
     sucioRef.current = valor
   }, [])
+  const reportarSucioCobros = useCallback((valor) => {
+    sucioCobrosRef.current = valor
+  }, [])
+
+  /**
+   * Cambia de sección. Si la sección actual tiene cambios sin guardar, pide
+   * confirmación antes de salir (los borradores se pierden al desmontar).
+   */
+  async function cambiarArea(nueva) {
+    if (nueva === area) return
+    const dirty = area === 'cobros' ? sucioCobrosRef.current : sucioRef.current
+    if (dirty) {
+      const descartar = await confirmar({
+        titulo: '¿Descartar cambios?',
+        mensaje: 'Tienes cambios sin guardar.',
+        textoCancelar: 'Seguir editando',
+        textoConfirmar: 'Descartar cambios',
+      })
+      if (!descartar) return
+      if (area === 'cobros') sucioCobrosRef.current = false
+      else sucioRef.current = false
+    }
+    setArea(nueva)
+    const siguiente = new URLSearchParams(searchParams)
+    if (nueva === 'cobros') siguiente.set('area', 'cobros')
+    else siguiente.delete('area')
+    setSearchParams(siguiente, { replace: true })
+  }
 
   const lista = sedes ?? []
   const sedeUrl = searchParams.get('sede')
@@ -1114,15 +1273,35 @@ export default function Configuracion() {
   return (
     <PageChrome titulo="Configuración">
       <div className="config">
+        <nav className="config__nav" role="tablist" aria-label="Secciones de configuración">
+          {[
+            { id: 'sedes', etiqueta: 'Sedes y canchas' },
+            { id: 'cobros', etiqueta: 'Cobros' },
+          ].map((item) => (
+            <button
+              key={item.id}
+              type="button"
+              role="tab"
+              aria-selected={area === item.id}
+              className={`config__nav-btn${area === item.id ? ' is-sel' : ''}`}
+              onClick={() => cambiarArea(item.id)}
+            >
+              {item.etiqueta}
+            </button>
+          ))}
+        </nav>
+
         {error ? (
           <p className="alert alert--error" role="alert">
             {error}
           </p>
         ) : null}
 
-        {sedes === null ? <p className="aviso glass">Cargando sedes…</p> : null}
-
-        {sedes !== null ? (
+        {sedes === null || perfiles === null ? (
+          <p className="aviso glass">Cargando configuración…</p>
+        ) : area === 'cobros' ? (
+          <ConfigCobros tenantId={academia} onSucio={reportarSucioCobros} />
+        ) : (
           <>
             {sedeSel ? (
               <div className="config__selector">
@@ -1170,6 +1349,7 @@ export default function Configuracion() {
                 tenantId={academia}
                 sede={sedeSel}
                 canchas={sedeSel.canchas ?? []}
+                perfiles={perfiles}
                 onChanged={recargar}
                 onSucio={reportarSucio}
                 onAlternarSede={alternarSede}
@@ -1180,7 +1360,7 @@ export default function Configuracion() {
               </section>
             )}
           </>
-        ) : null}
+        )}
       </div>
     </PageChrome>
   )

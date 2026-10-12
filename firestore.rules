@@ -102,6 +102,10 @@ service cloud.firestore {
       return data.keys().hasAny(['horario']) ? data.horario : null;
     }
 
+    function tarifasDe(data) {
+      return data.keys().hasAny(['tarifas']) ? data.tarifas : null;
+    }
+
     // Nombre de cancha: string no vacío (al menos un carácter que no sea
     // espacio) y con el mismo tope de largo de la capa de datos.
     function nombreCanchaValido(nombre) {
@@ -115,15 +119,6 @@ service cloud.firestore {
         && (!data.keys().hasAny(['activa']) || data.activa is bool);
     }
 
-    // Una sede necesita nombre (mismas reglas que una cancha: no vacío y con
-    // tope de largo) y, si trae `activa`, tiene que ser booleana: así se cubren
-    // crear, renombrar y activar/desactivar.
-    function sedeValida(data) {
-      return nombreCanchaValido(data.nombre)
-        && (!data.keys().hasAny(['activa']) || data.activa is bool)
-        && horarioValido(horarioDe(data));
-    }
-
     // Categoría de grupo de una clase: opcional; si viene, es una de las tres
     // permitidas (o null). Es distinta del nivel `categoria`.
     function categoriaGrupoValida(data) {
@@ -132,6 +127,114 @@ service cloud.firestore {
         || data.categoriaGrupo in ['infantil', 'junior', 'adulto'];
     }
 
+    // --- Cobros (Fase 3): perfiles, tarifas por sede y parámetros --------
+
+    // Perfil de cobro: nombre no vacío (mismas reglas que sede/cancha),
+    // `modo` del enum, `personas` 1-4 o null, `activo`/`orden` de su tipo si
+    // vienen. La unicidad del nombre la garantiza db.js.
+    function personasValidas(personas) {
+      return personas == null || (personas is int && personas >= 1 && personas <= 4);
+    }
+
+    function perfilCobroValido(data) {
+      return nombreCanchaValido(data.nombre)
+        && data.modo in ['total', 'por_persona']
+        && personasValidas(data.personas)
+        && (!data.keys().hasAny(['activo']) || data.activo is bool)
+        && (!data.keys().hasAny(['orden']) || data.orden is int);
+    }
+
+    // Tarifas de una sede: mapa de id de perfil a entero de centavos. Firestore
+    // no permite validar cada valor del mapa (no hay iteración con predicado),
+    // así que acá solo se exige que sea un mapa de tamaño acotado y se delega
+    // el rango de cada monto a db.js (la única capa que escribe). Las claves
+    // desconocidas también se validan en db.js contra los perfiles reales.
+    function tarifasValidas(tarifas) {
+      return tarifas == null || (tarifas is map && tarifas.size() <= 50);
+    }
+
+    // Una sede necesita nombre (mismas reglas que una cancha: no vacío y con
+    // tope de largo) y, si trae `activa`, tiene que ser booleana: así se cubren
+    // crear, renombrar y activar/desactivar. El horario por día y las tarifas
+    // se validan aparte.
+    function sedeValida(data) {
+      return nombreCanchaValido(data.nombre)
+        && (!data.keys().hasAny(['activa']) || data.activa is bool)
+        && horarioValido(horarioDe(data))
+        && tarifasValidas(tarifasDe(data));
+    }
+
+    // Parámetros de la academia: cada campo con su tipo/rango. El documento
+    // solo puede tener las claves del modelo (más los sellos de auditoría).
+    function parametrosValidos(data) {
+      return (!data.keys().hasAny(['avisoAusenciaHoras'])
+            || (data.avisoAusenciaHoras is int && data.avisoAusenciaHoras >= 0 && data.avisoAusenciaHoras <= 168))
+        && (!data.keys().hasAny(['porcentajeFaltaSinAviso'])
+            || (data.porcentajeFaltaSinAviso is int && data.porcentajeFaltaSinAviso >= 0 && data.porcentajeFaltaSinAviso <= 100))
+        && (!data.keys().hasAny(['pagoProfesor'])
+            || (data.pagoProfesor is map
+                && data.pagoProfesor.keys().hasOnly(['modo', 'montoCents'])
+                && data.pagoProfesor.modo in ['por_hora', 'por_clase']
+                && data.pagoProfesor.montoCents is int
+                && data.pagoProfesor.montoCents >= 0
+                && data.pagoProfesor.montoCents <= 1000000))
+        && (!data.keys().hasAny(['descuentoHermanosPct'])
+            || (data.descuentoHermanosPct is int && data.descuentoHermanosPct >= 0 && data.descuentoHermanosPct <= 100))
+        && (!data.keys().hasAny(['duracionesPermitidas'])
+            || (data.duracionesPermitidas is list
+                && data.duracionesPermitidas.size() > 0
+                && data.duracionesPermitidas.size() <= 8))
+        && (!data.keys().hasAny(['vencimientoCreditoDias'])
+            || data.vencimientoCreditoDias == null
+            || (data.vencimientoCreditoDias is int && data.vencimientoCreditoDias >= 1 && data.vencimientoCreditoDias <= 365))
+        && (!data.keys().hasAny(['alertaCobro'])
+            || (data.alertaCobro is map
+                && data.alertaCobro.keys().hasOnly(['dias', 'referencia'])
+                && data.alertaCobro.dias is int
+                && data.alertaCobro.dias >= 0
+                && data.alertaCobro.dias <= 30
+                && data.alertaCobro.referencia in ['clase', 'vencimiento']))
+        && (!data.keys().hasAny(['restringirCategoriaPorFranja'])
+            || data.restringirCategoriaPorFranja is bool);
+    }
+
+    // Snapshot de cobro de una clase: opcional. Si viene, es un mapa con
+    // EXACTAMENTE las claves del modelo y con los montos como enteros de
+    // centavos >= 0 (los topes y la coherencia fina los valida db.js).
+    function cobroValido(cobro) {
+      return cobro == null
+        || (cobro is map
+            && cobro.keys().hasOnly([
+                 'perfilCobroId',
+                 'modo',
+                 'tarifaHoraCents',
+                 'montoEstandarCents',
+                 'montoCents',
+                 'ajustado',
+                 'motivoAjuste'
+               ])
+            && (!cobro.keys().hasAny(['perfilCobroId'])
+                || cobro.perfilCobroId == null
+                || cobro.perfilCobroId is string)
+            && (!cobro.keys().hasAny(['modo']) || cobro.modo == null || cobro.modo in ['total', 'por_persona'])
+            && cobro.montoCents is int
+            && cobro.montoCents >= 0
+            && cobro.montoCents <= 1000000
+            && (!cobro.keys().hasAny(['tarifaHoraCents'])
+                || cobro.tarifaHoraCents == null
+                || (cobro.tarifaHoraCents is int && cobro.tarifaHoraCents >= 0 && cobro.tarifaHoraCents <= 100000))
+            && (!cobro.keys().hasAny(['montoEstandarCents'])
+                || cobro.montoEstandarCents == null
+                || (cobro.montoEstandarCents is int && cobro.montoEstandarCents >= 0 && cobro.montoEstandarCents <= 1000000))
+            && (!cobro.keys().hasAny(['ajustado']) || cobro.ajustado is bool)
+            && (!cobro.keys().hasAny(['motivoAjuste'])
+                || cobro.motivoAjuste == null
+                || cobro.motivoAjuste in ['descuento', 'cortesia', 'acuerdo', 'otro']));
+    }
+
+    function cobroDe(data) {
+      return data.keys().hasAny(['cobro']) ? data.cobro : null;
+    }
     match /academias/{tenantId} {
       allow read, write: if esAdmin(tenantId);
 
@@ -174,13 +277,30 @@ service cloud.firestore {
       }
 
       // La reserva, la reprogramación, la cancelación, la asistencia y el
-      // cierre los hace solo el administrador. La categoría de grupo, si viene,
-      // tiene que ser una de las tres permitidas (el resto del contenido de la
-      // clase lo valida la capa de datos, que es la única que escribe acá).
+      // cierre los hace solo el administrador. La categoría de grupo y el
+      // SNAPSHOT de cobro, si vienen, tienen que respetar sus enums y sus
+      // montos enteros >= 0 (el resto del contenido de la clase lo valida la
+      // capa de datos, que es la única que escribe acá).
       match /clases/{claseId} {
         allow read: if esAdmin(tenantId);
-        allow create, update: if esAdmin(tenantId) && categoriaGrupoValida(request.resource.data);
+        allow create, update: if esAdmin(tenantId)
+          && categoriaGrupoValida(request.resource.data)
+          && cobroValido(cobroDe(request.resource.data));
         allow delete: if esAdmin(tenantId);
+      }
+
+      // Perfiles de cobro: solo admin. Los perfiles NUNCA se borran (soft
+      // delete con `activo:false`), así que el delete queda denegado.
+      match /perfilesCobro/{perfilId} {
+        allow read: if esAdmin(tenantId);
+        allow create, update: if esAdmin(tenantId) && perfilCobroValido(request.resource.data);
+      }
+
+      // Parámetros de la academia: un único documento `parametros`. Solo admin
+      // lo lee/escribe y con los campos del modelo validados. No se borra.
+      match /config/parametros {
+        allow read: if esAdmin(tenantId);
+        allow create, update: if esAdmin(tenantId) && parametrosValidos(request.resource.data);
       }
 
       // Ocupación de 30 minutos de cancha o de profesor, con ID determinista

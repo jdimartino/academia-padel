@@ -38,6 +38,28 @@ import {
 import { aISO, hoyISO } from '../src/lib/fechas.js'
 // Helpers puros de db.js: no tocan Firestore, así que se prueban acá sin emulador.
 import { claveNombreCancha, normalizarNombreCancha } from '../src/firebase/db.js'
+import {
+  LIMITE_MONTO_CENTS,
+  LIMITE_TARIFA_CENTS,
+  centsValidos,
+  formatearUSD,
+  parsearUSD,
+} from '../src/lib/dinero.js'
+import {
+  PARAMETROS_DEFAULT,
+  PERFILES_COBRO_DEFAULT,
+  alertaCobroValida,
+  duracionesValidas,
+  leerParametros,
+  motivoValido,
+  modoValido,
+  pagoProfesorValido,
+  perfilPorCupo,
+  personasValidas,
+  recalcularCobro,
+  sugerirPrecioCents,
+  vencimientoValido,
+} from '../src/lib/cobros.js'
 
 /** Franja de un día en minutos, como la guarda una sede. */
 const dia = (aperturaHoras, cierreHoras) => ({
@@ -899,5 +921,230 @@ describe('resumen de una sede ("Hoy ..." y canchas)', () => {
   it('una fecha inválida se comporta como día cerrado', () => {
     assert.equal(resumenDiaSede(SEDE_MEDIA_HORA, '2026-02-31'), 'Hoy cerrada')
     assert.equal(resumenDiaSede(SEDE_MEDIA_HORA, ''), 'Hoy cerrada')
+  })
+})
+
+describe('dinero (centavos de USD)', () => {
+  it('formatearUSD arma "$enteros.centavos" y descarta lo inválido', () => {
+    assert.equal(formatearUSD(0), '$0.00')
+    assert.equal(formatearUSD(4500), '$45.00')
+    assert.equal(formatearUSD(4550), '$45.50')
+    assert.equal(formatearUSD(5), '$0.05')
+    // Negativos, no enteros y basura: cadena vacía (nunca "NaN").
+    assert.equal(formatearUSD(-1), '')
+    assert.equal(formatearUSD(45.5), '')
+    assert.equal(formatearUSD(null), '')
+    assert.equal(formatearUSD('45'), '')
+  })
+
+  it('parsearUSD acepta formatos en-US y es-VE', () => {
+    assert.equal(parsearUSD('45'), 4500)
+    assert.equal(parsearUSD('45.5'), 4550)
+    assert.equal(parsearUSD('45,50'), 4550)
+    assert.equal(parsearUSD('$45.00'), 4500)
+    assert.equal(parsearUSD('1.234,56'), 123456)
+    assert.equal(parsearUSD('1,234.56'), 123456)
+    // Redondeo half-up a centavos.
+    assert.equal(parsearUSD('45.555'), 4556)
+  })
+
+  it('parsearUSD rechaza lo que no es un monto', () => {
+    assert.equal(parsearUSD(''), null)
+    assert.equal(parsearUSD('   '), null)
+    assert.equal(parsearUSD(null), null)
+    assert.equal(parsearUSD(undefined), null)
+    assert.equal(parsearUSD('abc'), null)
+    assert.equal(parsearUSD('-45'), null)
+    assert.equal(parsearUSD('45-50'), null)
+  })
+
+  it('centsValidos respeta el tope', () => {
+    assert.equal(centsValidos(0), true)
+    assert.equal(centsValidos(LIMITE_MONTO_CENTS), true)
+    assert.equal(centsValidos(LIMITE_MONTO_CENTS + 1), false)
+    assert.equal(centsValidos(-1), false)
+    assert.equal(centsValidos(1.5), false)
+    assert.equal(centsValidos(100, LIMITE_TARIFA_CENTS), true)
+    assert.equal(centsValidos(LIMITE_TARIFA_CENTS + 1, LIMITE_TARIFA_CENTS), false)
+  })
+})
+
+describe('cobros: perfiles de cobro', () => {
+  it('los defaults tienen ids fijos y coherentes', () => {
+    const ids = PERFILES_COBRO_DEFAULT.map((perfil) => perfil.id)
+    assert.deepEqual(ids, ['individual', 'pareja', 'tres', 'cuatro', 'corporativo', 'especial'])
+    // Sin repetidos y todos activos.
+    assert.equal(new Set(ids).size, ids.length)
+    assert.ok(PERFILES_COBRO_DEFAULT.every((perfil) => perfil.activo === true))
+  })
+
+  it('personasValidas acepta 1..4 o null', () => {
+    assert.equal(personasValidas(null), true)
+    assert.equal(personasValidas(1), true)
+    assert.equal(personasValidas(4), true)
+    assert.equal(personasValidas(0), false)
+    assert.equal(personasValidas(5), false)
+    assert.equal(personasValidas(2.5), false)
+    assert.equal(personasValidas('2'), false)
+  })
+
+  it('modoValido y motivoValido filtran por el enum', () => {
+    assert.equal(modoValido('total'), true)
+    assert.equal(modoValido('por_persona'), true)
+    assert.equal(modoValido('mitad'), false)
+    assert.equal(motivoValido(null), true)
+    assert.equal(motivoValido(undefined), true)
+    assert.equal(motivoValido('descuento'), true)
+    assert.equal(motivoValido('porque_si'), false)
+  })
+
+  it('perfilPorCupo elige el activo que encaja, por orden', () => {
+    const perfiles = [
+      { id: 'b', personas: 2, activo: true, orden: 9 },
+      { id: 'a', personas: 2, activo: true, orden: 2 },
+      { id: 'x', personas: 2, activo: false, orden: 1 },
+    ]
+    assert.equal(perfilPorCupo(perfiles, 2).id, 'a')
+    assert.equal(perfilPorCupo(perfiles, 3), null)
+    assert.equal(perfilPorCupo(perfiles, null), null)
+    assert.equal(perfilPorCupo(null, 2), null)
+  })
+})
+
+describe('cobros: precio sugerido', () => {
+  it('modo total: tarifa por hora × duración / 60', () => {
+    assert.equal(sugerirPrecioCents({ tarifaHoraCents: 4500, duracionMin: 60, modo: 'total' }), 4500)
+    assert.equal(sugerirPrecioCents({ tarifaHoraCents: 4500, duracionMin: 90, modo: 'total' }), 6750)
+    assert.equal(sugerirPrecioCents({ tarifaHoraCents: 4500, duracionMin: 120, modo: 'total' }), 9000)
+  })
+
+  it('modo por_persona multiplica por la cantidad de alumnos', () => {
+    assert.equal(
+      sugerirPrecioCents({ tarifaHoraCents: 4500, duracionMin: 60, modo: 'por_persona', cantidadAlumnos: 4 }),
+      18000,
+    )
+    // Sin alumnos, el monto por persona es 0 (no hay a quién cobrarle).
+    assert.equal(
+      sugerirPrecioCents({ tarifaHoraCents: 4500, duracionMin: 60, modo: 'por_persona', cantidadAlumnos: 0 }),
+      0,
+    )
+  })
+
+  it('redondea half-up a centavos', () => {
+    // 4000 × 45 / 60 = 3000 exacto; 4500 × 45 / 60 = 3375.
+    assert.equal(sugerirPrecioCents({ tarifaHoraCents: 4500, duracionMin: 45, modo: 'total' }), 3375)
+    // 100 × 45 / 60 = 75.
+    assert.equal(sugerirPrecioCents({ tarifaHoraCents: 100, duracionMin: 45, modo: 'total' }), 75)
+    // 1000 × 45 / 60 = 750.
+    assert.equal(sugerirPrecioCents({ tarifaHoraCents: 1000, duracionMin: 45, modo: 'total' }), 750)
+    // 333 × 45 / 60 = 249.75 → 250.
+    assert.equal(sugerirPrecioCents({ tarifaHoraCents: 333, duracionMin: 45, modo: 'total' }), 250)
+  })
+
+  it('devuelve null sin tarifa o con duración inválida', () => {
+    assert.equal(sugerirPrecioCents({ duracionMin: 60, modo: 'total' }), null)
+    assert.equal(sugerirPrecioCents({ tarifaHoraCents: null, duracionMin: 60, modo: 'total' }), null)
+    assert.equal(sugerirPrecioCents({ tarifaHoraCents: 4500, duracionMin: 0, modo: 'total' }), null)
+    assert.equal(sugerirPrecioCents({}), null)
+  })
+})
+
+describe('cobros: recalcular al reprogramar', () => {
+  const sugerido = {
+    perfilCobroId: 'cuatro',
+    modo: 'total',
+    tarifaHoraCents: 5500,
+    montoEstandarCents: 5500,
+    montoCents: 5500,
+    ajustado: false,
+    motivoAjuste: null,
+  }
+
+  it('una clase sin ajustar toma la sugerencia nueva', () => {
+    const nuevo = recalcularCobro({ ...sugerido, montoCents: 5500 }, sugerido)
+    assert.deepEqual(nuevo, sugerido)
+  })
+
+  it('una clase ajustada conserva monto y motivo, pero actualiza el estándar', () => {
+    const actual = { ...sugerido, montoCents: 3000, ajustado: true, motivoAjuste: 'cortesia' }
+    const nuevo = recalcularCobro(actual, { ...sugerido, montoEstandarCents: 7000 })
+    assert.equal(nuevo.montoCents, 3000)
+    assert.equal(nuevo.ajustado, true)
+    assert.equal(nuevo.motivoAjuste, 'cortesia')
+    assert.equal(nuevo.montoEstandarCents, 7000)
+  })
+
+  it('sin sugerencia devuelve el cobro actual tal cual', () => {
+    assert.equal(recalcularCobro(sugerido, null), sugerido)
+    assert.equal(recalcularCobro(null, null), null)
+  })
+})
+
+describe('parámetros de la academia', () => {
+  it('los defaults son coherentes', () => {
+    assert.equal(PARAMETROS_DEFAULT.avisoAusenciaHoras, 24)
+    assert.equal(PARAMETROS_DEFAULT.porcentajeFaltaSinAviso, 50)
+    assert.deepEqual(PARAMETROS_DEFAULT.duracionesPermitidas, [60, 90, 120])
+    assert.equal(PARAMETROS_DEFAULT.vencimientoCreditoDias, null)
+    assert.equal(PARAMETROS_DEFAULT.pagoProfesor.modo, 'por_hora')
+    assert.equal(PARAMETROS_DEFAULT.pagoProfesor.montoCents, 1500)
+  })
+
+  it('pagoProfesorValido, alertaCobroValida y vencimientoValido', () => {
+    assert.equal(pagoProfesorValido({ modo: 'por_hora', montoCents: 0 }), true)
+    assert.equal(pagoProfesorValido({ modo: 'por_clase', montoCents: 2000 }), true)
+    assert.equal(pagoProfesorValido({ modo: 'por_mes', montoCents: 2000 }), false)
+    assert.equal(pagoProfesorValido(null), false)
+    assert.equal(alertaCobroValida({ dias: 0, referencia: 'clase' }), true)
+    assert.equal(alertaCobroValida({ dias: 2, referencia: 'vencimiento' }), true)
+    assert.equal(alertaCobroValida({ dias: -1, referencia: 'clase' }), false)
+    assert.equal(vencimientoValido(null), true)
+    assert.equal(vencimientoValido(30), true)
+    assert.equal(vencimientoValido(0), false)
+  })
+
+  it('duracionesValidas exige lista no vacía, ascendente y múltiplo de 30', () => {
+    assert.equal(duracionesValidas([60, 90, 120]), true)
+    assert.equal(duracionesValidas([60]), true)
+    assert.equal(duracionesValidas([]), false)
+    assert.equal(duracionesValidas([90, 60]), false)
+    assert.equal(duracionesValidas([60, 60]), false)
+    assert.equal(duracionesValidas([45]), false)
+    assert.equal(duracionesValidas([300]), false)
+    assert.equal(duracionesValidas(null), false)
+  })
+
+  it('leerParametros rellena con defaults ante un documento vacío', () => {
+    assert.deepEqual(leerParametros(null), {
+      avisoAusenciaHoras: 24,
+      porcentajeFaltaSinAviso: 50,
+      pagoProfesor: { modo: 'por_hora', montoCents: 1500 },
+      descuentoHermanosPct: 10,
+      duracionesPermitidas: [60, 90, 120],
+      vencimientoCreditoDias: null,
+      alertaCobro: { dias: 2, referencia: 'clase' },
+      restringirCategoriaPorFranja: false,
+    })
+  })
+
+  it('leerParametros respeta los valores válidos y corrige los corruptos', () => {
+    const leidos = leerParametros({
+      avisoAusenciaHoras: 12,
+      porcentajeFaltaSinAviso: 999, // fuera de rango → default
+      pagoProfesor: { modo: 'por_clase', montoCents: 2500 },
+      descuentoHermanosPct: 0,
+      duracionesPermitidas: [60, 120], // válida
+      vencimientoCreditoDias: 45,
+      alertaCobro: { dias: 1, referencia: 'vencimiento' },
+      restringirCategoriaPorFranja: true,
+    })
+    assert.equal(leidos.avisoAusenciaHoras, 12)
+    assert.equal(leidos.porcentajeFaltaSinAviso, 50)
+    assert.deepEqual(leidos.pagoProfesor, { modo: 'por_clase', montoCents: 2500 })
+    assert.equal(leidos.descuentoHermanosPct, 0)
+    assert.deepEqual(leidos.duracionesPermitidas, [60, 120])
+    assert.equal(leidos.vencimientoCreditoDias, 45)
+    assert.deepEqual(leidos.alertaCobro, { dias: 1, referencia: 'vencimiento' })
+    assert.equal(leidos.restringirCategoriaPorFranja, true)
   })
 })

@@ -34,6 +34,7 @@ export const ERRORES_DE_NEGOCIO = [
   'ClaseInvalidaError',
   'FichaInvalidaError',
   'SedeInvalidaError',
+  'CobroInvalidoError',
 ]
 
 /** Estado inicial de los avisos. */

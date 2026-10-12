@@ -722,3 +722,199 @@
     height: 8px;
   }
 }
+
+/* ============================================================
+   Sección de Cobros (perfiles, tarifas y parámetros)
+   ============================================================ */
+
+/* Segmento superior: "Sedes y canchas" | "Cobros". En desktop ocupa el ancho
+   completo de la grilla. */
+.config__nav {
+  display: flex;
+  gap: 4px;
+  padding: 4px;
+  border-radius: var(--radio-pill);
+  background: rgba(255, 255, 255, 0.08);
+  border: 1px solid rgba(255, 255, 255, 0.16);
+}
+
+.config__nav-btn {
+  flex: 1 1 0;
+  min-width: 0;
+  min-height: 44px;
+  padding: 4px 10px;
+  border: none;
+  border-radius: var(--radio-pill);
+  background: transparent;
+  color: var(--texto-muted);
+  font-size: 13px;
+  font-weight: 700;
+  white-space: nowrap;
+}
+
+.config__nav-btn.is-sel {
+  background: var(--texto);
+  color: #0a1626;
+}
+
+.cobros {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+/* Tarifas por perfil: una fila compacta por perfil activo. */
+.tarifas-lista {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.tarifa-fila {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  min-height: 52px;
+  padding: 6px 10px;
+  border-radius: 12px;
+  border: 1px solid rgba(255, 255, 255, 0.16);
+  background: rgba(255, 255, 255, 0.05);
+}
+
+.tarifa-fila__nombre {
+  min-width: 0;
+  font-weight: 600;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.tarifa-fila__monto {
+  flex: 0 0 auto;
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.tarifa-fila__monto .form__input {
+  width: 7rem;
+  min-width: 0;
+}
+
+.tarifa-fila__simbolo {
+  color: var(--texto-muted);
+  font-weight: 700;
+}
+
+/* Fila de perfil de cobro: nombre + resumen y acciones. */
+.perfil-fila__hint {
+  display: block;
+  font-size: 12px;
+  font-weight: 400;
+  color: var(--texto-muted);
+}
+
+.perfil-form {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  width: 100%;
+}
+
+.perfil-form__fila {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.perfil-form__campo {
+  flex: 1 1 8rem;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.perfil-form__acciones {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.perfil-form__acciones .btn {
+  width: auto;
+  flex: 0 0 auto;
+}
+
+/* Parámetros: bloques agrupados por tema. */
+.parametros {
+  display: grid;
+  grid-template-columns: 1fr;
+  gap: 10px;
+}
+
+.parametros__bloque {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 12px;
+  border-radius: 14px;
+  border: 1px solid rgba(255, 255, 255, 0.16);
+  background: rgba(255, 255, 255, 0.05);
+}
+
+.parametros__titulo {
+  font-size: 13px;
+  font-weight: 700;
+  color: var(--texto);
+}
+
+.parametros__campo {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.parametros__hint {
+  font-size: 12px;
+  color: var(--texto-muted);
+}
+
+.parametros__duraciones {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.parametros__duracion,
+.parametros__check {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-height: 44px;
+  font-size: 14px;
+}
+
+.parametros__check {
+  min-height: 44px;
+}
+
+@media (min-width: 48rem) {
+  .config__nav {
+    grid-column: 1 / -1;
+    align-self: start;
+    width: max-content;
+  }
+
+  .cobros {
+    grid-column: 1 / -1;
+  }
+
+  .parametros {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+}

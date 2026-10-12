@@ -25,6 +25,7 @@ import {
 import {
   collection,
   collectionGroup,
+  deleteDoc,
   doc,
   getDoc,
   getDocs,
@@ -698,5 +699,176 @@ describe('9. Clase: categoría de grupo validada en las reglas', () => {
     )
     await assertFails(updateDoc(claseRef(as(UID.adminT1), 'cg-upd'), { categoriaGrupo: 'juvenil' }))
     await assertSucceeds(updateDoc(claseRef(as(UID.adminT1), 'cg-upd'), { categoriaGrupo: 'adulto' }))
+  })
+})
+
+/* --------------------------------------------------------------------- */
+/* [F3] Cobros: perfiles, tarifas, parámetros y cobro de la clase          */
+/* --------------------------------------------------------------------- */
+
+/** Perfil de cobro mínimo válido para las reglas. */
+const perfil = (extra = {}) => ({
+  nombre: 'Individual',
+  personas: 1,
+  modo: 'total',
+  activo: true,
+  orden: 1,
+  ...extra,
+})
+
+describe('[F3] perfilesCobro: solo admin, nunca se borran', () => {
+  it('administrador de t1 CREA un perfil válido → ALLOW', async () => {
+    await assertSucceeds(
+      setDoc(doc(as(UID.adminT1), 'academias', T1, 'perfilesCobro', 'individual'), perfil()),
+    )
+  })
+
+  it('profesor de t1 CREA un perfil → DENY', async () => {
+    await assertFails(
+      setDoc(doc(as(UID.profT1), 'academias', T1, 'perfilesCobro', 'x'), perfil()),
+    )
+  })
+
+  it('administrador de t2 CREA un perfil en t1 → DENY (otro tenant)', async () => {
+    await assertFails(
+      setDoc(doc(as(UID.adminT2), 'academias', T1, 'perfilesCobro', 'x'), perfil()),
+    )
+  })
+
+  it('un perfil con modo inválido → DENY', async () => {
+    await assertFails(
+      setDoc(
+        doc(as(UID.adminT1), 'academias', T1, 'perfilesCobro', 'x'),
+        perfil({ modo: 'mitad' }),
+      ),
+    )
+  })
+
+  it('un perfil con personas fuera de 1-4 → DENY', async () => {
+    await assertFails(
+      setDoc(
+        doc(as(UID.adminT1), 'academias', T1, 'perfilesCobro', 'x'),
+        perfil({ personas: 5 }),
+      ),
+    )
+  })
+
+  it('un perfil sin nombre → DENY', async () => {
+    await assertFails(
+      setDoc(doc(as(UID.adminT1), 'academias', T1, 'perfilesCobro', 'x'), perfil({ nombre: '' })),
+    )
+  })
+
+  it('administrador de t1 LEE los perfiles → ALLOW; otro tenant → DENY', async () => {
+    await assertSucceeds(getDocs(collection(as(UID.adminT1), 'academias', T1, 'perfilesCobro')))
+    await assertFails(getDocs(collection(as(UID.adminT2), 'academias', T1, 'perfilesCobro')))
+  })
+
+  it('BORRAR un perfil → DENY (soft delete con activo:false)', async () => {
+    await assertFails(deleteDoc(doc(as(UID.adminT1), 'academias', T1, 'perfilesCobro', 'individual')))
+  })
+})
+
+describe('[F3] config/parametros: solo admin, con campos válidos', () => {
+  it('administrador de t1 escribe parámetros válidos → ALLOW', async () => {
+    await assertSucceeds(
+      setDoc(doc(as(UID.adminT1), 'academias', T1, 'config', 'parametros'), {
+        avisoAusenciaHoras: 24,
+        porcentajeFaltaSinAviso: 50,
+        pagoProfesor: { modo: 'por_hora', montoCents: 1500 },
+        duracionesPermitidas: [60, 90, 120],
+        vencimientoCreditoDias: null,
+      }),
+    )
+  })
+
+  it('un no-admin escribe parámetros → DENY', async () => {
+    await assertFails(
+      setDoc(doc(as(UID.profT1), 'academias', T1, 'config', 'parametros'), { avisoAusenciaHoras: 1 }),
+    )
+  })
+
+  it('parámetros con un rango inválido → DENY', async () => {
+    await assertFails(
+      setDoc(doc(as(UID.adminT1), 'academias', T1, 'config', 'parametros'), {
+        porcentajeFaltaSinAviso: 101,
+      }),
+    )
+  })
+
+  it('administrador de t1 LEE parámetros → ALLOW; otro tenant → DENY', async () => {
+    await assertSucceeds(getDoc(doc(as(UID.adminT1), 'academias', T1, 'config', 'parametros')))
+    await assertFails(getDoc(doc(as(UID.adminT2), 'academias', T1, 'config', 'parametros')))
+  })
+
+  it('BORRAR los parámetros → DENY (no se borran)', async () => {
+    await assertFails(deleteDoc(doc(as(UID.adminT1), 'academias', T1, 'config', 'parametros')))
+  })
+})
+
+describe('[F3] tarifas en la sede', () => {
+  it('administrador de t1 CREA una sede con tarifas → ALLOW', async () => {
+    await assertSucceeds(
+      setDoc(doc(as(UID.adminT1), 'academias', T1, 'sedes', 'tarifada'), {
+        nombre: 'Tarifada',
+        activa: true,
+        tarifas: { individual: 4000, pareja: 4500 },
+      }),
+    )
+  })
+
+  it('una sede con tarifas que no son un mapa → DENY', async () => {
+    await assertFails(
+      setDoc(doc(as(UID.adminT1), 'academias', T1, 'sedes', 'mala'), {
+        nombre: 'Mala',
+        activa: true,
+        tarifas: [4000],
+      }),
+    )
+  })
+})
+
+describe('[F3] cobro en la clase', () => {
+  const cobro = {
+    perfilCobroId: 'cuatro',
+    modo: 'total',
+    tarifaHoraCents: 5500,
+    montoEstandarCents: 5500,
+    montoCents: 5500,
+    ajustado: false,
+    motivoAjuste: null,
+  }
+
+  it('administrador CREA una clase con cobro válido → ALLOW', async () => {
+    await assertSucceeds(
+      setDoc(doc(as(UID.adminT1), 'academias', T1, 'clases', 'con-cobro'), clase({ cobro })),
+    )
+  })
+
+  it('una clase con montoCents no entero → DENY', async () => {
+    await assertFails(
+      setDoc(
+        doc(as(UID.adminT1), 'academias', T1, 'clases', 'cobro-malo'),
+        clase({ cobro: { ...cobro, montoCents: 'gratis' } }),
+      ),
+    )
+  })
+
+  it('un cobro con claves de más → DENY', async () => {
+    await assertFails(
+      setDoc(
+        doc(as(UID.adminT1), 'academias', T1, 'clases', 'cobro-extra'),
+        clase({ cobro: { ...cobro, propina: 100 } }),
+      ),
+    )
+  })
+
+  it('una clase con modo de cobro inválido → DENY', async () => {
+    await assertFails(
+      setDoc(
+        doc(as(UID.adminT1), 'academias', T1, 'clases', 'cobro-modo'),
+        clase({ cobro: { ...cobro, modo: 'mitad' } }),
+      ),
+    )
   })
 })
