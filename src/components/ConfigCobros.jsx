@@ -51,6 +51,13 @@ const PAGOS_SIN_AVISO = [
   { valor: 'nada', label: 'No pagar' },
 ]
 
+/* Qué hace una falta sin aviso cuando el alumno tiene crédito (Phase 5). */
+const FALTAS_CREDITO = [
+  { valor: 'descuenta_proporcional', label: 'Descontar el % de falta' },
+  { valor: 'descuenta_completo', label: 'Descontar la clase completa' },
+  { valor: 'cobra_aparte', label: 'Cobrar aparte (cargo normal)' },
+]
+
 /* Duraciones ofrecidas: múltiplos de MINUTOS_BLOQUE de 60 a 240 (1 a 4 horas). */
 const DURACIONES_OPCIONES = Array.from({ length: 4 }, (_, i) => (i + 2) * MINUTOS_BLOQUE)
 
@@ -392,7 +399,7 @@ export default function ConfigCobros({ tenantId, onSucio }) {
           </div>
 
           <div className="parametros__bloque">
-            <h3 className="parametros__titulo">Créditos</h3>
+            <h3 className="parametros__titulo">Mensualidades</h3>
             <label className="parametros__campo">
               <span className="form__label">Vencimiento del crédito (días)</span>
               <input
@@ -408,8 +415,36 @@ export default function ConfigCobros({ tenantId, onSucio }) {
                   })
                 }
               />
-              <span className="parametros__hint">Vacío = no vence. Se aplica en la fase de cobros.</span>
+              <span className="parametros__hint">Vacío = no vence.</span>
             </label>
+            <label className="parametros__campo">
+              <span className="form__label">Falta sin aviso con crédito</span>
+              <select
+                className="form__input"
+                value={borrador.faltaSinAvisoConCredito}
+                onChange={(e) => editarParametros({ faltaSinAvisoConCredito: e.target.value })}
+              >
+                {FALTAS_CREDITO.map((opcion) => (
+                  <option key={opcion.valor} value={opcion.valor}>
+                    {opcion.label}
+                  </option>
+                ))}
+              </select>
+              <span className="parametros__hint">
+                Se aplica al cerrar la clase si el alumno faltó sin aviso y tiene crédito.
+              </span>
+            </label>
+            <label className="parametros__check">
+              <input
+                type="checkbox"
+                checked={borrador.creditoRequierePago}
+                onChange={(e) => editarParametros({ creditoRequierePago: e.target.checked })}
+              />
+              <span>El crédito se puede usar solo cuando la mensualidad está pagada</span>
+            </label>
+            <span className="parametros__hint">
+              Apagado: el crédito sirve apenas se compra el lote.
+            </span>
           </div>
 
           <div className="parametros__bloque">

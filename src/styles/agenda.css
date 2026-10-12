@@ -985,3 +985,110 @@
   font-size: 14px;
   font-weight: 700;
 }
+
+/* ============================================================
+   Mensualidades (Phase 5): preview de crédito y plan del alumno
+   ============================================================ */
+
+.cierre__credito {
+  display: block;
+  margin-left: 8px;
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--lime, #c6ff00);
+}
+
+.badge--activo {
+  background: var(--estado-ejecutada-bg);
+  color: var(--estado-ejecutada-texto);
+}
+
+.badge--agotado,
+.badge--bloqueado {
+  background: var(--estado-pendiente-bg);
+  color: var(--estado-pendiente-texto);
+}
+
+.badge--vencido {
+  background: var(--estado-cancelada-bg);
+  color: var(--estado-cancelada-texto);
+  border: var(--estado-cancelada-border);
+}
+
+.plan-credito {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  padding: 16px;
+  border-radius: var(--radio-md, 14px);
+  margin-top: 16px;
+}
+
+.plan-credito__resumen {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.plan-credito__barra-caja {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.plan-credito__barra {
+  width: 100%;
+  height: 8px;
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.14);
+  overflow: hidden;
+}
+
+.plan-credito__relleno {
+  display: block;
+  height: 100%;
+  background: var(--lime, #c6ff00);
+}
+
+.plan-credito__horas {
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--texto-muted, rgba(255, 255, 255, 0.65));
+}
+
+.plan-credito__acciones {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.plan-credito__form {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.plan-credito__lotes {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.plan-credito__lote {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 8px 0;
+  border-top: 1px solid rgba(255, 255, 255, 0.1);
+  font-size: 13px;
+}
+
+.plan-credito__lote-meta {
+  font-size: 12px;
+  color: var(--texto-muted, rgba(255, 255, 255, 0.65));
+}

@@ -7,6 +7,7 @@ import useCierreSeguro from '../hooks/useCierreSeguro'
 import { CATEGORIAS, etiquetaCategoria } from '../lib/agenda'
 import { hayCambios } from '../lib/avisos'
 import { hoyISO } from '../lib/fechas'
+import PlanCredito from './PlanCredito'
 import { CloseIcon } from './Icons'
 
 const TIPOS = [
@@ -510,6 +511,8 @@ export default function FichaAlumnoSheet({ tenantId, alumno = null, onClose, onS
           Cancelar
         </button>
       </form>
+
+      {alumno ? <PlanCredito tenantId={tenantId} alumno={alumno} /> : null}
     </aside>
   )
 }

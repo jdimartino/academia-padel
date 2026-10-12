@@ -1,9 +1,9 @@
-import { useMemo, useState } from 'react'
+import { useEffect, useMemo, useState } from 'react'
 import { useAuth } from '../context/AuthContext'
 import { useAvisos } from '../context/AvisosContext'
 import { db } from '../firebase/config'
-import { cerrarClase } from '../firebase/db'
-import { PARAMETROS_DEFAULT, calcularCierre } from '../lib/cobros'
+import { cerrarClase, getCreditoAlumno } from '../firebase/db'
+import { PARAMETROS_DEFAULT, calcularCierre, previsualizarCreditoAlumno } from '../lib/cobros'
 import { aMinutos } from '../lib/agenda'
 import { formatearUSD, parsearUSD } from '../lib/dinero'
 import { esErrorDeNegocio } from '../lib/avisos'
@@ -29,6 +29,15 @@ function duracionDe(clase) {
   } catch {
     return 0
   }
+}
+
+/** "1 h 30 min" | "1 h" | "30 min" para el preview de crédito. */
+function horasTexto(minutos) {
+  const h = Math.floor(minutos / 60)
+  const min = minutos % 60
+  if (h && min) return `${h} h ${min} min`
+  if (h) return `${h} h`
+  return `${min} min`
 }
 
 /** Estado de asistencia inicial por alumno (todo presente salvo lo guardado). */
@@ -68,6 +77,28 @@ export default function CerrarClase({ clase, parametros, tenantId, onCerrado }) 
   const [motivoAjuste, setMotivoAjuste] = useState(clase.cobro?.motivoAjuste ?? 'otro')
   const [ocupado, setOcupado] = useState(false)
   const [error, setError] = useState('')
+  const [minutosCredito, setMinutosCredito] = useState({})
+
+  // Crédito disponible de cada alumno (solo lectura, para el preview).
+  const alumnosClave = (clase.alumnos ?? []).join(',')
+  useEffect(() => {
+    let activo = true
+    Promise.all(
+      (clase.alumnos ?? []).map((id) =>
+        getCreditoAlumno(db, tenantId, id)
+          .then((credito) => [id, credito.minutosDisponibles])
+          .catch(() => [id, 0]),
+      ),
+    ).then((pares) => {
+      if (activo) setMinutosCredito(Object.fromEntries(pares))
+    })
+    return () => {
+      activo = false
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [tenantId, alumnosClave])
+
+  const params = parametros ?? PARAMETROS_DEFAULT
 
   const editado = montoTexto.trim() !== inicialTexto
   const requiereMonto = seFactura && !clase.cobro
@@ -80,7 +111,6 @@ export default function CerrarClase({ clase, parametros, tenantId, onCerrado }) 
 
   // Preview: mismo cálculo puro que usa el cierre real.
   const preview = useMemo(() => {
-    const params = parametros ?? PARAMETROS_DEFAULT
     let cobro = clase.cobro ?? null
     if (editado || requiereMonto) {
       cobro = {
@@ -142,6 +172,25 @@ export default function CerrarClase({ clase, parametros, tenantId, onCerrado }) 
       <ul className="asistencia-lista">
         {alumnos.map((alumno) => {
           const cargo = cargosPorAlumno[alumno.id]
+          const estado = asistencias[alumno.id] ?? 'presente'
+          const disponible = minutosCredito[alumno.id] ?? 0
+          const creditoPreview = seFactura
+            ? previsualizarCreditoAlumno({
+                estado,
+                minutosClase: duracionDe(clase),
+                minutosDisponibles: disponible,
+                porcentajeFaltaSinAviso: params.porcentajeFaltaSinAviso,
+                faltaSinAvisoConCredito: params.faltaSinAvisoConCredito,
+              })
+            : null
+          let notaCredito = null
+          if (creditoPreview?.usaCredito) {
+            notaCredito = `Usa ${horasTexto(creditoPreview.minutos)} de crédito · quedan ${horasTexto(
+              Math.max(0, disponible - creditoPreview.minutos),
+            )}`
+          } else if (creditoPreview?.insuficiente && cargo) {
+            notaCredito = `Crédito insuficiente: se cobrará ${formatearUSD(cargo.montoCents)}`
+          }
           return (
             <li key={alumno.id} className="asistencia-fila">
               <span className="asistencia-nombre">
@@ -151,6 +200,7 @@ export default function CerrarClase({ clase, parametros, tenantId, onCerrado }) 
                     {cargo ? formatearUSD(cargo.montoCents) : 'sin cargo'}
                   </span>
                 ) : null}
+                {notaCredito ? <span className="cierre__credito">{notaCredito}</span> : null}
               </span>
               <div className="seg" role="group" aria-label={`Asistencia de ${alumno.nombre}`}>
                 {ESTADOS.map((opcion) => (

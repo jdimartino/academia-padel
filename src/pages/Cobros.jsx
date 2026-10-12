@@ -194,8 +194,12 @@ export default function Cobros() {
                       <span className="cobros__nombre">
                         {cargo.alumnoNombre}
                         <span className="cobros__meta">
-                          {cargo.concepto === 'falta_sin_aviso' ? 'Falta sin aviso' : 'Clase'} ·{' '}
-                          {formatearFechaLarga(cargo.fecha)}
+                          {cargo.concepto === 'falta_sin_aviso'
+                            ? 'Falta sin aviso'
+                            : cargo.concepto === 'mensualidad'
+                              ? (cargo.planNombre ?? 'Mensualidad')
+                              : 'Clase'}{' '}
+                          · {formatearFechaLarga(cargo.fecha)}
                         </span>
                       </span>
                       <span className="cobros__monto">{formatearUSD(cargo.montoCents)}</span>

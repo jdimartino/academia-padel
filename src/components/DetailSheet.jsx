@@ -13,6 +13,15 @@ import SelectorAlumnos from './SelectorAlumnos'
 
 const ESTADOS_CERRADOS = ['pendiente_cobro', 'cobrada', 'cancelada']
 
+/** Estados que tienen cierre (cargos / pago / movimientos de crédito). */
+const ESTADOS_CON_CIERRE = ['pendiente_cobro', 'cobrada']
+
+/** Etiquetas de los movimientos de crédito de un cierre. */
+const MOTIVOS_MOVIMIENTO_LABEL = {
+  clase: 'Crédito de la clase',
+  falta_sin_aviso: 'Crédito por falta sin aviso',
+}
+
 /** Etiquetas de los motivos de ajuste del precio de una clase. */
 const MOTIVOS_AJUSTE_LABEL = {
   descuento: 'Descuento',
@@ -59,6 +68,7 @@ export default function DetailSheet({
   const cancha = canchas.find((c) => c.id === clase.canchaId)
   const cupo = clase.cupo ?? 0
   const alumnos = alumnosDeClase(clase)
+  const nombrePorAlumno = Object.fromEntries(alumnos.map((a) => [a.id, a.nombre]))
 
   const esAdmin = rol === 'administrador'
   // El administrador cierra la clase (asistencia + cobro). Profesor, alumno y
@@ -81,9 +91,9 @@ export default function DetailSheet({
       .catch(() => setCierre(null))
   }, [tenantId, clase.id])
 
-  // Al abrir una clase CERRADA se leen sus cargos y su pago al profesor.
+  // Al abrir una clase CERRADA se leen sus cargos, su pago y sus créditos.
   useEffect(() => {
-    if (clase.estado === 'pendiente_cobro') recargarCierre()
+    if (ESTADOS_CON_CIERRE.includes(clase.estado)) recargarCierre()
   }, [clase.estado, recargarCierre])
 
   useCierreSeguro({
@@ -147,8 +157,10 @@ export default function DetailSheet({
     }
   }
 
-  const cargos = clase.estado === 'pendiente_cobro' ? (cierre?.cargos ?? []) : []
-  const pago = clase.estado === 'pendiente_cobro' ? (cierre?.pagoProfesor ?? null) : null
+  const conCierre = ESTADOS_CON_CIERRE.includes(clase.estado)
+  const cargos = conCierre ? (cierre?.cargos ?? []) : []
+  const pago = conCierre ? (cierre?.pagoProfesor ?? null) : null
+  const movimientos = conCierre ? (cierre?.movimientos ?? []).filter((m) => m.minutos > 0) : []
   const algoPagado = cargos.some((c) => c.estado === 'pagado') || pago?.estado === 'pagado'
 
   return (
@@ -249,7 +261,7 @@ export default function DetailSheet({
         />
       ) : null}
 
-      {clase.estado === 'pendiente_cobro' && (cargos.length || pago) ? (
+      {conCierre && (cargos.length || pago || movimientos.length) ? (
         <div className="sheet__slots">
           <h3 className="sheet__subtitulo">Cobros del cierre</h3>
           <ul className="cierre-lista">
@@ -266,6 +278,20 @@ export default function DetailSheet({
                   <span className={`badge badge--${cargo.estado}`}>
                     {ESTADO_COBRO_LABEL[cargo.estado] ?? cargo.estado}
                   </span>
+                </span>
+              </li>
+            ))}
+            {movimientos.map((movimiento) => (
+              <li key={movimiento.id} className="cierre-lista__fila">
+                <span className="cierre-lista__nombre">
+                  {nombrePorAlumno[movimiento.alumnoId] ?? movimiento.alumnoId}
+                  <span className="cierre-lista__concepto">
+                    {MOTIVOS_MOVIMIENTO_LABEL[movimiento.motivo] ?? 'Crédito'}
+                  </span>
+                </span>
+                <span className="cierre-lista__monto">
+                  {movimiento.minutos} min
+                  <span className="badge badge--pagado">Crédito</span>
                 </span>
               </li>
             ))}
