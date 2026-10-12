@@ -11,6 +11,7 @@
 
 import { bloquesDeClase, camposBusqueda, nombreCompleto, resolverAsignacion } from '../src/firebase/db.js'
 import { horarioDelDia } from '../src/lib/agenda.js'
+import { PARAMETROS_DEFAULT, PERFILES_COBRO_DEFAULT } from '../src/lib/cobros.js'
 import { sumarDias } from '../src/lib/fechas.js'
 
 const PROJECT_ID = process.env.FIREBASE_PROJECT_ID ?? 'academia-padel-jdm'
@@ -162,6 +163,8 @@ async function crearClaseEnSeed(datos) {
     horaInicio: datos.horaInicio,
     horaFin: datos.horaFin,
     bloques: bloques.map((b) => b.id),
+    // Snapshot de cobro (opcional): mismo modelo que guarda `crearClase`.
+    cobro: datos.cobro ?? null,
     creadoPor: 'seed',
     creadoEn,
   }
@@ -215,6 +218,15 @@ const SEDES = [
     id: 'traki',
     nombre: 'Traki',
     canchas: 5,
+    // Tarifa por hora en CENTAVOS de USD, por perfil. Traki tiene todas.
+    tarifas: {
+      individual: 4000,
+      pareja: 4500,
+      tres: 5000,
+      cuatro: 5500,
+      corporativo: 6000,
+      especial: 6500,
+    },
     horario: {
       0: franja(7.5, 15.5),
       1: franja(7.5, 15.5),
@@ -229,6 +241,7 @@ const SEDES = [
     id: 'une',
     nombre: 'UNE',
     canchas: 2,
+    tarifas: { individual: 4500, pareja: 5000, tres: 5500, cuatro: 6000 },
     horario: {
       0: franja(7, 23),
       1: franja(7, 23),
@@ -243,6 +256,8 @@ const SEDES = [
     id: 'santa-rosa',
     nombre: 'Santa Rosa',
     canchas: 4,
+    // Sede SIN tarifa de corporativo ni especial: ejercita "sin tarifa".
+    tarifas: { individual: 5000, pareja: 5500, tres: 6000, cuatro: 6500 },
     horario: {
       0: franja(9, 21),
       1: franja(9, 21),
@@ -257,6 +272,8 @@ const SEDES = [
     id: 'capital',
     nombre: 'Capital',
     canchas: 4,
+    // Sede con MUY pocas tarifas: casi todo se carga a mano.
+    tarifas: { individual: 5500, cuatro: 7000 },
     horario: {
       0: franja(8, 22),
       1: franja(8, 22),
@@ -677,6 +694,9 @@ async function main() {
       activa: true,
       orden: SEDES.indexOf(sede),
       horario: sede.horario,
+      // Tarifas por perfil (centavos por hora). El seed NO escribe perfiles con
+      // tarifa 0: una clave ausente ya significa "sin tarifa".
+      tarifas: sede.tarifas,
     })
     for (let i = 1; i <= sede.canchas; i += 1) {
       await setDoc(`${tenant}/sedes/${sede.id}/canchas/c${i}`, {
@@ -692,7 +712,45 @@ async function main() {
     `· ${SEDES.length} sedes (${SEDES.map((sede) => `${sede.nombre} ${sede.canchas}`).join(', ')}) y ${totalCanchas} canchas activas`,
   )
 
-  // La tarifa por hora queda SIN DEFINIR: no se escribe ningún campo de tarifa.
+  /*
+   * Perfiles de cobro: los defaults con `id` fijo (los mismos que reconoce la
+   * app) y uno EXTRA inactivo para ejercitar el listado de inactivos y la
+   * reactivación en Configuración → Cobros.
+   */
+  const PERFILES_SEED = [
+    ...PERFILES_COBRO_DEFAULT.map((perfil) => ({ ...perfil, activo: true })),
+    {
+      id: 'clinica',
+      nombre: 'Clínica',
+      personas: null,
+      modo: 'por_persona',
+      activo: false,
+      orden: 7,
+    },
+  ]
+  for (const perfil of PERFILES_SEED) {
+    const { id, ...datos } = perfil
+    await setDoc(`${tenant}/perfilesCobro/${id}`, {
+      ...datos,
+      creadoPor: 'seed',
+      creadoEn: new Date(),
+    })
+  }
+  console.log(`· ${PERFILES_SEED.length} perfiles de cobro (${PERFILES_SEED.length - 1} activos + 1 inactivo)`)
+
+  /*
+   * Parámetros de la academia (business rules). Se siembran con los defaults
+   * del modelo; `vencimientoCreditoDias` queda en null (= no vence).
+   */
+  await setDoc(`${tenant}/config/parametros`, {
+    ...PARAMETROS_DEFAULT,
+    actualizadoPor: 'seed',
+    actualizadoEn: new Date(),
+  })
+  console.log('· Parámetros de la academia (config/parametros)')
+
+  // La tarifa por hora de los PROFESORES queda SIN DEFINIR (el pago se
+  // configura en `config/parametros.pagoProfesor`, no en la ficha).
   for (const profesor of PROFESORES) {
     const { id, ...ficha } = profesor
     await setDoc(`${tenant}/profesores/${id}`, ficha)
@@ -737,6 +795,15 @@ async function main() {
     categoriaGrupo: 'adulto',
     alumnosIds: ['a1'],
     estado: 'reservada',
+    cobro: {
+      perfilCobroId: 'cuatro',
+      modo: 'total',
+      tarifaHoraCents: 5500,
+      montoEstandarCents: 5500,
+      montoCents: 5500,
+      ajustado: false,
+      motivoAjuste: null,
+    },
   })
 
   // Reserva futura con categoría de grupo: la grilla la muestra como
@@ -756,6 +823,15 @@ async function main() {
     categoriaGrupo: 'infantil',
     alumnosIds: ['a1'],
     estado: 'reservada',
+    cobro: {
+      perfilCobroId: 'cuatro',
+      modo: 'total',
+      tarifaHoraCents: 5500,
+      montoEstandarCents: 5500,
+      montoCents: 5500,
+      ajustado: false,
+      motivoAjuste: null,
+    },
   })
 
   // Antes era "fija" (serieId): las series recurrentes están fuera de alcance,
@@ -778,6 +854,16 @@ async function main() {
       { alumnoId: 'a2', estado: 'ausente_sin_aviso', motivo: 'enfermedad', registradoPor: 'seed', registradoEn: new Date() },
     ],
     estado: 'pendiente_cobro',
+    // Cobro AJUSTADO a mano: ejercita el badge "Descuento" en el detalle.
+    cobro: {
+      perfilCobroId: 'cuatro',
+      modo: 'total',
+      tarifaHoraCents: 5500,
+      montoEstandarCents: 5500,
+      montoCents: 4000,
+      ajustado: true,
+      motivoAjuste: 'descuento',
+    },
   })
 
   // Clase de 90 min que ARRANCA A Y MEDIA (11:30-13:00): ocupa 3 bloques de 30
@@ -799,6 +885,16 @@ async function main() {
     categoriaGrupo: 'junior',
     alumnosIds: ['a1', 'a2'],
     estado: 'reservada',
+    // Pareja, 90 min a $45.00/h → 4500 × 90/60 = 6750 centavos.
+    cobro: {
+      perfilCobroId: 'pareja',
+      modo: 'total',
+      tarifaHoraCents: 4500,
+      montoEstandarCents: 6750,
+      montoCents: 6750,
+      ajustado: false,
+      motivoAjuste: null,
+    },
   })
 
   const periodo = diaRelativo(0).slice(0, 7)
