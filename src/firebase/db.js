@@ -52,6 +52,7 @@ import {
 import {
   ALERTA_DIAS_MAX,
   AUSENCIA_HORAS_MAX,
+  FRECUENCIAS_PLAN,
   LIMITE_NOMBRE_PERFIL,
   METODOS_PAGO,
   MODOS_COBRO,
@@ -63,18 +64,29 @@ import {
   VENCIMIENTO_DIAS_MAX,
   alertaCobroValida,
   calcularCierre,
+  consumirCreditos,
   duracionesValidas,
   enteroEnRango,
+  estadoLote,
+  faltaConCreditoValida,
+  frecuenciaPlanValida,
   leerParametros,
+  lotesUsables,
+  minutosDisponibles,
+  minutosPlanValidos,
   modoValido,
   motivoValido,
   pagoProfesorValido,
   pagoSinAvisoValido,
   personasValidas,
+  precioMensualidad,
+  precioPlanValido,
+  previsualizarCreditoAlumno,
   repartoAusenciaValido,
   vencimientoValido,
 } from '../lib/cobros.js'
 import { LIMITE_MONTO_CENTS, LIMITE_TARIFA_CENTS, centsValidos } from '../lib/dinero.js'
+import { sumarDias } from '../lib/fechas.js'
 
 /**
  * Granularidad de la ocupación: 30 minutos. La definición vive en
@@ -739,6 +751,15 @@ const refPagoProfesor = (db, tenantId, pagoId) =>
 const coleccionCargos = (db, tenantId) => collection(db, 'academias', tenantId, 'cargos')
 const coleccionPagosProfesor = (db, tenantId) =>
   collection(db, 'academias', tenantId, 'pagosProfesor')
+const coleccionPlanesAlumno = (db, tenantId) =>
+  collection(db, 'academias', tenantId, 'planesAlumno')
+const refPlanAlumno = (db, tenantId, planId) =>
+  doc(db, 'academias', tenantId, 'planesAlumno', planId)
+const coleccionCreditos = (db, tenantId) => collection(db, 'academias', tenantId, 'creditos')
+const refCredito = (db, tenantId, creditoId) =>
+  doc(db, 'academias', tenantId, 'creditos', creditoId)
+const refMovimientoCredito = (db, tenantId, movimientoId) =>
+  doc(db, 'academias', tenantId, 'movimientosCredito', movimientoId)
 
 /* --------------------------------------------------------------------- */
 /* Lecturas                                                               */
@@ -1360,6 +1381,8 @@ export function validarParametros(entrada) {
     'restringirCategoriaPorFranja',
     'repartoAusenciaAvisada',
     'pagoProfesorSiTodosFaltanSinAviso',
+    'faltaSinAvisoConCredito',
+    'creditoRequierePago',
   ])
   for (const clave of Object.keys(d)) {
     if (!conocidos.has(clave)) {
@@ -1421,6 +1444,17 @@ export function validarParametros(entrada) {
       `pagoProfesorSiTodosFaltanSinAviso debe ser ${PAGOS_SIN_AVISO.join(' | ')}`,
     )
   }
+  const faltaCredito =
+    d.faltaSinAvisoConCredito ?? PARAMETROS_DEFAULT.faltaSinAvisoConCredito
+  if (!faltaConCreditoValida(faltaCredito)) {
+    throw new CobroInvalidoError(
+      `faltaSinAvisoConCredito debe ser descuenta_proporcional | descuenta_completo | cobra_aparte`,
+    )
+  }
+  const creditoRequierePago = d.creditoRequierePago ?? PARAMETROS_DEFAULT.creditoRequierePago
+  if (typeof creditoRequierePago !== 'boolean') {
+    throw new CobroInvalidoError('creditoRequierePago debe ser booleano')
+  }
 
   return {
     avisoAusenciaHoras: aviso,
@@ -1433,6 +1467,8 @@ export function validarParametros(entrada) {
     restringirCategoriaPorFranja: restringir,
     repartoAusenciaAvisada: reparto,
     pagoProfesorSiTodosFaltanSinAviso: pagoSinAviso,
+    faltaSinAvisoConCredito: faltaCredito,
+    creditoRequierePago,
   }
 }
 
@@ -2445,9 +2481,87 @@ function duracionDeClase(d) {
 }
 
 /**
+ * Lotes de crédito de un alumno, leídos FUERA de una transacción (el SDK web
+ * no admite queries dentro). Acotado por tenant + alumno + limit (50). Es la
+ * pre-lectura que `cerrarClase` revalida con `tx.get`.
+ */
+async function leerLotesDeAlumno(db, tenantId, alumnoId) {
+  const q = query(
+    coleccionCreditos(db, tenantId),
+    where('alumnoId', '==', alumnoId),
+    limit(LIMITE_CREDITOS_ALUMNO),
+  )
+  const snap = await getDocs(q)
+  return snap.docs.map((d) => ({ id: d.id, ...d.data() }))
+}
+
+/** Tope de lotes que se listan de un alumno. */
+export const LIMITE_CREDITOS_ALUMNO = 50
+
+/**
+ * ¿El cierre de una clase está saldado? Todos sus cargos (los que existen) y su
+ * pago están `pagado` o `anulado`. `cargoPagadoId`/`pagoPagado` permiten tratar
+ * como pagado el documento que se acaba de marcar en la misma transacción
+ * (que todavía se leyó como `pendiente`).
+ */
+function cierreSaldado({ cargos = [], pago = null, cargoPagadoId = null, pagoPagado = false } = {}) {
+  const cargosOk = cargos.every(
+    (cargo) =>
+      !cargo ||
+      cargo.estado === 'pagado' ||
+      cargo.estado === 'anulado' ||
+      cargo.id === cargoPagadoId,
+  )
+  const pagoOk = pagoPagado || !pago || pago.estado === 'pagado' || pago.estado === 'anulado'
+  return cargosOk && pagoOk
+}
+
+/**
+ * Lee el estado del cierre de una clase dentro de una transacción, SIN queries:
+ * el documento de la clase, sus cargos deterministas (`${claseId}_${alumnoId}`)
+ * y su pago (`pagoProfesor/{claseId}`). Devuelve `null` si la clase no existe.
+ * Todos los `tx.get` van antes de cualquier escritura.
+ */
+async function leerEstadoCierreTx(tx, db, tenantId, claseId) {
+  const claseSnap = await tx.get(refClase(db, tenantId, claseId))
+  if (!claseSnap.exists()) return null
+  const alumnos = claseSnap.data().alumnos ?? []
+  const [cargosSnaps, pagoSnap] = await Promise.all([
+    Promise.all(alumnos.map((alumnoId) => tx.get(refCargo(db, tenantId, `${claseId}_${alumnoId}`)))),
+    tx.get(refPagoProfesor(db, tenantId, claseId)),
+  ])
+  return {
+    clase: claseSnap.data(),
+    cargos: cargosSnaps.map((s) => (s.exists() ? { id: s.id, ...s.data() } : null)),
+    pago: pagoSnap.exists() ? { id: pagoSnap.id, ...pagoSnap.data() } : null,
+  }
+}
+
+/**
+ * Sincroniza el estado de una clase cerrada a `cobrada` cuando ya no queda nada
+ * por cobrar (todos los cargos y el pago en `pagado`/`anulado`). Se llama dentro
+ * de la transacción de marcar pagado, con TODAS las lecturas ya hechas.
+ */
+function sincronizarClaseCobrada(
+  tx,
+  db,
+  tenantId,
+  claseId,
+  estado,
+  { cargoPagadoId = null, pagoPagado = false } = {},
+) {
+  if (!estado || !estado.clase || estado.clase.estado !== 'pendiente_cobro') return false
+  if (!cierreSaldado({ cargos: estado.cargos, pago: estado.pago, cargoPagadoId, pagoPagado })) {
+    return false
+  }
+  tx.update(refClase(db, tenantId, claseId), { estado: 'cobrada' })
+  return true
+}
+
+/**
  * Cierra una clase: registra la asistencia y, en la MISMA transacción, genera
- * los cargos de los alumnos y el pago del profesor (Phase 4). Reemplaza a
- * `registrarAsistencia` (abajo queda como atajo sin cobro).
+ * los cargos de los alumnos y el pago del profesor (Phase 4), consumiendo el
+ * crédito prepago de los alumnos cuando corresponde (Phase 5).
  *
  * `datos`: `{ asistencias, seFactura = true, montoCents = null, motivoAjuste = null }`.
  * - `asistencias`: exactamente una por alumno asignado, con los estados del enum.
@@ -2456,17 +2570,28 @@ function duracionDeClase(d) {
  * - `montoCents`: monto MANUAL de la clase. Es obligatorio cuando la clase no
  *   tiene `cobro` y se factura; con `motivoAjuste` (`otro` por defecto).
  *
+ * Crédito (Phase 5), ANTES de crear el cargo de cada alumno (ver
+ * `previsualizarCreditoAlumno`, la misma regla pura que usa la UI):
+ * - `presente` con crédito suficiente → descuenta los minutos de la clase (FIFO
+ *   entre lotes), escribe el movimiento y NO crea cargo.
+ * - `presente` sin crédito suficiente → cargo normal y advertencia
+ *   `credito_insuficiente` (sin consumo parcial).
+ * - `ausente_sin_aviso` → según `faltaSinAvisoConCredito`: descuenta los minutos
+ *   (proporcional o completo) si alcanza; si no, cae al cargo normal;
+ *   `cobra_aparte` = siempre cargo normal.
+ * - `ausente_avisada` o `seFactura: false` → sin descuento.
+ *
  * Guardas (las mismas de la asistencia): solo una clase `reservada`, no antes
  * de `horaFin`, sin alumnos ajenos, sin doble cierre. Los IDs son deterministas
- * (`${claseId}_${alumnoId}` para los cargos y `${claseId}` para el pago), así
- * que un reintento nunca duplica.
+ * (`${claseId}_${alumnoId}` para cargos y movimientos, `${claseId}` para el
+ * pago), así que un reintento nunca duplica.
  *
- * El estado final es `pendiente_cobro` (misma máquina de estados) y `facturada`
- * marca si se generó dinero. `anularCierre` la devuelve a `reservada`.
+ * El estado final es `pendiente_cobro` (o `cobrada` si no quedó nada por
+ * cobrar). `anularCierre` la devuelve a `reservada`.
  *
- * Phase 5 (planes mensuales y créditos): acá es donde un crédito del alumno
- * debe aplicarse ANTES de crear su cargo (descontar del `montoCents` del cargo
- * o no crearlo si el crédito cubre todo). Todavía NO se implementa.
+ * Las lecturas de lotes se hacen FUERA de la transacción (el SDK web no admite
+ * queries dentro) y se revalidan con `tx.get` dentro: si los minutos cambiaron,
+ * se cae limpiamente al cargo normal.
  */
 export async function cerrarClase(db, tenantId, claseId, datos = {}, opciones = {}) {
   const { uid = null, ahora = new Date() } = opciones
@@ -2488,6 +2613,15 @@ export async function cerrarClase(db, tenantId, claseId, datos = {}, opciones = 
   const claseRef = refClase(db, tenantId, claseId)
   const parametrosRef = refParametros(db, tenantId)
   let resultado = null
+
+  // Pre-lectura (fuera de la transacción): los alumnos asignados y sus lotes
+  // son CANDIDATOS. Dentro de la transacción se revalidan con tx.get.
+  const clasePrevia = await getDoc(claseRef)
+  const alumnosPrevios = clasePrevia.exists() ? (clasePrevia.data().alumnos ?? []) : []
+  const lotesPorAlumno = {}
+  for (const alumnoId of alumnosPrevios) {
+    lotesPorAlumno[alumnoId] = await leerLotesDeAlumno(db, tenantId, alumnoId)
+  }
 
   await runTransaction(db, async (tx) => {
     const [snap, snapParametros] = await Promise.all([
@@ -2552,35 +2686,139 @@ export async function cerrarClase(db, tenantId, claseId, datos = {}, opciones = 
     }
 
     const parametros = leerParametros(snapParametros.exists() ? snapParametros.data() : null)
+    const duracionMin = duracionDeClase(d)
     const cierre = calcularCierre({
       cobro,
-      duracionMin: duracionDeClase(d),
+      duracionMin,
       asistencias,
       parametros,
       seFactura,
     })
 
+    // --- Créditos: lecturas (antes de cualquier escritura) -------------
+    // Reunir todos los lotes candidatos del grupo y leerlos con tx.get, más el
+    // estado de sus cargos (para `creditoRequierePago`). Se revalida el saldo
+    // real dentro de la transacción.
+    const lotesTodos = []
+    const idsUnicos = new Set()
+    for (const alumnoId of d.alumnos ?? []) {
+      for (const lote of lotesPorAlumno[alumnoId] ?? []) {
+        if (idsUnicos.has(lote.id)) continue
+        idsUnicos.add(lote.id)
+        lotesTodos.push(lote)
+      }
+    }
+    const snapsLotes = {}
+    const idsLotes = [...idsUnicos]
+    const lecturasLotes = idsLotes.map((id) => tx.get(refCredito(db, tenantId, id)))
+    const idsCargosCredito = new Set(
+      lotesTodos.map((lote) => lote.cargoId).filter(Boolean),
+    )
+    const lecturasCargos = [...idsCargosCredito].map((id) => tx.get(refCargo(db, tenantId, id)))
+    const [snapsLotesArr, snapsCargosArr] = await Promise.all([
+      Promise.all(lecturasLotes),
+      Promise.all(lecturasCargos),
+    ])
+    idsLotes.forEach((id, i) => {
+      if (snapsLotesArr[i].exists()) snapsLotes[id] = { id, ...snapsLotesArr[i].data() }
+    })
+    const cargoEstado = {}
+    ;[...idsCargosCredito].forEach((id, i) => {
+      if (snapsCargosArr[i].exists()) cargoEstado[id] = snapsCargosArr[i].data().estado
+    })
+
+    const esCortesia = cobro != null && cobro.montoCents === 0 && cobro.motivoAjuste === 'cortesia'
+    const facturable = cierre.resumen.facturable
+
+    // Decisión por alumno + consumo FIFO.
     const nombrePorId = {}
     ;(d.alumnos ?? []).forEach((id, i) => {
       nombrePorId[id] = (d.alumnoNombres ?? [])[i] ?? id
     })
 
-    const cargos = cierre.cargos.map((cargo) => ({
-      id: `${claseId}_${cargo.alumnoId}`,
-      doc: {
-        claseId,
-        alumnoId: cargo.alumnoId,
-        alumnoNombre: nombrePorId[cargo.alumnoId] ?? cargo.alumnoId,
-        sedeId: d.sedeId,
-        fecha: d.fecha,
-        concepto: cargo.concepto,
-        montoCents: cargo.montoCents,
-        estado: 'pendiente',
-        pagadoEn: null,
-        metodoPago: null,
-        creadoEn: Timestamp.fromDate(ahora),
-      },
-    }))
+    const cubiertos = new Set()
+    const movimientos = []
+    const actualizacionesLotes = {}
+    const advertencias = []
+    if (facturable && !esCortesia) {
+      for (const registro of asistencias) {
+        const alumnoId = registro.alumnoId
+        const lotesAlumno = (lotesPorAlumno[alumnoId] ?? [])
+          .map((lote) => {
+            const vigente = snapsLotes[lote.id]
+            if (!vigente) return null
+            const pagado = !parametros.creditoRequierePago
+              ? true
+              : vigente.cargoId
+                ? cargoEstado[vigente.cargoId] === 'pagado'
+                : false
+            return { ...vigente, cargoPagado: pagado }
+          })
+          .filter(Boolean)
+        const usables = lotesUsables(lotesAlumno, d.fecha, {
+          creditoRequierePago: parametros.creditoRequierePago,
+        })
+        const disponibles = usables.reduce((total, lote) => total + minutosDisponibles(lote), 0)
+        const preview = previsualizarCreditoAlumno({
+          estado: registro.estado,
+          minutosClase: duracionMin,
+          minutosDisponibles: disponibles,
+          porcentajeFaltaSinAviso: parametros.porcentajeFaltaSinAviso,
+          faltaSinAvisoConCredito: parametros.faltaSinAvisoConCredito,
+        })
+        if (!preview.usaCredito) {
+          if (preview.insuficiente) {
+            advertencias.push({ alumnoId, motivo: 'credito_insuficiente' })
+          }
+          continue
+        }
+        const { asignaciones, faltante } = consumirCreditos(usables, preview.minutos)
+        if (faltante > 0) {
+          // Cambió el saldo entre la pre-lectura y la transacción: se cobra normal.
+          advertencias.push({ alumnoId, motivo: 'credito_insuficiente' })
+          continue
+        }
+        cubiertos.add(alumnoId)
+        movimientos.push({
+          id: `${claseId}_${alumnoId}`,
+          doc: {
+            claseId,
+            alumnoId,
+            minutos: preview.minutos,
+            asignaciones,
+            motivo: preview.motivo,
+            creadoEn: Timestamp.fromDate(ahora),
+          },
+        })
+        for (const asignacion of asignaciones) {
+          const anterior = actualizacionesLotes[asignacion.creditoId] ?? {
+            minutosUsados: snapsLotes[asignacion.creditoId]?.minutosUsados ?? 0,
+            minutosComprados: snapsLotes[asignacion.creditoId]?.minutosComprados ?? 0,
+          }
+          anterior.minutosUsados += asignacion.minutos
+          actualizacionesLotes[asignacion.creditoId] = anterior
+        }
+      }
+    }
+
+    const cargos = cierre.cargos
+      .filter((cargo) => !cubiertos.has(cargo.alumnoId))
+      .map((cargo) => ({
+        id: `${claseId}_${cargo.alumnoId}`,
+        doc: {
+          claseId,
+          alumnoId: cargo.alumnoId,
+          alumnoNombre: nombrePorId[cargo.alumnoId] ?? cargo.alumnoId,
+          sedeId: d.sedeId,
+          fecha: d.fecha,
+          concepto: cargo.concepto,
+          montoCents: cargo.montoCents,
+          estado: 'pendiente',
+          pagadoEn: null,
+          metodoPago: null,
+          creadoEn: Timestamp.fromDate(ahora),
+        },
+      }))
 
     const pagoProfesor =
       cierre.pagoProfesor.montoCents > 0
@@ -2591,16 +2829,23 @@ export async function cerrarClase(db, tenantId, claseId, datos = {}, opciones = 
             sedeId: d.sedeId,
             fecha: d.fecha,
             montoCents: cierre.pagoProfesor.montoCents,
-            base: { modo: parametros.pagoProfesor.modo, minutos: duracionDeClase(d) },
+            base: { modo: parametros.pagoProfesor.modo, minutos: duracionMin },
             estado: 'pendiente',
             pagadoEn: null,
             metodoPago: null,
           }
         : null
 
+    // Nada por cobrar (todo cubierto por crédito y sin pago al profesor) →
+    // la clase nace directamente `cobrada`. `seFactura: false` (fuerza mayor)
+    // NO entra acá: se conserva el comportamiento histórico `pendiente_cobro`
+    // con `facturada: false`.
+    const nadaACobrar = seFactura && cargos.length === 0 && pagoProfesor === null
+    const estadoFinal = nadaACobrar ? 'cobrada' : 'pendiente_cobro'
+
     tx.update(claseRef, {
       asistencias,
-      estado: 'pendiente_cobro',
+      estado: estadoFinal,
       facturada: Boolean(seFactura),
       cobro,
       actualizadoPor: uid,
@@ -2612,13 +2857,25 @@ export async function cerrarClase(db, tenantId, claseId, datos = {}, opciones = 
     if (pagoProfesor) {
       tx.set(refPagoProfesor(db, tenantId, claseId), pagoProfesor)
     }
+    for (const movimiento of movimientos) {
+      tx.set(refMovimientoCredito(db, tenantId, movimiento.id), movimiento.doc)
+    }
+    for (const [loteId, datosLote] of Object.entries(actualizacionesLotes)) {
+      const agotado = datosLote.minutosUsados >= datosLote.minutosComprados
+      tx.update(refCredito(db, tenantId, loteId), {
+        minutosUsados: datosLote.minutosUsados,
+        estado: agotado ? 'agotado' : 'activo',
+      })
+    }
 
     resultado = {
       claseId,
-      estado: 'pendiente_cobro',
+      estado: estadoFinal,
       facturada: Boolean(seFactura),
       cargos: cargos.map((cargo) => ({ id: cargo.id, ...cargo.doc })),
       pagoProfesor: pagoProfesor ? { id: claseId, ...pagoProfesor } : null,
+      movimientos: movimientos.map((m) => ({ id: m.id, ...m.doc })),
+      advertencias,
       resumen: cierre.resumen,
     }
   })
@@ -2639,6 +2896,8 @@ export async function registrarAsistencia(db, tenantId, claseId, asistencias, op
 /**
  * Marca un cargo como pagado (pago COMPLETO; los parciales quedan fuera de
  * alcance). `metodoPago` ∈ METODOS_PAGO. Idempotente si ya estaba pagado.
+ * Si el cargo es de una clase, vuelve a evaluar su estado y la deja `cobrada`
+ * cuando ya no queda nada por cobrar (Phase 5).
  */
 export async function marcarCargoPagado(db, tenantId, cargoId, datos = {}, opciones = {}) {
   const { ahora = new Date() } = opciones
@@ -2650,23 +2909,32 @@ export async function marcarCargoPagado(db, tenantId, cargoId, datos = {}, opcio
   await runTransaction(db, async (tx) => {
     const snap = await tx.get(ref)
     if (!snap.exists()) throw new ClaseInvalidaError(`El cargo ${cargoId} no existe`)
-    const estado = snap.data().estado
+    const data = snap.data()
+    const estado = data.estado
     if (estado === 'pagado') return
     if (estado !== 'pendiente') {
       throw new CobroInvalidoError(`Solo se cobra un cargo pendiente (estado "${estado}")`)
     }
+    // Todas las lecturas antes de las escrituras.
+    const claseId = data.claseId ?? null
+    const estadoClase = claseId ? await leerEstadoCierreTx(tx, db, tenantId, claseId) : null
+
     tx.update(ref, {
       estado: 'pagado',
       pagadoEn: Timestamp.fromDate(ahora),
       metodoPago,
     })
+    if (claseId) {
+      sincronizarClaseCobrada(tx, db, tenantId, claseId, estadoClase, { cargoPagadoId: cargoId })
+    }
   })
   return { cargoId, estado: 'pagado' }
 }
 
 /**
  * Marca el pago de una clase al profesor como pagado (completo). Espejo de
- * `marcarCargoPagado` sobre `pagosProfesor/{claseId}`.
+ * `marcarCargoPagado` sobre `pagosProfesor/{claseId}`: al pagarlo, la clase
+ * pasa a `cobrada` si ya no queda nada por cobrar.
  */
 export async function marcarPagoProfesorPagado(db, tenantId, pagoId, datos = {}, opciones = {}) {
   const { ahora = new Date() } = opciones
@@ -2678,25 +2946,31 @@ export async function marcarPagoProfesorPagado(db, tenantId, pagoId, datos = {},
   await runTransaction(db, async (tx) => {
     const snap = await tx.get(ref)
     if (!snap.exists()) throw new ClaseInvalidaError(`El pago ${pagoId} no existe`)
-    const estado = snap.data().estado
+    const data = snap.data()
+    const estado = data.estado
     if (estado === 'pagado') return
     if (estado !== 'pendiente') {
       throw new CobroInvalidoError(`Solo se paga un pago pendiente (estado "${estado}")`)
     }
+    const claseId = data.claseId ?? pagoId
+    const estadoClase = await leerEstadoCierreTx(tx, db, tenantId, claseId)
+
     tx.update(ref, {
       estado: 'pagado',
       pagadoEn: Timestamp.fromDate(ahora),
       metodoPago,
     })
+    sincronizarClaseCobrada(tx, db, tenantId, claseId, estadoClase, { pagoPagado: true })
   })
   return { pagoId, estado: 'pagado' }
 }
 
 /**
  * Anula el cierre de una clase: marca `anulado` sus cargos y su pago (si no
- * están pagados) y devuelve la clase a `reservada` para poder cerrarla otra
- * vez. Se rechaza si algún cargo o el pago ya está `pagado` (primero hay que
- * deshacer el cobro).
+ * están pagados), revierte los movimientos de crédito (devuelve los minutos a
+ * sus lotes) y vuelve la clase a `reservada` para poder cerrarla otra vez. Se
+ * rechaza si algún cargo o el pago ya está `pagado` (primero hay que deshacer el
+ * cobro). Acepta clases `pendiente_cobro` o `cobrada` (si nada está pagado).
  */
 export async function anularCierre(db, tenantId, claseId, opciones = {}) {
   const { uid = null, ahora = new Date() } = opciones
@@ -2706,17 +2980,17 @@ export async function anularCierre(db, tenantId, claseId, opciones = {}) {
   await runTransaction(db, async (tx) => {
     const snap = await tx.get(claseRef)
     if (!snap.exists()) throw new ClaseInvalidaError(`La clase ${claseId} no existe`)
-    if (snap.data().estado !== 'pendiente_cobro') {
-      throw new ClaseInvalidaError(
-        `Solo se anula una clase cerrada (estado "${snap.data().estado}")`,
-      )
+    const clase = snap.data()
+    if (clase.estado !== 'pendiente_cobro' && clase.estado !== 'cobrada') {
+      throw new ClaseInvalidaError(`Solo se anula una clase cerrada (estado "${clase.estado}")`)
     }
     // El SDK web NO deja consultar (Query) dentro de una transacción, así que
-    // los cargos se leen con sus IDs deterministas (`${claseId}_${alumnoId}`).
-    const cargoIds = (snap.data().alumnos ?? []).map((alumnoId) => `${claseId}_${alumnoId}`)
-    const [snapCargos, snapPago] = await Promise.all([
-      Promise.all(cargoIds.map((cargoId) => tx.get(refCargo(db, tenantId, cargoId)))),
+    // cargos y movimientos se leen con sus IDs deterministas.
+    const alumnos = clase.alumnos ?? []
+    const [snapCargos, snapPago, snapMovimientos] = await Promise.all([
+      Promise.all(alumnos.map((a) => tx.get(refCargo(db, tenantId, `${claseId}_${a}`)))),
       tx.get(pagoRef),
+      Promise.all(alumnos.map((a) => tx.get(refMovimientoCredito(db, tenantId, `${claseId}_${a}`)))),
     ])
     const pagado =
       snapCargos.some((d) => d.exists() && d.data().estado === 'pagado') ||
@@ -2726,12 +3000,44 @@ export async function anularCierre(db, tenantId, claseId, opciones = {}) {
         'No se puede anular el cierre: hay un cobro o pago ya registrado. Deshazlo primero.',
       )
     }
+
+    // Asignaciones de crédito a revertir (lecturas antes de escrituras).
+    const asignaciones = []
+    snapMovimientos.forEach((d) => {
+      if (!d.exists()) return
+      for (const asignacion of d.data().asignaciones ?? []) asignaciones.push(asignacion)
+    })
+    const loteIds = [...new Set(asignaciones.map((a) => a.creditoId))]
+    const snapLotes = await Promise.all(
+      loteIds.map((id) => tx.get(refCredito(db, tenantId, id))),
+    )
+
+    // Escrituras.
     snapCargos.forEach((d) => {
       if (d.exists() && d.data().estado === 'pendiente') tx.update(d.ref, { estado: 'anulado' })
     })
     if (snapPago.exists() && snapPago.data().estado === 'pendiente') {
       tx.update(pagoRef, { estado: 'anulado' })
     }
+    snapLotes.forEach((d, i) => {
+      if (!d.exists()) return
+      const loteId = loteIds[i]
+      const devolver = asignaciones
+        .filter((a) => a.creditoId === loteId)
+        .reduce((total, a) => total + a.minutos, 0)
+      const usados = Math.max(0, (d.data().minutosUsados ?? 0) - devolver)
+      const comprados = d.data().minutosComprados ?? 0
+      tx.update(refCredito(db, tenantId, loteId), {
+        minutosUsados: usados,
+        estado: usados >= comprados ? 'agotado' : 'activo',
+      })
+    })
+    snapMovimientos.forEach((d) => {
+      if (!d.exists()) return
+      // Se revierte SIN borrar (las reglas no permiten delete): el movimiento
+      // queda en cero y un nuevo cierre lo reescribe con su id determinista.
+      tx.update(d.ref, { minutos: 0, asignaciones: [] })
+    })
     tx.update(claseRef, {
       estado: 'reservada',
       facturada: false,
@@ -2794,18 +3100,25 @@ export async function listarPagosProfesorPendientes(db, tenantId, opciones = {})
 }
 
 /**
- * Cierre de una clase para el detalle: sus cargos (todos los estados) y el pago
- * al profesor, o `null`. 2 lecturas.
+ * Cierre de una clase para el detalle: sus cargos (todos los estados), los
+ * movimientos de crédito (Phase 5) y el pago al profesor, o `null`. Acotado por
+ * clase; el gasto de los movimientos se filtra en el cliente.
  */
 export async function getCierreDeClase(db, tenantId, claseId) {
   const cargosQuery = query(coleccionCargos(db, tenantId), where('claseId', '==', claseId))
-  const [snapCargos, snapPago] = await Promise.all([
+  const movimientosQuery = query(
+    collection(db, 'academias', tenantId, 'movimientosCredito'),
+    where('claseId', '==', claseId),
+  )
+  const [snapCargos, snapPago, snapMovimientos] = await Promise.all([
     getDocs(cargosQuery),
     getDoc(refPagoProfesor(db, tenantId, claseId)),
+    getDocs(movimientosQuery),
   ])
   return {
     cargos: snapCargos.docs.map((d) => ({ id: d.id, ...d.data() })),
     pagoProfesor: snapPago.exists() ? { id: snapPago.id, ...snapPago.data() } : null,
+    movimientos: snapMovimientos.docs.map((d) => ({ id: d.id, ...d.data() })),
   }
 }
 
@@ -2832,4 +3145,310 @@ export async function getMiMembresia(db, tenantId, uid) {
 export async function getBloque(db, tenantId, bloqueId) {
   const snap = await getDoc(refBloque(db, tenantId, bloqueId))
   return snap.exists() ? { id: snap.id, ...snap.data() } : null
+}
+
+/* --------------------------------------------------------------------- */
+/* Planes de alumno y créditos (Phase 5)                                   */
+/* --------------------------------------------------------------------- */
+
+/** Tope de planes que se listan de un alumno. */
+export const LIMITE_PLANES_ALUMNO = 50
+
+/**
+ * Clave normalizada de un representante para detectar hermanos: nombre+apellidos
+ * plegados (`normalizarBusqueda`, así "Ávila" == "avila") y el teléfono solo con
+ * dígitos. Devuelve `null` si no hay ni nombre ni teléfono.
+ */
+export function claveRepresentante(representante) {
+  if (!representante) return null
+  const nombre = normalizarBusqueda(
+    `${representante.nombre ?? ''} ${representante.apellidos ?? ''}`,
+  )
+  const telefono = String(representante.telefono ?? '').replace(/\D/g, '')
+  if (!nombre && !telefono) return null
+  return `${nombre}|${telefono}`
+}
+
+/**
+ * ¿Conviene sugerir el descuento de hermanos? PURA: un MENOR con representante
+ * identificable cuenta como hermano si OTRO menor ACTIVO comparte el mismo
+ * representante (misma clave normalizada nombre+teléfono). Es solo una
+ * sugerencia para la UI; quien decide es el administrador.
+ */
+export function sugerirDescuentoHermanos(alumno, alumnos = []) {
+  if (alumno?.tipo !== 'menor') return false
+  const clave = claveRepresentante(alumno.representante)
+  if (!clave) return false
+  return (alumnos ?? []).some(
+    (otro) =>
+      otro.id !== alumno.id &&
+      otro.tipo === 'menor' &&
+      otro.activo !== false &&
+      claveRepresentante(otro.representante) === clave,
+  )
+}
+
+/** Valida y normaliza los datos de un plan de alumno. `esMenor` habilita el descuento. */
+function validarPlanDatos(datos, { esMenor = false } = {}) {
+  const nombre = String(datos?.nombre ?? '').trim()
+  if (!nombre) throw new CobroInvalidoError('El plan necesita un nombre')
+  if (nombre.length > LIMITE_NOMBRE_PERFIL) {
+    throw new CobroInvalidoError(`El nombre del plan no puede superar ${LIMITE_NOMBRE_PERFIL} caracteres`)
+  }
+  const frecuencia = datos?.frecuencia ?? 'mensual'
+  if (!frecuenciaPlanValida(frecuencia)) {
+    throw new CobroInvalidoError(`Frecuencia de plan inválida "${frecuencia}". Permitidas: ${FRECUENCIAS_PLAN.join(', ')}`)
+  }
+  if (!minutosPlanValidos(datos?.minutosIncluidos)) {
+    throw new CobroInvalidoError(
+      `minutosIncluidos debe ser un entero mayor a 0 y múltiplo de ${MINUTOS_BLOQUE}`,
+    )
+  }
+  if (!precioPlanValido(datos?.precioCents)) {
+    throw new CobroInvalidoError(
+      `precioCents debe ser un entero de centavos mayor a 0 (hasta ${LIMITE_MONTO_CENTS})`,
+    )
+  }
+  const descuentoHermanos = Boolean(datos?.descuentoHermanos)
+  if (descuentoHermanos && !esMenor) {
+    throw new CobroInvalidoError('El descuento de hermanos solo aplica a alumnos menores')
+  }
+  return {
+    nombre,
+    frecuencia,
+    minutosIncluidos: datos.minutosIncluidos,
+    precioCents: datos.precioCents,
+    descuentoHermanos,
+  }
+}
+
+/** Plan ACTIVO de un alumno, o `null`. Acotado por alumno + activo + limit(2). */
+export async function getPlanActivo(db, tenantId, alumnoId) {
+  const q = query(
+    coleccionPlanesAlumno(db, tenantId),
+    where('alumnoId', '==', alumnoId),
+    where('activo', '==', true),
+    limit(2),
+  )
+  const snap = await getDocs(q)
+  return snap.docs.length ? { id: snap.docs[0].id, ...snap.docs[0].data() } : null
+}
+
+/** Planes de un alumno (activos e inactivos), más recientes primero. */
+export async function listarPlanesAlumno(db, tenantId, alumnoId) {
+  const q = query(
+    coleccionPlanesAlumno(db, tenantId),
+    where('alumnoId', '==', alumnoId),
+    limit(LIMITE_PLANES_ALUMNO),
+  )
+  const snap = await getDocs(q)
+  return snap.docs
+    .map((d) => ({ id: d.id, ...d.data() }))
+    .sort((a, b) => String(b.creadoEn?.seconds ?? 0).localeCompare(String(a.creadoEn?.seconds ?? 0)))
+}
+
+/**
+ * Crea un plan de alumno. Un alumno puede tener COMO MUCHO un plan activo.
+ * `planId` es opcional (lo usa el seed). El descuento de hermanos solo aplica a
+ * menores.
+ */
+export async function crearPlanAlumno(db, tenantId, datos = {}, opciones = {}) {
+  const { now = new Date(), planId = null } = opciones
+  const alumno = await getAlumno(db, tenantId, datos.alumnoId)
+  if (!alumno) throw new CobroInvalidoError(`El alumno ${datos.alumnoId} no existe`)
+  const activo = datos.activo ?? true
+  if (activo) {
+    const yaActivo = await getPlanActivo(db, tenantId, datos.alumnoId)
+    if (yaActivo && yaActivo.id !== planId) {
+      throw new CobroInvalidoError('El alumno ya tiene un plan activo')
+    }
+  }
+  const limpio = validarPlanDatos(datos, { esMenor: alumno.tipo === 'menor' })
+  const ref = planId ? refPlanAlumno(db, tenantId, planId) : doc(coleccionPlanesAlumno(db, tenantId))
+  await setDoc(ref, {
+    alumnoId: datos.alumnoId,
+    ...limpio,
+    activo: Boolean(activo),
+    creadoEn: Timestamp.fromDate(now),
+  })
+  return { planId: ref.id }
+}
+
+/** Actualiza un plan de alumno (merge validado). */
+export async function actualizarPlanAlumno(db, tenantId, planId, cambios = {}, opciones = {}) {
+  const { uid = null, now = new Date() } = opciones
+  const ref = refPlanAlumno(db, tenantId, planId)
+  const snap = await getDoc(ref)
+  if (!snap.exists()) throw new CobroInvalidoError(`El plan "${planId}" no existe`)
+  const actual = snap.data()
+  const alumno = await getAlumno(db, tenantId, actual.alumnoId)
+  const activo = cambios.activo !== undefined ? Boolean(cambios.activo) : actual.activo !== false
+  if (activo) {
+    const yaActivo = await getPlanActivo(db, tenantId, actual.alumnoId)
+    if (yaActivo && yaActivo.id !== planId) {
+      throw new CobroInvalidoError('El alumno ya tiene un plan activo')
+    }
+  }
+  const limpio = validarPlanDatos({ ...actual, ...cambios }, { esMenor: alumno?.tipo === 'menor' })
+  await updateDoc(ref, {
+    ...limpio,
+    activo,
+    actualizadoPor: uid,
+    actualizadoEn: Timestamp.fromDate(now),
+  })
+  return { planId }
+}
+
+/** Desactiva un plan de alumno (soft delete: los planes NUNCA se borran). */
+export async function desactivarPlanAlumno(db, tenantId, planId, opciones = {}) {
+  const { uid = null, now = new Date() } = opciones
+  const ref = refPlanAlumno(db, tenantId, planId)
+  const snap = await getDoc(ref)
+  if (!snap.exists()) throw new CobroInvalidoError(`El plan "${planId}" no existe`)
+  await updateDoc(ref, {
+    activo: false,
+    actualizadoPor: uid,
+    actualizadoEn: Timestamp.fromDate(now),
+  })
+  return { planId, activo: false }
+}
+
+/**
+ * Crédito de un alumno en `fecha` (por defecto HOY): todos los lotes con su
+ * estado EFECTIVO (el vencimiento es perezoso), los usables en orden FIFO y los
+ * vencidos, más el total disponible. Respeta `creditoRequierePago`.
+ */
+export async function getCreditoAlumno(db, tenantId, alumnoId, fecha = fechaHoyLocal(), opciones = {}) {
+  const parametros = opciones.creditoRequierePago === undefined
+    ? await getParametros(db, tenantId)
+    : null
+  const creditoRequierePago =
+    opciones.creditoRequierePago ?? parametros?.creditoRequierePago ?? false
+
+  const lotes = await leerLotesDeAlumno(db, tenantId, alumnoId)
+  const cargoIds = [...new Set(lotes.map((lote) => lote.cargoId).filter(Boolean))]
+  const cargoEstado = {}
+  await Promise.all(
+    cargoIds.map(async (cargoId) => {
+      const snap = await getDoc(refCargo(db, tenantId, cargoId))
+      if (snap.exists()) cargoEstado[cargoId] = snap.data().estado
+    }),
+  )
+  const conEstado = lotes.map((lote) => ({
+    ...lote,
+    cargoPagado: !creditoRequierePago
+      ? true
+      : lote.cargoId
+        ? cargoEstado[lote.cargoId] === 'pagado'
+        : false,
+  }))
+  const usables = lotesUsables(conEstado, fecha, { creditoRequierePago })
+  const vencidos = conEstado.filter(
+    (lote) =>
+      estadoLote(lote, fecha, { creditoRequierePago, cargoPagado: lote.cargoPagado }) === 'vencido',
+  )
+  const minutosDisponiblesTotal = usables.reduce(
+    (total, lote) => total + minutosDisponibles(lote),
+    0,
+  )
+  return {
+    lotes: conEstado,
+    usables,
+    vencidos,
+    minutosDisponibles: minutosDisponiblesTotal,
+    creditoRequierePago,
+  }
+}
+
+/** Días entre dos fechas "YYYY-MM-DD". */
+function sumarDiasISO(fecha, dias) {
+  return sumarDias(fecha, dias)
+}
+
+/**
+ * Compra (o renueva) el crédito del alumno a partir de su plan ACTIVO: crea el
+ * lote y su cargo de `mensualidad` (concepto `mensualidad`, `claseId: null`,
+ * `creditoId`) en UNA transacción. El precio es el del plan menos el descuento
+ * de hermanos si el plan lo tiene. El vencimiento sale de
+ * `parametros.vencimientoCreditoDias` (null = no vence).
+ */
+export async function comprarCredito(db, tenantId, alumnoId, opciones = {}) {
+  const { now = new Date() } = opciones
+  const alumno = await getAlumno(db, tenantId, alumnoId)
+  if (!alumno) throw new CobroInvalidoError(`El alumno ${alumnoId} no existe`)
+  const plan = await getPlanActivo(db, tenantId, alumnoId)
+  if (!plan) throw new CobroInvalidoError('El alumno no tiene un plan activo')
+  const parametros = await getParametros(db, tenantId)
+
+  const fecha = fechaHoyLocal(now)
+  const venceEn = parametros.vencimientoCreditoDias
+    ? sumarDiasISO(fecha, parametros.vencimientoCreditoDias)
+    : null
+  const montoCents = precioMensualidad(plan, parametros.descuentoHermanosPct)
+
+  const creditoRef = doc(coleccionCreditos(db, tenantId))
+  const cargoRef = refCargo(db, tenantId, `men_${creditoRef.id}`)
+  const planRef = refPlanAlumno(db, tenantId, plan.id)
+
+  await runTransaction(db, async (tx) => {
+    const planSnap = await tx.get(planRef)
+    if (!planSnap.exists() || planSnap.data().activo === false) {
+      throw new CobroInvalidoError('El alumno no tiene un plan activo')
+    }
+    tx.set(cargoRef, {
+      claseId: null,
+      alumnoId,
+      alumnoNombre: nombreCompleto(alumno),
+      sedeId: null,
+      fecha,
+      concepto: 'mensualidad',
+      creditoId: creditoRef.id,
+      planId: plan.id,
+      planNombre: plan.nombre,
+      montoCents,
+      estado: 'pendiente',
+      pagadoEn: null,
+      metodoPago: null,
+      creadoEn: Timestamp.fromDate(now),
+    })
+    tx.set(creditoRef, {
+      alumnoId,
+      planId: plan.id,
+      minutosComprados: plan.minutosIncluidos,
+      minutosUsados: 0,
+      inicio: fecha,
+      venceEn,
+      cargoId: cargoRef.id,
+      estado: 'activo',
+      creadoEn: Timestamp.fromDate(now),
+    })
+  })
+  return { creditoId: creditoRef.id, cargoId: cargoRef.id, montoCents, venceEn }
+}
+
+/**
+ * Anula un lote de crédito SIN usar (minutosUsados = 0) y su cargo, siempre que
+ * el cargo no esté `pagado`. Idempotente si ya estaba anulado.
+ */
+export async function anularCredito(db, tenantId, creditoId) {
+  const creditoRef = refCredito(db, tenantId, creditoId)
+  await runTransaction(db, async (tx) => {
+    const snap = await tx.get(creditoRef)
+    if (!snap.exists()) throw new CobroInvalidoError(`El lote "${creditoId}" no existe`)
+    const data = snap.data()
+    if (data.estado === 'anulado') return
+    if ((data.minutosUsados ?? 0) > 0) {
+      throw new CobroInvalidoError('No se anula un crédito que ya tiene minutos usados')
+    }
+    const cargoRef = data.cargoId ? refCargo(db, tenantId, data.cargoId) : null
+    const cargoSnap = cargoRef ? await tx.get(cargoRef) : null
+    if (cargoSnap?.exists() && cargoSnap.data().estado === 'pagado') {
+      throw new CobroInvalidoError('No se anula un crédito cuyo cargo ya está pagado')
+    }
+    tx.update(creditoRef, { estado: 'anulado' })
+    if (cargoSnap?.exists() && cargoSnap.data().estado === 'pendiente') {
+      tx.update(cargoRef, { estado: 'anulado' })
+    }
+  })
+  return { creditoId, estado: 'anulado' }
 }

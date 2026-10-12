@@ -37,7 +37,12 @@ import {
 } from '../src/lib/agenda.js'
 import { aISO, hoyISO } from '../src/lib/fechas.js'
 // Helpers puros de db.js: no tocan Firestore, así que se prueban acá sin emulador.
-import { claveNombreCancha, normalizarNombreCancha } from '../src/firebase/db.js'
+import {
+  claveNombreCancha,
+  claveRepresentante,
+  normalizarNombreCancha,
+  sugerirDescuentoHermanos,
+} from '../src/firebase/db.js'
 import {
   LIMITE_MONTO_CENTS,
   LIMITE_TARIFA_CENTS,
@@ -52,14 +57,26 @@ import {
   REPARTOS_AUSENCIA,
   alertaCobroValida,
   calcularCierre,
+  consumirCreditos,
   duracionesValidas,
+  estadoLote,
+  faltaConCreditoValida,
+  frecuenciaPlanValida,
   leerParametros,
+  lotesUsables,
+  loteVencido,
+  minutosDisponibles,
+  minutosFaltaSinAviso,
+  minutosPlanValidos,
   motivoValido,
   modoValido,
   pagoProfesorValido,
   pagoSinAvisoValido,
   perfilPorCupo,
   personasValidas,
+  precioMensualidad,
+  precioPlanValido,
+  previsualizarCreditoAlumno,
   recalcularCobro,
   repartirCents,
   repartoAusenciaValido,
@@ -1144,6 +1161,8 @@ describe('parámetros de la academia', () => {
       restringirCategoriaPorFranja: false,
       repartoAusenciaAvisada: 'absorbe_academia',
       pagoProfesorSiTodosFaltanSinAviso: 'completo',
+      faltaSinAvisoConCredito: 'descuenta_proporcional',
+      creditoRequierePago: false,
     })
   })
 
@@ -1400,5 +1419,210 @@ describe('constantes de cierre (Phase 4)', () => {
   it('exporta las listas de enums', () => {
     assert.deepEqual(REPARTOS_AUSENCIA, ['absorbe_academia', 'reparte_entre_presentes'])
     assert.deepEqual(PAGOS_SIN_AVISO, ['completo', 'proporcional_cobrado', 'nada'])
+  })
+})
+
+/* ------------------------------------------------------------------ */
+/* Phase 5: planes, créditos y hermanos                                */
+/* ------------------------------------------------------------------ */
+
+describe('parámetros de mensualidades', () => {
+  it('los defaults y validadores nuevos', () => {
+    assert.equal(PARAMETROS_DEFAULT.faltaSinAvisoConCredito, 'descuenta_proporcional')
+    assert.equal(PARAMETROS_DEFAULT.creditoRequierePago, false)
+    assert.equal(faltaConCreditoValida('descuenta_proporcional'), true)
+    assert.equal(faltaConCreditoValida('descuenta_completo'), true)
+    assert.equal(faltaConCreditoValida('cobra_aparte'), true)
+    assert.equal(faltaConCreditoValida('otra'), false)
+    assert.equal(frecuenciaPlanValida('mensual'), true)
+    assert.equal(frecuenciaPlanValida('semanal'), true)
+    assert.equal(frecuenciaPlanValida('diaria'), false)
+    assert.equal(minutosPlanValidos(60), true)
+    assert.equal(minutosPlanValidos(90), true)
+    assert.equal(minutosPlanValidos(0), false)
+    assert.equal(minutosPlanValidos(45), false)
+    assert.equal(precioPlanValido(4500), true)
+    assert.equal(precioPlanValido(0), false)
+  })
+
+  it('leerParametros rellena los nuevos y corrige los corruptos', () => {
+    const def = leerParametros(null)
+    assert.equal(def.faltaSinAvisoConCredito, 'descuenta_proporcional')
+    assert.equal(def.creditoRequierePago, false)
+    const leidos = leerParametros({
+      faltaSinAvisoConCredito: 'cobra_aparte',
+      creditoRequierePago: true,
+    })
+    assert.equal(leidos.faltaSinAvisoConCredito, 'cobra_aparte')
+    assert.equal(leidos.creditoRequierePago, true)
+    const corruptos = leerParametros({ faltaSinAvisoConCredito: 'x', creditoRequierePago: 'si' })
+    assert.equal(corruptos.faltaSinAvisoConCredito, 'descuenta_proporcional')
+    assert.equal(corruptos.creditoRequierePago, false)
+  })
+})
+
+describe('créditos: lotes, FIFO, vencimiento y consumo', () => {
+  const lote = (id, comprados, usados, extra = {}) => ({
+    id,
+    minutosComprados: comprados,
+    minutosUsados: usados,
+    inicio: '2026-01-01',
+    venceEn: null,
+    ...extra,
+  })
+
+  it('minutosDisponibles nunca es negativo', () => {
+    assert.equal(minutosDisponibles(lote('a', 60, 20)), 40)
+    assert.equal(minutosDisponibles(lote('a', 60, 90)), 0)
+    assert.equal(minutosDisponibles(null), 0)
+  })
+
+  it('loteVencido compara por fecha (el día de vencimiento todavía sirve)', () => {
+    const v = lote('a', 60, 0, { venceEn: '2026-03-10' })
+    assert.equal(loteVencido(v, '2026-03-09'), false)
+    assert.equal(loteVencido(v, '2026-03-10'), false)
+    assert.equal(loteVencido(v, '2026-03-11'), true)
+    assert.equal(loteVencido(lote('b', 60, 0), '2030-01-01'), false)
+  })
+
+  it('estadoLote: activo, agotado, vencido, anulado y bloqueado', () => {
+    assert.equal(estadoLote(lote('a', 60, 0), '2026-01-01'), 'activo')
+    assert.equal(estadoLote(lote('a', 60, 60), '2026-01-01'), 'agotado')
+    assert.equal(estadoLote(lote('a', 60, 0, { venceEn: '2026-01-01' }), '2026-01-02'), 'vencido')
+    assert.equal(estadoLote(lote('a', 60, 0, { estado: 'anulado' }), '2026-01-01'), 'anulado')
+    assert.equal(
+      estadoLote(lote('a', 60, 0), '2026-01-01', {
+        creditoRequierePago: true,
+        cargoPagado: false,
+      }),
+      'bloqueado',
+    )
+    assert.equal(
+      estadoLote(lote('a', 60, 0), '2026-01-01', {
+        creditoRequierePago: true,
+        cargoPagado: true,
+      }),
+      'activo',
+    )
+  })
+
+  it('lotesUsables ordena FIFO por vencimiento (null al final) y después inicio', () => {
+    const a = lote('a', 60, 0, { venceEn: '2026-05-01', inicio: '2026-02-01' })
+    const b = lote('b', 60, 0, { venceEn: '2026-04-01', inicio: '2026-03-01' })
+    const c = lote('c', 60, 0, { venceEn: null, inicio: '2026-01-01' })
+    const d = lote('d', 60, 0, { venceEn: null, inicio: '2026-01-02' })
+    assert.deepEqual(
+      lotesUsables([a, b, c, d], '2026-01-01').map((l) => l.id),
+      ['b', 'a', 'c', 'd'],
+    )
+    assert.deepEqual(lotesUsables([lote('x', 60, 60)], '2026-01-01'), [])
+  })
+
+  it('lotesUsables excluye los bloqueados cuando creditoRequierePago', () => {
+    const sinPagar = { ...lote('a', 60, 0), cargoPagado: false }
+    const pagado = { ...lote('b', 60, 0), cargoPagado: true }
+    assert.deepEqual(
+      lotesUsables([sinPagar, pagado], '2026-01-01', { creditoRequierePago: true }).map((l) => l.id),
+      ['b'],
+    )
+  })
+
+  it('consumirCreditos usa FIFO y reporta faltante', () => {
+    const a = lote('a', 60, 0, { venceEn: '2026-04-01' })
+    const b = lote('b', 60, 0, { venceEn: '2026-05-01' })
+    const ok = consumirCreditos([a, b], 90)
+    assert.deepEqual(ok.asignaciones, [
+      { creditoId: 'a', minutos: 60 },
+      { creditoId: 'b', minutos: 30 },
+    ])
+    assert.equal(ok.faltante, 0)
+    const falta = consumirCreditos([a], 90)
+    assert.equal(falta.faltante, 30)
+    assert.equal(consumirCreditos([a], 0).faltante, 0)
+  })
+
+  it('minutosFaltaSinAviso: proporcional (half-up), completo y cobra_aparte', () => {
+    assert.equal(minutosFaltaSinAviso(60, 50, 'descuenta_proporcional'), 30)
+    assert.equal(minutosFaltaSinAviso(90, 50, 'descuenta_proporcional'), 45)
+    assert.equal(minutosFaltaSinAviso(60, 33, 'descuenta_proporcional'), 20)
+    assert.equal(minutosFaltaSinAviso(60, 50, 'descuenta_completo'), 60)
+    assert.equal(minutosFaltaSinAviso(60, 50, 'cobra_aparte'), 0)
+  })
+
+  it('precioMensualidad aplica el descuento de hermanos (half-up)', () => {
+    assert.equal(precioMensualidad({ precioCents: 10000 }, 10), 10000)
+    assert.equal(precioMensualidad({ precioCents: 10000, descuentoHermanos: true }, 10), 9000)
+    assert.equal(precioMensualidad({ precioCents: 10000, descuentoHermanos: false }, 10), 10000)
+    assert.equal(precioMensualidad({ precioCents: 5000, descuentoHermanos: true }, 10), 4500)
+    assert.equal(precioMensualidad({ precioCents: 3333, descuentoHermanos: true }, 10), 3000)
+  })
+
+  it('previsualizarCreditoAlumno: presente, falta sin aviso y avisada', () => {
+    assert.deepEqual(
+      previsualizarCreditoAlumno({ estado: 'presente', minutosClase: 60, minutosDisponibles: 60 }),
+      { usaCredito: true, minutos: 60, motivo: 'clase', requiereCargo: false },
+    )
+    const insuficiente = previsualizarCreditoAlumno({
+      estado: 'presente',
+      minutosClase: 60,
+      minutosDisponibles: 30,
+    })
+    assert.equal(insuficiente.usaCredito, false)
+    assert.equal(insuficiente.requiereCargo, true)
+    assert.equal(insuficiente.insuficiente, true)
+
+    const proporcional = previsualizarCreditoAlumno({
+      estado: 'ausente_sin_aviso',
+      minutosClase: 60,
+      minutosDisponibles: 30,
+      porcentajeFaltaSinAviso: 50,
+    })
+    assert.deepEqual(proporcional, {
+      usaCredito: true,
+      minutos: 30,
+      motivo: 'falta_sin_aviso',
+      requiereCargo: false,
+    })
+
+    const aparte = previsualizarCreditoAlumno({
+      estado: 'ausente_sin_aviso',
+      minutosClase: 60,
+      minutosDisponibles: 600,
+      porcentajeFaltaSinAviso: 50,
+      faltaSinAvisoConCredito: 'cobra_aparte',
+    })
+    assert.equal(aparte.usaCredito, false)
+    assert.equal(aparte.requiereCargo, true)
+
+    const avisada = previsualizarCreditoAlumno({
+      estado: 'ausente_avisada',
+      minutosClase: 60,
+      minutosDisponibles: 600,
+    })
+    assert.equal(avisada.usaCredito, false)
+    assert.equal(avisada.requiereCargo, false)
+  })
+})
+
+describe('hermanos: clave del representante y sugerencia', () => {
+  it('claveRepresentante normaliza nombre (sin tildes ni mayúsculas) y teléfono', () => {
+    assert.equal(
+      claveRepresentante({ nombre: 'Ávila', apellidos: 'Ñáñez', telefono: '+58 414-111-2222' }),
+      claveRepresentante({ nombre: 'avila', apellidos: 'nanez', telefono: '584141112222' }),
+    )
+    assert.equal(claveRepresentante(null), null)
+    assert.equal(claveRepresentante({}), null)
+  })
+
+  it('sugerirDescuentoHermanos: solo menores activos con el mismo representante', () => {
+    const rep = { nombre: 'Teresa', apellidos: 'Ríos', telefono: '+58 414 111 2222' }
+    const menor = { id: 'a2', tipo: 'menor', activo: true, representante: rep }
+    const hermano = { id: 'a12', tipo: 'menor', activo: true, representante: { ...rep, nombre: 'teresa' } }
+    const adulto = { id: 'a1', tipo: 'adulto', activo: true, representante: null }
+    assert.equal(sugerirDescuentoHermanos(menor, [menor, hermano]), true)
+    assert.equal(sugerirDescuentoHermanos(menor, [menor, adulto]), false)
+    assert.equal(sugerirDescuentoHermanos(adulto, [menor]), false)
+    assert.equal(sugerirDescuentoHermanos(menor, [menor, { ...hermano, activo: false }]), false)
+    assert.equal(sugerirDescuentoHermanos(menor, [menor]), false)
   })
 })

@@ -82,6 +82,14 @@
       ]
     },
     {
+      "collectionGroup": "planesAlumno",
+      "queryScope": "COLLECTION",
+      "fields": [
+        { "fieldPath": "alumnoId", "order": "ASCENDING" },
+        { "fieldPath": "activo", "order": "ASCENDING" }
+      ]
+    },
+    {
       "collectionGroup": "alumnos",
       "queryScope": "COLLECTION",
       "fields": [

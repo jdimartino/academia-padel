@@ -115,6 +115,20 @@ export const CONCEPTOS_CARGO = ['clase', 'falta_sin_aviso', 'mensualidad', 'otro
 /** Métodos de pago aceptados (pago completo; los parciales quedan fuera de alcance). */
 export const METODOS_PAGO = ['efectivo', 'zelle', 'pago_movil', 'transferencia', 'otro']
 
+/* ----- Phase 5: planes de alumno y créditos (mensualidades) ---------- */
+
+/** Qué hace una falta sin aviso cuando el alumno tiene crédito disponible. */
+export const FALTAS_CON_CREDITO = ['descuenta_proporcional', 'descuenta_completo', 'cobra_aparte']
+
+/** Frecuencia de un plan de alumno. */
+export const FRECUENCIAS_PLAN = ['semanal', 'mensual']
+
+/** Estados de un lote de crédito (el vencimiento se evalúa de forma perezosa). */
+export const ESTADOS_CREDITO = ['activo', 'agotado', 'vencido', 'anulado']
+
+/** Motivos de un movimiento de crédito. */
+export const MOTIVOS_MOVIMIENTO = ['clase', 'falta_sin_aviso']
+
 export const AUSENCIA_HORAS_MAX = 168
 export const PORCENTAJE_MAX = 100
 export const VENCIMIENTO_DIAS_MAX = 365
@@ -138,6 +152,8 @@ export const PARAMETROS_DEFAULT = Object.freeze({
   restringirCategoriaPorFranja: false,
   repartoAusenciaAvisada: 'absorbe_academia',
   pagoProfesorSiTodosFaltanSinAviso: 'completo',
+  faltaSinAvisoConCredito: 'descuenta_proporcional',
+  creditoRequierePago: false,
 })
 
 /** Entero dentro de [min, max] inclusive. */
@@ -201,6 +217,29 @@ export function pagoSinAvisoValido(valor) {
   return PAGOS_SIN_AVISO.includes(valor)
 }
 
+/** ¿La regla de una falta sin aviso con crédito es válida? */
+export function faltaConCreditoValida(valor) {
+  return FALTAS_CON_CREDITO.includes(valor)
+}
+
+/** ¿La frecuencia de un plan es válida? */
+export function frecuenciaPlanValida(valor) {
+  return FRECUENCIAS_PLAN.includes(valor)
+}
+
+/**
+ * ¿Los minutos incluidos de un plan son válidos? Entero > 0 y múltiplo de
+ * MINUTOS_BLOQUE (30).
+ */
+export function minutosPlanValidos(minutos) {
+  return Number.isInteger(minutos) && minutos > 0 && minutos % MINUTOS_BLOQUE === 0
+}
+
+/** ¿El precio de un plan es válido? Entero de centavos > 0 dentro del tope. */
+export function precioPlanValido(cents) {
+  return centsValidos(cents, LIMITE_MONTO_CENTS) && cents > 0
+}
+
 /**
  * Lector TOLERANTE de los parámetros: rellena campo por campo con el default
  * cuando falta o está corrupto. Nunca lanza. Es lo que usan la agenda y el
@@ -243,6 +282,13 @@ export function leerParametros(doc) {
     pagoProfesorSiTodosFaltanSinAviso: pagoSinAvisoValido(d.pagoProfesorSiTodosFaltanSinAviso)
       ? d.pagoProfesorSiTodosFaltanSinAviso
       : PARAMETROS_DEFAULT.pagoProfesorSiTodosFaltanSinAviso,
+    faltaSinAvisoConCredito: faltaConCreditoValida(d.faltaSinAvisoConCredito)
+      ? d.faltaSinAvisoConCredito
+      : PARAMETROS_DEFAULT.faltaSinAvisoConCredito,
+    creditoRequierePago:
+      typeof d.creditoRequierePago === 'boolean'
+        ? d.creditoRequierePago
+        : PARAMETROS_DEFAULT.creditoRequierePago,
   }
 }
 
@@ -391,6 +437,186 @@ export function calcularCierre({ cobro, duracionMin, asistencias = [], parametro
       montoClaseCents,
       totalCargosCents,
       baseProfesorCents: base,
+      facturable,
+      duracionMin: Number(duracionMin) || 0,
     },
   }
+}
+
+/* ------------------------------------------------------------------ */
+/* Créditos (Phase 5): lotes, FIFO, vencimiento y consumo perezoso      */
+/* ------------------------------------------------------------------ */
+
+/** Redondeo half-up a minutos enteros; 0 si no es finito o <= 0. */
+function redondearMinutos(valor) {
+  return Number.isFinite(valor) && valor > 0 ? Math.round(valor) : 0
+}
+
+/** Minutos disponibles de un lote (comprados - usados, nunca negativo). */
+export function minutosDisponibles(lote) {
+  const comprados = Number.isInteger(lote?.minutosComprados) ? lote.minutosComprados : 0
+  const usados = Number.isInteger(lote?.minutosUsados) ? lote.minutosUsados : 0
+  return Math.max(0, comprados - usados)
+}
+
+/**
+ * ¿El lote venció en `fecha`? El vencimiento es perezoso: no hay Functions ni
+ * jobs, se evalúa al leer y al consumir. Un lote vence al terminar `venceEn`:
+ * la fecha de vencimiento TODAVÍA se puede usar (`fecha > venceEn`).
+ */
+export function loteVencido(lote, fecha) {
+  return Boolean(lote?.venceEn) && String(fecha ?? '') > lote.venceEn
+}
+
+/**
+ * Estado EFECTIVO de un lote (el vencimiento se calcula, no se guarda).
+ * Devuelve 'activo' | 'agotado' | 'vencido' | 'anulado' | 'bloqueado':
+ * `bloqueado` = hay minutos pero `creditoRequierePago` y su cargo no está al
+ * día. Un lote anulado nunca vuelve.
+ */
+export function estadoLote(lote, fecha, { creditoRequierePago = false, cargoPagado = true } = {}) {
+  if (!lote || lote.estado === 'anulado') return 'anulado'
+  if (loteVencido(lote, fecha)) return 'vencido'
+  if (minutosDisponibles(lote) <= 0) return 'agotado'
+  if (creditoRequierePago && !cargoPagado) return 'bloqueado'
+  return 'activo'
+}
+
+/**
+ * Orden FIFO de los lotes: primero por vencimiento (`venceEn` ascendente, los
+ * que NO vencen van al final) y después por `inicio`. El id desempata.
+ */
+export function compararLotesFIFO(a, b) {
+  const av = a?.venceEn ?? null
+  const bv = b?.venceEn ?? null
+  if (av !== bv) {
+    if (av === null) return 1
+    if (bv === null) return -1
+    return av < bv ? -1 : 1
+  }
+  const ai = a?.inicio ?? ''
+  const bi = b?.inicio ?? ''
+  if (ai !== bi) return ai < bi ? -1 : 1
+  return String(a?.id ?? '').localeCompare(String(b?.id ?? ''))
+}
+
+/** Lotes usables en `fecha` (estado efectivo 'activo'), en orden FIFO. */
+export function lotesUsables(lotes, fecha, opciones = {}) {
+  const { creditoRequierePago = false } = opciones
+  return (lotes ?? [])
+    .filter(
+      (lote) =>
+        estadoLote(lote, fecha, {
+          creditoRequierePago,
+          cargoPagado: lote.cargoPagado === true,
+        }) === 'activo',
+    )
+    .sort(compararLotesFIFO)
+}
+
+/**
+ * Consume `minutos` de una lista de lotes USABLES (en orden FIFO, el que ya
+ * tenga la lista ordenada o no da igual: se ordena acá). NO consume parcial:
+ * si no alcanza, devuelve el `faltante` y las asignaciones parciales calculadas
+ * (el caller decide si las descarta). Devuelve `{ asignaciones, faltante }`.
+ */
+export function consumirCreditos(lotes, minutos) {
+  const pedido = Number.isFinite(minutos) ? Math.max(0, Math.trunc(minutos)) : 0
+  const asignaciones = []
+  let restante = pedido
+  for (const lote of [...(lotes ?? [])].sort(compararLotesFIFO)) {
+    if (restante <= 0) break
+    const disponible = minutosDisponibles(lote)
+    const usar = Math.min(disponible, restante)
+    if (usar > 0) {
+      asignaciones.push({ creditoId: lote.id, minutos: usar })
+      restante -= usar
+    }
+  }
+  return { asignaciones, faltante: restante }
+}
+
+/**
+ * Minutos que descuenta una falta sin aviso de un crédito, según la regla:
+ * `descuenta_completo` = la duración de la clase; `descuenta_proporcional` =
+ * `porcentajeFaltaSinAviso` % de la duración (half-up a minutos enteros);
+ * `cobra_aparte` = 0 (no hay descuento: se cobra el cargo normal de Phase 4).
+ */
+export function minutosFaltaSinAviso(duracionMin, porcentaje, modo = 'descuenta_proporcional') {
+  const dur = Number.isFinite(duracionMin) ? Math.max(0, duracionMin) : 0
+  if (modo === 'descuenta_completo') return dur
+  if (modo === 'cobra_aparte') return 0
+  const pct = enteroEnRango(porcentaje, 0, PORCENTAJE_MAX) ? porcentaje : 0
+  return redondearMinutos((dur * pct) / 100)
+}
+
+/**
+ * Precio de la mensualidad de un plan: `precioCents` menos el descuento de
+ * hermanos (`pct`, half-up) cuando el plan lo tiene activado.
+ */
+export function precioMensualidad(plan, descuentoHermanosPct = 0) {
+  const base = centsValidos(plan?.precioCents, LIMITE_MONTO_CENTS) ? plan.precioCents : 0
+  if (!plan?.descuentoHermanos) return base
+  const pct = enteroEnRango(descuentoHermanosPct, 0, PORCENTAJE_MAX) ? descuentoHermanosPct : 0
+  if (pct <= 0) return base
+  return base - redondearCents((base * pct) / 100)
+}
+
+/**
+ * Preview PURO de lo que le va a pasar al crédito de un alumno al cerrar la
+ * clase. La usa la UI (el diálogo de cierre) y es la MISMA regla que aplica
+ * `cerrarClase` en db.js:
+ *
+ * - `presente` con crédito suficiente → usa `minutosClase` de crédito y NO
+ *   genera cargo.
+ * - `presente` sin crédito suficiente → cargo normal (`requiereCargo`, avisa
+ *   `insuficiente`).
+ * - `ausente_sin_aviso` → según `faltaSinAvisoConCredito`: descuenta minutos
+ *   (proporcional o completo) si alcanza; si no, cae al cargo normal; o
+ *   `cobra_aparte` = siempre cargo normal.
+ * - `ausente_avisada` u otros estados → sin descuento ni cargo.
+ *
+ * Devuelve `{ usaCredito, minutos, motivo, requiereCargo, insuficiente? }`.
+ */
+export function previsualizarCreditoAlumno({
+  estado,
+  minutosClase = 0,
+  minutosDisponibles: disponibles = 0,
+  porcentajeFaltaSinAviso = 0,
+  faltaSinAvisoConCredito = 'descuenta_proporcional',
+} = {}) {
+  const clase = Number.isFinite(minutosClase) ? Math.max(0, minutosClase) : 0
+  const credito = Number.isFinite(disponibles) ? Math.max(0, disponibles) : 0
+
+  if (estado === 'presente') {
+    if (clase > 0 && credito >= clase) {
+      return { usaCredito: true, minutos: clase, motivo: 'clase', requiereCargo: false }
+    }
+    return { usaCredito: false, minutos: 0, motivo: 'clase', requiereCargo: true, insuficiente: true }
+  }
+
+  if (estado === 'ausente_sin_aviso') {
+    if (faltaSinAvisoConCredito === 'cobra_aparte') {
+      return {
+        usaCredito: false,
+        minutos: 0,
+        motivo: 'falta_sin_aviso',
+        requiereCargo: true,
+        cobraAparte: true,
+      }
+    }
+    const minutos = minutosFaltaSinAviso(clase, porcentajeFaltaSinAviso, faltaSinAvisoConCredito)
+    if (minutos > 0 && credito >= minutos) {
+      return { usaCredito: true, minutos, motivo: 'falta_sin_aviso', requiereCargo: false }
+    }
+    return {
+      usaCredito: false,
+      minutos: 0,
+      motivo: 'falta_sin_aviso',
+      requiereCargo: true,
+      insuficiente: true,
+    }
+  }
+
+  return { usaCredito: false, minutos: 0, motivo: null, requiereCargo: false }
 }

@@ -199,14 +199,20 @@ service cloud.firestore {
         && (!data.keys().hasAny(['repartoAusenciaAvisada'])
             || data.repartoAusenciaAvisada in ['absorbe_academia', 'reparte_entre_presentes'])
         && (!data.keys().hasAny(['pagoProfesorSiTodosFaltanSinAviso'])
-            || data.pagoProfesorSiTodosFaltanSinAviso in ['completo', 'proporcional_cobrado', 'nada']);
+            || data.pagoProfesorSiTodosFaltanSinAviso in ['completo', 'proporcional_cobrado', 'nada'])
+        && (!data.keys().hasAny(['faltaSinAvisoConCredito'])
+            || data.faltaSinAvisoConCredito in ['descuenta_proporcional', 'descuenta_completo', 'cobra_aparte'])
+        && (!data.keys().hasAny(['creditoRequierePago'])
+            || data.creditoRequierePago is bool);
     }
 
     // --- Cobros generados al cerrar la clase (Phase 4) -------------------
 
     // Cargo de un alumno: campos exactos del modelo, enums y centavos enteros
     // >= 0. Los IDs son deterministas (`claseId_alumnoId`), así que un reintento
-    // reescribe el mismo documento. No se borran: se anulan.
+    // reescribe el mismo documento. No se borran: se anulan. Un cargo `clase` o
+    // `falta_sin_aviso` cuelga de una clase; un cargo `mensualidad` (Phase 5) NO
+    // cuelga de una clase: `claseId: null` y `creditoId` obligatorio.
     function cargoValido(data) {
       return data.keys().hasOnly([
             'claseId',
@@ -219,12 +225,16 @@ service cloud.firestore {
             'estado',
             'pagadoEn',
             'metodoPago',
-            'creadoEn'
+            'creadoEn',
+            'creditoId',
+            'planId',
+            'planNombre'
           ])
-        && data.claseId is string
+        && data.keys().hasAny(['claseId'])
+        && (data.claseId == null || data.claseId is string)
         && data.alumnoId is string
         && data.alumnoNombre is string
-        && data.sedeId is string
+        && (data.sedeId == null || data.sedeId is string)
         && data.fecha is string
         && data.concepto in ['clase', 'falta_sin_aviso', 'mensualidad', 'otro']
         && data.montoCents is int
@@ -235,7 +245,14 @@ service cloud.firestore {
         && (!data.keys().hasAny(['metodoPago'])
             || data.metodoPago == null
             || data.metodoPago in ['efectivo', 'zelle', 'pago_movil', 'transferencia', 'otro'])
-        && (!data.keys().hasAny(['creadoEn']) || data.creadoEn == null || data.creadoEn is timestamp);
+        && (!data.keys().hasAny(['creadoEn']) || data.creadoEn == null || data.creadoEn is timestamp)
+        && (!data.keys().hasAny(['creditoId']) || data.creditoId == null || data.creditoId is string)
+        && (!data.keys().hasAny(['planId']) || data.planId == null || data.planId is string)
+        && (!data.keys().hasAny(['planNombre']) || data.planNombre == null || data.planNombre is string)
+        && (data.concepto != 'mensualidad'
+            || (data.claseId == null
+                && data.keys().hasAny(['creditoId'])
+                && data.creditoId is string));
     }
 
     // Pago al profesor por una clase: campos exactos, `base` con modo/minutos.
@@ -270,6 +287,89 @@ service cloud.firestore {
         && (!data.keys().hasAny(['metodoPago'])
             || data.metodoPago == null
             || data.metodoPago in ['efectivo', 'zelle', 'pago_movil', 'transferencia', 'otro']);
+    }
+
+    // --- Mensualidades y créditos (Phase 5) ------------------------------
+
+    // Plan de alumno: campos exactos, frecuencia del enum, minutos incluidos
+    // enteros > 0 y múltiplo de 30, precio entero > 0. Un lote de crédito y un
+    // movimiento: misma idea, con sus propios enums y enteros >= 0.
+    function planAlumnoValido(data) {
+      return data.keys().hasOnly([
+            'alumnoId',
+            'nombre',
+            'frecuencia',
+            'minutosIncluidos',
+            'precioCents',
+            'descuentoHermanos',
+            'activo',
+            'creadoEn',
+            'actualizadoEn',
+            'actualizadoPor'
+          ])
+        && data.alumnoId is string
+        && data.nombre is string
+        && data.nombre.size() > 0
+        && data.nombre.size() <= 100
+        && data.frecuencia in ['semanal', 'mensual']
+        && data.minutosIncluidos is int
+        && data.minutosIncluidos > 0
+        && data.minutosIncluidos % 30 == 0
+        && data.precioCents is int
+        && data.precioCents > 0
+        && data.precioCents <= 1000000
+        && data.descuentoHermanos is bool
+        && data.activo is bool
+        && (!data.keys().hasAny(['creadoEn']) || data.creadoEn == null || data.creadoEn is timestamp)
+        && (!data.keys().hasAny(['actualizadoEn']) || data.actualizadoEn == null || data.actualizadoEn is timestamp)
+        && (!data.keys().hasAny(['actualizadoPor']) || data.actualizadoPor == null || data.actualizadoPor is string);
+    }
+
+    function creditoValido(data) {
+      return data.keys().hasOnly([
+            'alumnoId',
+            'planId',
+            'minutosComprados',
+            'minutosUsados',
+            'inicio',
+            'venceEn',
+            'cargoId',
+            'estado',
+            'creadoEn'
+          ])
+        && data.alumnoId is string
+        && data.planId is string
+        && data.minutosComprados is int
+        && data.minutosComprados > 0
+        && data.minutosUsados is int
+        && data.minutosUsados >= 0
+        && data.inicio is string
+        && (data.venceEn == null || data.venceEn is string)
+        && data.cargoId is string
+        && data.estado in ['activo', 'agotado', 'vencido', 'anulado']
+        && (!data.keys().hasAny(['creadoEn']) || data.creadoEn == null || data.creadoEn is timestamp);
+    }
+
+    // Las asignaciones de un movimiento (lote → minutos) no se pueden validar
+    // elemento a elemento en las reglas: se acota el tamaño y la forma fina la
+    // valida db.js.
+    function movimientoCreditoValido(data) {
+      return data.keys().hasOnly([
+            'claseId',
+            'alumnoId',
+            'minutos',
+            'asignaciones',
+            'motivo',
+            'creadoEn'
+          ])
+        && data.claseId is string
+        && data.alumnoId is string
+        && data.minutos is int
+        && data.minutos >= 0
+        && data.asignaciones is list
+        && data.asignaciones.size() <= 8
+        && data.motivo in ['clase', 'falta_sin_aviso']
+        && (!data.keys().hasAny(['creadoEn']) || data.creadoEn == null || data.creadoEn is timestamp);
     }
 
     // Snapshot de cobro de una clase: opcional. Si viene, es un mapa con
@@ -404,6 +504,30 @@ service cloud.firestore {
         allow delete: if false;
       }
 
+      // Mensualidades (Phase 5): planes de alumno, lotes de crédito y sus
+      // movimientos de consumo. Solo admin, con la forma del modelo validada y
+      // SIN borrado (se desactivan / se anulan / se revierten en cero).
+      match /planesAlumno/{planId} {
+        allow read: if esAdmin(tenantId);
+        allow create, update: if esAdmin(tenantId) && planAlumnoValido(request.resource.data);
+        allow delete: if false;
+      }
+
+      match /creditos/{creditoId} {
+        allow read: if esAdmin(tenantId);
+        allow create, update: if esAdmin(tenantId) && creditoValido(request.resource.data);
+        allow delete: if false;
+      }
+
+      match /movimientosCredito/{movimientoId} {
+        allow read: if esAdmin(tenantId);
+        allow create, update: if esAdmin(tenantId) && movimientoCreditoValido(request.resource.data);
+        allow delete: if false;
+      }
+
+      // OBSOLETO / NO PLANIFICADO: la colección `pagos` (en_revision/aprobado)
+      // y `liquidaciones` se conservan por compatibilidad de datos, pero el
+      // modelo de pago vigente es el cargo (`cargos`) con `estado`/`metodoPago`.
       match /pagos/{pagoId} {
         allow read, write: if esAdmin(tenantId);
       }

@@ -1019,3 +1019,191 @@ describe('[F4] parámetros de cierre: enums validados', () => {
     )
   })
 })
+
+/* --------------------------------------------------------------------- */
+/* [F5] Mensualidades: planes, créditos, movimientos y cargo mensualidad   */
+/* --------------------------------------------------------------------- */
+
+const planAlumno = (extra = {}) => ({
+  alumnoId: 'a1',
+  nombre: 'Mensual 8 horas',
+  frecuencia: 'mensual',
+  minutosIncluidos: 480,
+  precioCents: 8000,
+  descuentoHermanos: false,
+  activo: true,
+  ...extra,
+})
+
+const credito = (extra = {}) => ({
+  alumnoId: 'a1',
+  planId: 'p1',
+  minutosComprados: 480,
+  minutosUsados: 0,
+  inicio: '2026-10-01',
+  venceEn: null,
+  cargoId: 'men_x',
+  estado: 'activo',
+  ...extra,
+})
+
+const movimientoCredito = (extra = {}) => ({
+  claseId: 'c1',
+  alumnoId: 'a1',
+  minutos: 60,
+  asignaciones: [{ creditoId: 'cred', minutos: 60 }],
+  motivo: 'clase',
+  ...extra,
+})
+
+describe('[F5] planesAlumno: solo admin, forma validada, sin borrado', () => {
+  it('administrador CREA un plan válido → ALLOW', async () => {
+    await assertSucceeds(
+      setDoc(doc(as(UID.adminT1), 'academias', T1, 'planesAlumno', 'p1'), planAlumno()),
+    )
+  })
+
+  it('profesor CREA un plan → DENY', async () => {
+    await assertFails(
+      setDoc(doc(as(UID.profT1), 'academias', T1, 'planesAlumno', 'p1'), planAlumno()),
+    )
+  })
+
+  it('administrador de t2 CREA un plan en t1 → DENY (otro tenant)', async () => {
+    await assertFails(
+      setDoc(doc(as(UID.adminT2), 'academias', T1, 'planesAlumno', 'p1'), planAlumno()),
+    )
+  })
+
+  it('frecuencia, minutos o precio inválidos → DENY', async () => {
+    await assertFails(
+      setDoc(doc(as(UID.adminT1), 'academias', T1, 'planesAlumno', 'x'), planAlumno({ frecuencia: 'diaria' })),
+    )
+    await assertFails(
+      setDoc(doc(as(UID.adminT1), 'academias', T1, 'planesAlumno', 'x'), planAlumno({ minutosIncluidos: 45 })),
+    )
+    await assertFails(
+      setDoc(doc(as(UID.adminT1), 'academias', T1, 'planesAlumno', 'x'), planAlumno({ precioCents: 0 })),
+    )
+    await assertFails(
+      setDoc(doc(as(UID.adminT1), 'academias', T1, 'planesAlumno', 'x'), planAlumno({ descuentoHermanos: 'si' })),
+    )
+  })
+
+  it('BORRAR un plan → DENY (soft delete)', async () => {
+    await assertSucceeds(
+      setDoc(doc(as(UID.adminT1), 'academias', T1, 'planesAlumno', 'p1'), planAlumno()),
+    )
+    await assertFails(deleteDoc(doc(as(UID.adminT1), 'academias', T1, 'planesAlumno', 'p1')))
+  })
+})
+
+describe('[F5] creditos: solo admin, forma validada, sin borrado', () => {
+  it('administrador CREA un lote válido → ALLOW', async () => {
+    await assertSucceeds(
+      setDoc(doc(as(UID.adminT1), 'academias', T1, 'creditos', 'c1'), credito()),
+    )
+  })
+
+  it('profesor CREA un lote → DENY; otro tenant → DENY', async () => {
+    await assertFails(setDoc(doc(as(UID.profT1), 'academias', T1, 'creditos', 'c1'), credito()))
+    await assertFails(setDoc(doc(as(UID.adminT2), 'academias', T1, 'creditos', 'c1'), credito()))
+  })
+
+  it('estado o enteros inválidos → DENY', async () => {
+    await assertFails(
+      setDoc(doc(as(UID.adminT1), 'academias', T1, 'creditos', 'x'), credito({ estado: 'raro' })),
+    )
+    await assertFails(
+      setDoc(doc(as(UID.adminT1), 'academias', T1, 'creditos', 'x'), credito({ minutosUsados: -1 })),
+    )
+    await assertFails(
+      setDoc(doc(as(UID.adminT1), 'academias', T1, 'creditos', 'x'), credito({ minutosComprados: 0 })),
+    )
+  })
+
+  it('BORRAR un lote → DENY', async () => {
+    await assertSucceeds(setDoc(doc(as(UID.adminT1), 'academias', T1, 'creditos', 'c1'), credito()))
+    await assertFails(deleteDoc(doc(as(UID.adminT1), 'academias', T1, 'creditos', 'c1')))
+  })
+})
+
+describe('[F5] movimientosCredito: solo admin, forma validada, sin borrado', () => {
+  it('administrador CREA un movimiento válido → ALLOW', async () => {
+    await assertSucceeds(
+      setDoc(doc(as(UID.adminT1), 'academias', T1, 'movimientosCredito', 'c1_a1'), movimientoCredito()),
+    )
+  })
+
+  it('profesor CREA un movimiento → DENY; otro tenant → DENY', async () => {
+    await assertFails(
+      setDoc(doc(as(UID.profT1), 'academias', T1, 'movimientosCredito', 'c1_a1'), movimientoCredito()),
+    )
+    await assertFails(
+      setDoc(doc(as(UID.adminT2), 'academias', T1, 'movimientosCredito', 'c1_a1'), movimientoCredito()),
+    )
+  })
+
+  it('motivo, minutos o asignaciones inválidos → DENY', async () => {
+    await assertFails(
+      setDoc(doc(as(UID.adminT1), 'academias', T1, 'movimientosCredito', 'x'), movimientoCredito({ motivo: 'otro' })),
+    )
+    await assertFails(
+      setDoc(doc(as(UID.adminT1), 'academias', T1, 'movimientosCredito', 'x'), movimientoCredito({ minutos: -1 })),
+    )
+    await assertFails(
+      setDoc(doc(as(UID.adminT1), 'academias', T1, 'movimientosCredito', 'x'), movimientoCredito({ asignaciones: 'x' })),
+    )
+  })
+
+  it('BORRAR un movimiento → DENY', async () => {
+    await assertSucceeds(
+      setDoc(doc(as(UID.adminT1), 'academias', T1, 'movimientosCredito', 'c1_a1'), movimientoCredito()),
+    )
+    await assertFails(deleteDoc(doc(as(UID.adminT1), 'academias', T1, 'movimientosCredito', 'c1_a1')))
+  })
+})
+
+describe('[F5] cargo de mensualidad: claseId null y creditoId obligatorio', () => {
+  const mensualidad = (extra = {}) =>
+    cargo({ concepto: 'mensualidad', claseId: null, sedeId: null, creditoId: 'men_x', planId: 'p1', planNombre: 'Mensual', ...extra })
+
+  it('administrador CREA una mensualidad válida → ALLOW', async () => {
+    await assertSucceeds(
+      setDoc(doc(as(UID.adminT1), 'academias', T1, 'cargos', 'men_x'), mensualidad()),
+    )
+  })
+
+  it('una mensualidad sin creditoId → DENY', async () => {
+    const sinCredito = mensualidad()
+    delete sinCredito.creditoId
+    await assertFails(setDoc(doc(as(UID.adminT1), 'academias', T1, 'cargos', 'men_x'), sinCredito))
+  })
+
+  it('una mensualidad con claseId no nulo → DENY', async () => {
+    await assertFails(
+      setDoc(doc(as(UID.adminT1), 'academias', T1, 'cargos', 'men_x'), mensualidad({ claseId: 'c1' })),
+    )
+  })
+})
+
+describe('[F5] parámetros de mensualidades', () => {
+  it('valores válidos → ALLOW; enums/tipos inválidos → DENY', async () => {
+    await assertSucceeds(
+      setDoc(doc(as(UID.adminT1), 'academias', T1, 'config', 'parametros'), {
+        faltaSinAvisoConCredito: 'cobra_aparte',
+        creditoRequierePago: true,
+      }),
+    )
+    await assertFails(
+      setDoc(doc(as(UID.adminT1), 'academias', T1, 'config', 'parametros'), {
+        faltaSinAvisoConCredito: 'otra',
+      }),
+    )
+    await assertFails(
+      setDoc(doc(as(UID.adminT1), 'academias', T1, 'config', 'parametros'), {
+        creditoRequierePago: 'si',
+      }),
+    )
+  })
+})

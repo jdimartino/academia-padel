@@ -22,21 +22,26 @@ import {
   SedeInvalidaError,
   actualizarAlumno,
   actualizarPerfilCobro,
+  actualizarPlanAlumno,
   actualizarProfesor,
-  asignarAlumnos,
+  anularCredito,
   anularCierre,
+  asignarAlumnos,
   bloquesDeClase,
   buscarAlumnos,
   cambiarActivaCancha,
   cambiarActivaPerfilCobro,
   cancelarClase,
   cerrarClase,
+  comprarCredito,
   crearAlumno,
   crearCancha,
   crearClase,
   crearPerfilCobro,
+  crearPlanAlumno,
   crearProfesor,
   crearSede,
+  desactivarPlanAlumno,
   desactivarSede,
   fechaHoyLocal,
   getAlumno,
@@ -44,7 +49,9 @@ import {
   getClase,
   getClasesDeSedePorFecha,
   getCierreDeClase,
+  getCreditoAlumno,
   getParametros,
+  getPlanActivo,
   getProfesores,
   getSede,
   getSedes,
@@ -55,6 +62,7 @@ import {
   listarCargosPendientes,
   listarPagosProfesorPendientes,
   listarPerfilesCobro,
+  listarPlanesAlumno,
   listarSedes,
   marcarCargoPagado,
   marcarPagoProfesorPagado,
@@ -68,6 +76,7 @@ import {
   setParametros,
   setSedeHorario,
   setTarifasSede,
+  sugerirDescuentoHermanos,
   validarCobro,
   validarHorario,
   validarParametros,
@@ -3342,5 +3351,333 @@ describe('[F4] listados de cobros pendientes', () => {
     // Fuera del rango no aparece nada.
     const fuera = await listarCargosPendientes(adminDb, T1, { desde: '2027-01-01', hasta: '2027-01-02' })
     assert.equal(fuera.length, 0)
+  })
+})
+
+/* --------------------------------------------------------------------- */
+/* [F5] Mensualidades: planes, créditos y consumo al cerrar               */
+/* --------------------------------------------------------------------- */
+
+describe('[F5] mensualidades: planes, créditos y consumo al cerrar', () => {
+  const cobroUno = {
+    perfilCobroId: 'individual',
+    modo: 'total',
+    tarifaHoraCents: 5000,
+    montoEstandarCents: 5000,
+    montoCents: 5000,
+    ajustado: false,
+    motivoAjuste: null,
+  }
+  const cobroPareja = { ...cobroUno, perfilCobroId: 'pareja' }
+  const AHORA_CREDITO = new Date(2026, 10, 14, 10, 0, 0)
+
+  const presente = (alumnoId = 'a1') => [{ alumnoId, estado: 'presente' }]
+  const sinAviso = (alumnoId = 'a1') => [{ alumnoId, estado: 'ausente_sin_aviso' }]
+
+  function crearPlan(alumnoId = 'a1', extra = {}) {
+    return crearPlanAlumno(
+      adminDb,
+      T1,
+      {
+        alumnoId,
+        nombre: 'Mensual 8 horas',
+        frecuencia: 'mensual',
+        minutosIncluidos: 480,
+        precioCents: 8000,
+        descuentoHermanos: false,
+        ...extra,
+      },
+      { uid: ADMIN },
+    )
+  }
+
+  function comprar(alumnoId = 'a1', opciones = {}) {
+    return comprarCredito(adminDb, T1, alumnoId, { ...opciones, now: opciones.now ?? AHORA_CREDITO })
+  }
+
+  function cerrar(claseId, asistencias, extra = {}) {
+    return cerrarClase(adminDb, T1, claseId, { asistencias, ...extra }, {
+      uid: ADMIN,
+      ahora: DESPUES_DEL_FIN,
+    })
+  }
+
+  async function datoCredito(creditoId) {
+    const snap = await getDoc(doc(adminDb, 'academias', T1, 'creditos', creditoId))
+    return snap.data()
+  }
+
+  async function datoCargo(cargoId) {
+    const snap = await getDoc(doc(adminDb, 'academias', T1, 'cargos', cargoId))
+    return snap.data()
+  }
+
+  it('crea un plan activo y rechaza un segundo activo del mismo alumno', async () => {
+    const { planId } = await crearPlan('a1')
+    assert.equal((await getPlanActivo(adminDb, T1, 'a1')).id, planId)
+    await assert.rejects(crearPlan('a1'), CobroInvalidoError)
+
+    await desactivarPlanAlumno(adminDb, T1, planId, { uid: ADMIN })
+    assert.equal(await getPlanActivo(adminDb, T1, 'a1'), null)
+    await assert.doesNotReject(crearPlan('a1'))
+  })
+
+  it('el descuento de hermanos solo aplica a menores', async () => {
+    await assert.rejects(crearPlan('a1', { descuentoHermanos: true }), CobroInvalidoError)
+    await assert.doesNotReject(crearPlan('a2', { descuentoHermanos: true }))
+  })
+
+  it('actualiza un plan validando minutos/frecuencia/precio', async () => {
+    const { planId } = await crearPlan('a1')
+    await assert.rejects(
+      actualizarPlanAlumno(adminDb, T1, planId, { minutosIncluidos: 45 }, { uid: ADMIN }),
+      CobroInvalidoError,
+    )
+    await actualizarPlanAlumno(
+      adminDb,
+      T1,
+      planId,
+      { minutosIncluidos: 600, precioCents: 9000 },
+      { uid: ADMIN },
+    )
+    const planes = await listarPlanesAlumno(adminDb, T1, 'a1')
+    assert.equal(planes[0].minutosIncluidos, 600)
+    assert.equal(planes[0].precioCents, 9000)
+  })
+
+  it('compra el crédito: lote + cargo de mensualidad en una transacción', async () => {
+    await crearPlan('a1')
+    const { creditoId, cargoId, montoCents } = await comprar('a1')
+    assert.equal(montoCents, 8000)
+    const lote = await datoCredito(creditoId)
+    assert.equal(lote.minutosComprados, 480)
+    assert.equal(lote.minutosUsados, 0)
+    assert.equal(lote.estado, 'activo')
+    const cargo = await datoCargo(cargoId)
+    assert.equal(cargo.concepto, 'mensualidad')
+    assert.equal(cargo.claseId, null)
+    assert.equal(cargo.creditoId, creditoId)
+    assert.equal(cargo.montoCents, 8000)
+    assert.equal(cargo.estado, 'pendiente')
+  })
+
+  it('aplica el descuento de hermanos al precio del lote', async () => {
+    await crearPlan('a2', { descuentoHermanos: true, precioCents: 8000 })
+    const { cargoId } = await comprar('a2')
+    assert.equal((await datoCargo(cargoId)).montoCents, 7200)
+  })
+
+  it('anularCredito se permite sin uso y con cargo no pagado; se niega tras pagarlo', async () => {
+    await crearPlan('a1')
+    const uno = await comprar('a1')
+    await anularCredito(adminDb, T1, uno.creditoId)
+    assert.equal((await datoCredito(uno.creditoId)).estado, 'anulado')
+    assert.equal((await datoCargo(uno.cargoId)).estado, 'anulado')
+
+    const otro = await comprar('a1')
+    await marcarCargoPagado(adminDb, T1, otro.cargoId, { metodoPago: 'efectivo' }, { uid: ADMIN })
+    await assert.rejects(anularCredito(adminDb, T1, otro.creditoId), CobroInvalidoError)
+  })
+
+  it('un presente con crédito suficiente consume la clase y no genera cargo', async () => {
+    await crearPlan('a1')
+    const { creditoId } = await comprar('a1')
+    const { claseId } = await reservar({ alumnos: ['a1'], cobro: cobroUno })
+    const res = await cerrar(claseId, presente())
+
+    const { cargos, pagoProfesor, movimientos } = await getCierreDeClase(adminDb, T1, claseId)
+    assert.equal(cargos.length, 0)
+    assert.equal(pagoProfesor.montoCents, 1500)
+    assert.equal(movimientos.length, 1)
+    assert.equal(movimientos[0].id, `${claseId}_a1`)
+    assert.equal(movimientos[0].minutos, 60)
+    assert.equal(movimientos[0].motivo, 'clase')
+    assert.deepEqual(movimientos[0].asignaciones, [{ creditoId, minutos: 60 }])
+    assert.equal(res.estado, 'pendiente_cobro')
+    assert.equal((await datoCredito(creditoId)).minutosUsados, 60)
+  })
+
+  it('cubre solo al alumno con crédito y cobra al resto', async () => {
+    await crearPlan('a1')
+    await comprar('a1')
+    const { claseId } = await reservar({ alumnos: ['a1', 'a2'], cobro: cobroPareja })
+    await cerrar(claseId, [
+      { alumnoId: 'a1', estado: 'presente' },
+      { alumnoId: 'a2', estado: 'presente' },
+    ])
+    const { cargos, movimientos } = await getCierreDeClase(adminDb, T1, claseId)
+    assert.deepEqual(cargos.map((c) => c.alumnoId), ['a2'])
+    assert.equal(cargos[0].montoCents, 2500)
+    assert.equal(movimientos.length, 1)
+    assert.equal(movimientos[0].alumnoId, 'a1')
+  })
+
+  it('crédito insuficiente: cae al cargo normal con advertencia', async () => {
+    await crearPlan('a1', { minutosIncluidos: 30 })
+    await comprar('a1')
+    const { claseId } = await reservar({ alumnos: ['a1'], cobro: cobroUno })
+    const res = await cerrar(claseId, presente())
+    const { cargos, movimientos } = await getCierreDeClase(adminDb, T1, claseId)
+    assert.equal(cargos.length, 1)
+    assert.equal(cargos[0].montoCents, 5000)
+    assert.equal(movimientos.length, 0)
+    assert.deepEqual(res.advertencias, [{ alumnoId: 'a1', motivo: 'credito_insuficiente' }])
+  })
+
+  it('falta sin aviso: descuenta_proporcional (default)', async () => {
+    await crearPlan('a1')
+    const { creditoId } = await comprar('a1')
+    const { claseId } = await reservar({ alumnos: ['a1'], cobro: cobroUno })
+    await cerrar(claseId, sinAviso())
+    const { cargos, movimientos } = await getCierreDeClase(adminDb, T1, claseId)
+    assert.equal(cargos.length, 0)
+    assert.equal(movimientos[0].minutos, 30)
+    assert.equal(movimientos[0].motivo, 'falta_sin_aviso')
+    assert.equal((await datoCredito(creditoId)).minutosUsados, 30)
+  })
+
+  it('falta sin aviso: descuenta_completo', async () => {
+    await setParametros(adminDb, T1, { faltaSinAvisoConCredito: 'descuenta_completo' }, { uid: ADMIN })
+    await crearPlan('a1')
+    await comprar('a1')
+    const { claseId } = await reservar({ alumnos: ['a1'], cobro: cobroUno })
+    await cerrar(claseId, sinAviso())
+    const { movimientos } = await getCierreDeClase(adminDb, T1, claseId)
+    assert.equal(movimientos[0].minutos, 60)
+  })
+
+  it('falta sin aviso: cobra_aparte genera el cargo normal', async () => {
+    await setParametros(adminDb, T1, { faltaSinAvisoConCredito: 'cobra_aparte' }, { uid: ADMIN })
+    await crearPlan('a1')
+    await comprar('a1')
+    const { claseId } = await reservar({ alumnos: ['a1'], cobro: cobroUno })
+    await cerrar(claseId, sinAviso())
+    const { cargos, movimientos } = await getCierreDeClase(adminDb, T1, claseId)
+    assert.equal(cargos.length, 1)
+    assert.equal(cargos[0].concepto, 'falta_sin_aviso')
+    assert.equal(movimientos.length, 0)
+  })
+
+  it('ausente_avisada y seFactura false no tocan el crédito', async () => {
+    await crearPlan('a1')
+    const { creditoId } = await comprar('a1')
+    const uno = await reservar({ alumnos: ['a1'], cobro: cobroUno })
+    await cerrar(uno.claseId, [{ alumnoId: 'a1', estado: 'ausente_avisada' }])
+    assert.equal((await getCierreDeClase(adminDb, T1, uno.claseId)).movimientos.length, 0)
+
+    const dos = await reservar({
+      alumnos: ['a1'],
+      cobro: cobroUno,
+      horaInicio: '17:00',
+      horaFin: '18:00',
+    })
+    await cerrar(dos.claseId, presente(), { seFactura: false })
+    assert.equal((await getCierreDeClase(adminDb, T1, dos.claseId)).movimientos.length, 0)
+    assert.equal((await datoCredito(creditoId)).minutosUsados, 0)
+  })
+
+  it('creditoRequierePago: bloquea el lote hasta que el cargo esté pagado', async () => {
+    await setParametros(adminDb, T1, { creditoRequierePago: true }, { uid: ADMIN })
+    await crearPlan('a1')
+    const { cargoId } = await comprar('a1')
+
+    const uno = await reservar({ alumnos: ['a1'], cobro: cobroUno })
+    await cerrar(uno.claseId, presente())
+    let cierre = await getCierreDeClase(adminDb, T1, uno.claseId)
+    assert.equal(cierre.cargos.length, 1)
+    assert.equal(cierre.movimientos.length, 0)
+
+    await marcarCargoPagado(adminDb, T1, cargoId, { metodoPago: 'efectivo' }, { uid: ADMIN })
+    const dos = await reservar({
+      alumnos: ['a1'],
+      cobro: cobroUno,
+      horaInicio: '17:00',
+      horaFin: '18:00',
+    })
+    await cerrar(dos.claseId, presente())
+    cierre = await getCierreDeClase(adminDb, T1, dos.claseId)
+    assert.equal(cierre.cargos.length, 0)
+    assert.equal(cierre.movimientos.length, 1)
+  })
+
+  it('un lote vencido no se usa y cae al cargo normal', async () => {
+    await crearPlan('a1')
+    const { creditoId } = await comprar('a1')
+    const ref = doc(adminDb, 'academias', T1, 'creditos', creditoId)
+    await setDoc(ref, { ...(await getDoc(ref)).data(), venceEn: '2026-11-01' })
+
+    const { claseId } = await reservar({ alumnos: ['a1'], cobro: cobroUno })
+    await cerrar(claseId, presente())
+    const { cargos, movimientos } = await getCierreDeClase(adminDb, T1, claseId)
+    assert.equal(cargos.length, 1)
+    assert.equal(movimientos.length, 0)
+
+    const credito = await getCreditoAlumno(adminDb, T1, 'a1', FECHA)
+    assert.equal(credito.minutosDisponibles, 0)
+    assert.equal(credito.vencidos.length, 1)
+  })
+
+  it('anularCierre devuelve los minutos al lote y permite recerrar', async () => {
+    await crearPlan('a1')
+    const { creditoId } = await comprar('a1')
+    const { claseId } = await reservar({ alumnos: ['a1'], cobro: cobroUno })
+    await cerrar(claseId, presente())
+    assert.equal((await datoCredito(creditoId)).minutosUsados, 60)
+
+    await anularCierre(adminDb, T1, claseId, { uid: ADMIN })
+    assert.equal((await datoCredito(creditoId)).minutosUsados, 0)
+    const cierre = await getCierreDeClase(adminDb, T1, claseId)
+    assert.equal(cierre.movimientos[0].minutos, 0)
+    assert.equal((await getClase(adminDb, T1, claseId)).estado, 'reservada')
+
+    await cerrar(claseId, presente())
+    assert.equal((await datoCredito(creditoId)).minutosUsados, 60)
+  })
+
+  it('una clase cubierta por crédito sin pago nace cobrada y se puede anular', async () => {
+    await setParametros(adminDb, T1, { pagoProfesor: { modo: 'por_hora', montoCents: 0 } }, { uid: ADMIN })
+    await crearPlan('a1')
+    await comprar('a1')
+    const { claseId } = await reservar({ alumnos: ['a1'], cobro: cobroUno })
+    const res = await cerrar(claseId, presente())
+    assert.equal(res.estado, 'cobrada')
+    assert.equal((await getClase(adminDb, T1, claseId)).estado, 'cobrada')
+
+    await anularCierre(adminDb, T1, claseId, { uid: ADMIN })
+    assert.equal((await getClase(adminDb, T1, claseId)).estado, 'reservada')
+  })
+
+  it('una clase normal pasa a cobrada al pagar cargo y pago, y entonces no se anula', async () => {
+    const { claseId } = await reservar({ alumnos: ['a1'], cobro: cobroUno })
+    await cerrar(claseId, presente())
+    const { cargos } = await getCierreDeClase(adminDb, T1, claseId)
+
+    await marcarCargoPagado(adminDb, T1, cargos[0].id, { metodoPago: 'efectivo' }, { uid: ADMIN })
+    assert.equal((await getClase(adminDb, T1, claseId)).estado, 'pendiente_cobro')
+
+    await marcarPagoProfesorPagado(adminDb, T1, claseId, { metodoPago: 'efectivo' }, { uid: ADMIN })
+    assert.equal((await getClase(adminDb, T1, claseId)).estado, 'cobrada')
+    await assert.rejects(
+      anularCierre(adminDb, T1, claseId, { uid: ADMIN }),
+      /cobro o pago ya registrado/,
+    )
+  })
+
+  it('sugerirDescuentoHermanos detecta el hermano por representante', async () => {
+    const a2 = await getAlumno(adminDb, T1, 'a2')
+    assert.equal(sugerirDescuentoHermanos(a2, [a2]), false)
+    await crearAlumno(
+      adminDb,
+      T1,
+      {
+        tipo: 'menor',
+        nombre: 'Marta',
+        apellidos: 'Menor Dos',
+        representante: { nombre: 'Teresa', apellidos: 'Representante', email: null, telefono: null },
+      },
+      { uid: ADMIN, alumnoId: 'a12' },
+    )
+    const a12 = await getAlumno(adminDb, T1, 'a12')
+    assert.equal(sugerirDescuentoHermanos(a2, [a2, a12]), true)
   })
 })
