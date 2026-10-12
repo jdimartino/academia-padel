@@ -284,7 +284,8 @@ sin solapamientos.
 | `alumnos` | string[] | IDs de alumnos asignados. `crearClase`, `reprogramarClase` y `asignarAlumnos` los validan (existen, activos, sin duplicados, dentro del `cupo`). |
 | `cobro` | map \| null | **Fase 3. SNAPSHOT** del precio acordado al reservar: `{perfilCobroId, modo, tarifaHoraCents, montoEstandarCents, montoCents, ajustado, motivoAjuste}` (montos en centavos). `montoCents` es el que se cobra; `montoEstandarCents` el sugerido por la tarifa y `ajustado` marca si se cambió a mano (con `motivoAjuste` ∈ `descuento`\|`cortesia`\|`acuerdo`\|`otro`). Cambios posteriores de tarifas **no** lo tocan. `null` = clase sin precio. Lo valida `validarCobro` en `crearClase`/`reprogramarClase` y `cobroValido` en firestore.rules |
 | `asistencias` | map[] | `[{alumnoId, estado, motivo, registradoPor, registradoEn}]`. `estado` ∈ `presente` \| `ausente_avisada` \| `ausente_sin_aviso`; `motivo` opcional. |
-| `estado` | string | `reservada` → `pendiente_cobro` → `cobrada`; también `cancelada`. `ejecutada` sigue existiendo en el enum pero el cierre por asistencia va directo a `pendiente_cobro`. |
+| `estado` | string | `reservada` → `pendiente_cobro` → `cobrada`; también `cancelada`. `cerrarClase` (Fase 4) deja la clase en `pendiente_cobro`. `ejecutada` sigue existiendo en el enum pero ningún flujo la escribe. |
+| `facturada` | bool | **Fase 4.** `true` si el cierre generó cobro (o quedó como cortesía facturada); `false` si se cerró con `seFactura: false` (fuerza mayor). `anularCierre` la pone en `false`. |
 | `sedeNombre` | string | Denormalizado |
 | `profesorNombre` | string | Denormalizado |
 | `alumnoNombres` | string[] | Denormalizado (solo UI) |
@@ -315,25 +316,32 @@ cancha y profesor: **no hay bloqueo por alumno**. Que un alumno quede en dos
 clases a la misma hora **no se bloquea** y no se crean bloques de alumno; queda
 como **nota de diseño**, sin resolver.
 
-**Cierre por asistencia:** `registrarAsistencia` escribe `asistencias` y pasa la
-clase a `pendiente_cobro` en una sola transacción. Requiere exactamente **una
-entrada por alumno asignado** y solo acepta tres estados: `presente`,
-`ausente_avisada` y `ausente_sin_aviso`, más un `motivo` opcional. El sistema no
-recibe avisos: **el administrador decide** si la ausencia fue avisada. **La
-ventana de aviso (horas) es un parámetro por academia y está SIN DEFINIR** (no se
-hardcodea). **La generación del `cargo` del alumno y de la liquidación del
-profesor NO forma parte de ese cierre** (ver §5 "Sin definir"), así que no se
-ejecuta todavía. La regla de negocio de la ausencia justificada (clase de
-recuperación vs nota de crédito) también está **sin definir**.
+**Cierre de la clase (Fase 4):** `cerrarClase` escribe `asistencias`, el
+SNAPSHOT final de `cobro` (por si se editó el monto al cerrar), los `cargos` de
+los alumnos y el pago del profesor (`pagosProfesor`), todo en **una sola
+transacción**, y deja la clase en `pendiente_cobro` con `facturada: true|false`.
+Requiere exactamente **una entrada por alumno asignado** y solo acepta tres
+estados: `presente`, `ausente_avisada` y `ausente_sin_aviso`, más un `motivo`
+opcional. El sistema no recibe avisos: **el administrador decide** si la
+ausencia fue avisada. **La ventana de aviso (horas) es un parámetro por
+academia** (`avisoAusenciaHoras`; no se hardcodea en este flujo).
 
-**Cobrar (o no) a los alumnos ausentes está SIN DEFINIR.** El código no crea
-`cargos` ni toca el saldo de nadie al registrar la asistencia: la clase queda en
-`pendiente_cobro` y el cobro es un paso posterior, manual, por definir.
+`registrarAsistencia` se conserva como atajo histórico: es `cerrarClase` con
+`seFactura: false`, así que registra la asistencia y cierra la clase **sin**
+generar cargos ni pago (fuerza mayor / casos viejos). Ver §5.3.
+
+**El cobro (o no) de los alumnos ausentes ya está definido (Fase 4):** una
+ausencia sin aviso genera un cargo `falta_sin_aviso` con el
+`porcentajeFaltaSinAviso` % de la parte del alumno; una ausencia avisada no
+genera cargo (su parte la absorbe la academia o se reparte entre los presentes
+según `repartoAusenciaAvisada`). La **regla de negocio de la recuperación
+(clase de recuperación vs nota de crédito)** y los planes mensuales siguen
+**sin definir** (Fase 5).
 
 **Precio de la clase (Fase 3):** al reservar/reprogramar se guarda un SNAPSHOT en
-`cobro` (ver §5.2). Es solo el precio acordado: **no** genera `cargos`, ni
-movimientos de crédito, ni liquidaciones. El cobro efectivo y la facturación
-siguen sin implementar.
+`cobro` (ver §5.2). Es solo el precio acordado: al reservar **no** genera
+`cargos` ni movimientos. Al cerrar la clase (Fase 4, §5.3) `cerrarClase` usa ese
+snapshot (o un monto manual) para generar los cargos y el pago al profesor.
 
 **No solapamiento:** es una regla de **negocio** y se valida en la capa de
 escritura (`src/firebase/db.js`), porque Firestore no tiene constraints únicos
@@ -349,12 +357,12 @@ reservada ──(asistencia)──▶ pendiente_cobro ──▶ cobrada
 ```
 
 - `reservada`: creada, todavía no pasó. *Único estado en el que se puede
-  reprogramar o cancelar.*
-- `pendiente_cobro`: **la asistencia ya quedó registrada** y la clase está
-  cerrada para edición. `registrarAsistencia` salta directo aquí (no pasa por
-  `ejecutada`). El `cargo` del alumno **no** se genera en este paso: queda sin
-  definir (ver arriba y §5).
-- `cobrada`: el pago asociado fue aprobado. *Sin definir.*
+  reprogramar, cancelar o asignar alumnos.*
+- `pendiente_cobro`: la clase ya se cerró (`cerrarClase`, Fase 4): asistencia
+  registrada y `cargos`/pago al profesor generados (o ninguno, si
+  `facturada: false`). `anularCierre` la devuelve a `reservada`.
+- `cobrada`: *sin definir.* El cobro efectivo hoy se marca cargo por cargo con
+  `marcarCargoPagado`; el paso agregado de la clase a `cobrada` queda pendiente.
 - `cancelada`: no se dictó. *Sin definir si una cancelada genera cargo o no.*
 
 `ejecutada` permanece en el enum de `src/lib/agenda.js` por compatibilidad, pero
@@ -508,6 +516,11 @@ Cuota sin costo: **20.000 escrituras/día**, **20.000 borrados/día**,
 | `activo` | bool | |
 
 ### `academias/{tenantId}/cargos/{cargoId}` (cuentas por cobrar)
+
+> **Actualizado en Fase 4:** la forma vigente de un cargo (generado al cerrar la
+> clase) está en **§5.3**. La tabla de abajo es el borrador original
+> (`montoCentavos`/`moneda`/`periodo`), que se descartó. Se conserva como
+> referencia histórica.
 
 | Campo | Tipo | Nota |
 | --- | --- | --- |
@@ -669,6 +682,8 @@ incompleto, `leerParametros` rellena campo por campo con `PARAMETROS_DEFAULT`.
 | `vencimientoCreditoDias` | number \| null | `null` | `null` = no vence; si no, 1..365 |
 | `alertaCobro` | map | `{dias:2, referencia:'clase'}` | `dias` 0..30; `referencia` ∈ `clase`\|`vencimiento` |
 | `restringirCategoriaPorFranja` | bool | `false` | *Sin implementar todavía* |
+| `repartoAusenciaAvisada` | string | `absorbe_academia` | **Fase 4.** `absorbe_academia` \| `reparte_entre_presentes`. Solo importa en modo `total`: si un alumno avisó su ausencia, su parte se la queda la academia o se reparte entre los presentes |
+| `pagoProfesorSiTodosFaltanSinAviso` | string | `completo` | **Fase 4.** `completo` \| `proporcional_cobrado` \| `nada`. Qué se le paga al profesor cuando NADIE asistió y hubo al menos una falta sin aviso |
 
 Funciones: `getParametros` (1 lectura, tolerante), `validarParametros`
 (obligatoria antes de escribir; completa con defaults y rechaza campos/rangos
@@ -693,6 +708,104 @@ mueve dinero**: es el precio acordado, a la espera de la fase de cargos.
 
 ---
 
+## 5.3 Cierre de clases y cobros (Fase 4)
+
+Cerrar una clase (`cerrarClase`) genera, en **una sola transacción**, la
+asistencia, el snapshot final de `cobro`, los `cargos` de los alumnos y el pago
+al profesor (`pagosProfesor`). Todo el cálculo vive puro en
+`src/lib/cobros.js` (`calcularCierre`) y la capa de datos solo valida y persiste.
+
+### `academias/{tenantId}/cargos/{cargoId}` (Fase 4)
+
+`cargoId` es **determinista**: `${claseId}_${alumnoId}`. Un reintento reescribe
+el mismo documento, así que nunca se duplica.
+
+| Campo | Tipo | Nota |
+| --- | --- | --- |
+| `claseId` | string | |
+| `alumnoId` | string | |
+| `alumnoNombre` | string | Denormalizado |
+| `sedeId` | string | |
+| `fecha` | string | `"YYYY-MM-DD"` de la clase; filtro de los listados |
+| `concepto` | string | `clase` \| `falta_sin_aviso` (+ `mensualidad` \| `otro` reservados para Fase 5) |
+| `montoCents` | number | Entero de centavos >= 0. Los cargos de 0 no se crean |
+| `estado` | string | `pendiente` \| `pagado` \| `anulado` |
+| `pagadoEn` | Timestamp \| null | |
+| `metodoPago` | string \| null | `efectivo` \| `zelle` \| `pago_movil` \| `transferencia` \| `otro` |
+| `creadoEn` | Timestamp | |
+
+> Este esquema **reemplaza** al borrador previo de `cargos`
+> (`montoCentavos`/`moneda`/`periodo`/`anuladoPor`). El `periodo` se descartó:
+> cada cargo es de una clase y se filtra por `sedeId` + `fecha`; el saldo por
+> alumno/periodo se resolverá en Fase 5 si hace falta. Los índices compuestos
+> se ajustaron en consecuencia (§6).
+
+### `academias/{tenantId}/pagosProfesor/{pagoId}` (Fase 4)
+
+`pagoId` es **determinista**: `${claseId}`. **No** es la colección `pagos`
+(esa es para los cobros de alumnos, con `cargoIds`, y sigue sin implementar).
+Tampoco es `liquidaciones` (pago mensual, sin definir).
+
+| Campo | Tipo | Nota |
+| --- | --- | --- |
+| `claseId` | string | También es el id del documento |
+| `profesorId` | string | |
+| `profesorNombre` | string \| null | Denormalizado |
+| `sedeId` | string | |
+| `fecha` | string | `"YYYY-MM-DD"` de la clase |
+| `montoCents` | number | Entero >= 0. Si da 0, **no se crea** el pago |
+| `base` | map | `{modo: por_hora\|por_clase, minutos}` del cálculo base |
+| `estado` | string | `pendiente` \| `pagado` \| `anulado` |
+| `pagadoEn` | Timestamp \| null | |
+| `metodoPago` | string \| null | Mismo catálogo que un cargo |
+
+### Reglas del cálculo (`calcularCierre`)
+
+- **Monto de la clase:** `cobro.montoCents`. Si el modo es `por_persona` y no
+  fue ajustado, se recalcula `tarifaHoraCents × duración / 60` **por alumno**
+  (half-up, con los alumnos reales); si fue ajustado, `montoCents` es el total.
+  Sin `cobro`, el cierre exige un monto manual (que queda `ajustado: true`).
+- **Reparto:** modo `total` → partes iguales entre los asignados (el resto de
+  centavos va a los primeros, para sumar exacto); `por_persona` → la parte de
+  cada uno.
+- `presente` → cargo `clase` por su parte. `ausente_sin_aviso` → cargo
+  `falta_sin_aviso` con `porcentajeFaltaSinAviso` % (half-up). `ausente_avisada`
+  → sin cargo; con `repartoAusenciaAvisada = reparte_entre_presentes` (solo modo
+  `total`) su parte se reparte entre los presentes.
+- **Cortesía** (monto 0 con motivo `cortesia`): no registra nada para alumnos.
+- **Pago al profesor:** base = `pagoProfesor.montoCents × duración / 60`
+  (`por_hora`) o el monto (`por_clase`). Completo si al menos uno vino (también
+  en cortesía). Si nadie vino y hubo faltas sin aviso, según
+  `pagoProfesorSiTodosFaltanSinAviso`. Si todos avisaron, 0.
+- `seFactura: false` → sin cargos ni pago, la clase queda `facturada: false`.
+
+### Funciones de `db.js`
+
+`cerrarClase`, `marcarCargoPagado(cargoId, {metodoPago})`,
+`marcarPagoProfesorPagado(pagoId, {metodoPago})` (pago **completo**; los
+parciales quedan fuera de alcance), `anularCierre(claseId)` (solo si nada está
+`pagado`: marca `anulado` y devuelve la clase a `reservada`),
+`listarCargosPendientes` y `listarPagosProfesorPendientes` (filtran por sede y
+rango de fechas, página de 50, tope 100) y `getCierreDeClase` para el detalle.
+
+### Estado de la clase tras el cierre
+
+```
+reservada ──(cerrarClase)──▶ pendiente_cobro ──(marcar pagado)──▶ cobrada
+    ▲                              │
+    └──────(anularCierre)──────────┘
+```
+
+`anularCierre` solo se permite mientras ningún cargo ni el pago esté `pagado`.
+La clase vuelve a `reservada` y se puede cerrar de nuevo (los cargos/pago se
+reescriben con los mismos IDs deterministas).
+
+> **Fase 5 (NO implementada):** planes mensuales y consumo de créditos. El
+> punto de enganche está marcado en `cerrarClase` (db.js): un crédito debe
+> aplicarse **antes** de crear el cargo de un alumno.
+
+---
+
 ## 6. Índices compuestos
 
 Declarados en `firestore.indexes.json`. Mínimos para las consultas previstas:
@@ -701,21 +814,22 @@ Declarados en `firestore.indexes.json`. Mínimos para las consultas previstas:
 - `clases`: `sedeId` + `fecha` + `horaInicio` (agenda por sede).
 - `clases`: `profesorId` + `fecha` (agenda por profesor).
 - `clases`: `estado` + `fecha`.
-- `cargos`: `alumnoId` + `periodo` desc.
-- `cargos`: `estado` + `periodo`.
+- `cargos`: `estado` + `fecha` y `estado` + `sedeId` + `fecha` (Fase 4:
+  `listarCargosPendientes`).
+- `pagosProfesor`: `estado` + `fecha` y `estado` + `sedeId` + `fecha` (Fase 4:
+  `listarPagosProfesorPendientes`). Los cargos de una clase se leen por
+  `claseId` (índice de un solo campo) y el pago por ID.
 - `pagos`: `estado` + `creadoEn` desc.
 - `alumnos`: `activo` + `busquedaNombre` y `activo` + `busquedaApellido`
   (buscador por prefijo de nombre o apellido de `buscarAlumnos` y listado
   paginado de `listarAlumnos`).
 - `profesores`: `activo` + `sedes` (array-contains) para `getProfesores({sedeId})`.
 
-**Sin cambios en esta ronda.** Con `estado: "activos"`/`"inactivos"`, tanto
-`listarAlumnos` (igualdad en `activo` + `orderBy` en `busquedaApellido`) como
-`buscarAlumnos` (igualdad en `activo` + rango en `busquedaNombre`/`busquedaApellido`)
-ya quedan cubiertos por los dos compuestos de `alumnos`. Con `estado: "todos"`
-la consulta es de un solo campo y no necesita compuesto. En `profesores`, el
-estado agrega o quita la igualdad sobre `activo`, y el índice existente
-(`activo` + `sedes`) sigue aplicando. No se agregó ni se quitó ningún índice.
+**Fase 4:** se reemplazaron los dos compuestos viejos de `cargos`
+(`alumnoId`/`periodo`, `estado`/`periodo`) por los de `estado`+`fecha` y
+`estado`+`sedeId`+`fecha`, y se agregaron los equivalentes de `pagosProfesor`.
+El resto de los índices no cambió. El de `pagos` (`estado`+`creadoEn`) se
+conserva porque esa colección sigue reservada para los cobros de alumnos.
 
 > El **emulador no enforcea índices**: que los tests pasen no prueba que el
 > índice exista. La lista de arriba es la referencia para el deploy real.
@@ -733,14 +847,15 @@ publicarse.
 - Catálogo de métodos de pago, niveles de alumno y tipos de cancha.
 - **Reparto exacto de permisos entre `administrador` y "recepción"** (decisión 6:
   recepción es un admin reducido, pero *qué* quita todavía no está escrito).
-- **Facturación / cobros:** la **configuración** ya está (perfiles, tarifas por
-  sede, parámetros y el snapshot de precio de la clase: §5.2). Siguen **sin
-  definir** la tarifa por hora del profesor como dato de liquidación
-  (`tarifaHoraCentavos` de la ficha no se escribe), la generación del `cargo` al
-  cerrar la clase, la liquidación del profesor y el cobro (o no) de la clase
-  cancelada y de los alumnos ausentes. `registrarAsistencia` solo deja la clase
-  en `pendiente_cobro`; no crea cargos, notas de crédito, recuperaciones ni toca
-  saldos.
+- **Facturación / cobros:** la **configuración** (perfiles, tarifas por sede,
+  parámetros y el snapshot de precio: §5.2) y el **cierre con cargos y pago al
+  profesor** (Fase 4: §5.3) ya están. Siguen **sin definir**: los **planes
+  mensuales y el consumo de créditos** (Fase 5), el cobro de los alumnos con
+  comprobante (la colección `pagos` con `en_revision`/`aprobado`, sin UI), la
+  **liquidación** mensual del profesor (hoy el pago es por clase en
+  `pagosProfesor`), el paso agregado de la clase a `cobrada`, y si una clase
+  `cancelada` genera cargo o no. `tarifaHoraCentavos` de la ficha del profesor
+  sigue sin escribirse (el pago sale de `config/parametros.pagoProfesor`).
 - **Ventana de aviso (horas) de una ausencia:** ya es un parámetro por academia
   (`config/parametros.avisoAusenciaHoras`, §5.2) y `porcentajeFaltaSinAviso`
   guarda el % a cobrar. Lo que sigue **sin definir** es la regla de negocio que
