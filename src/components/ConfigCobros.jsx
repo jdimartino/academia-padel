@@ -39,6 +39,18 @@ const ALERTA_REFERENCIAS = [
   { valor: 'vencimiento', label: 'Del vencimiento' },
 ]
 
+/* Reglas del cierre de una clase (Phase 4). */
+const REPARTOS_AUSENCIA = [
+  { valor: 'absorbe_academia', label: 'La absorbe la academia' },
+  { valor: 'reparte_entre_presentes', label: 'Repartirla entre los presentes' },
+]
+
+const PAGOS_SIN_AVISO = [
+  { valor: 'completo', label: 'Completo' },
+  { valor: 'proporcional_cobrado', label: 'Proporcional a lo cobrado' },
+  { valor: 'nada', label: 'No pagar' },
+]
+
 /* Duraciones ofrecidas: múltiplos de MINUTOS_BLOQUE de 60 a 240 (1 a 4 horas). */
 const DURACIONES_OPCIONES = Array.from({ length: 4 }, (_, i) => (i + 2) * MINUTOS_BLOQUE)
 
@@ -303,6 +315,42 @@ export default function ConfigCobros({ tenantId, onSucio }) {
                 onChange={(e) => setMontoTexto(e.target.value)}
               />
               <span className="parametros__hint">Se aplica en la liquidación (fase posterior).</span>
+            </label>
+          </div>
+
+          <div className="parametros__bloque">
+            <h3 className="parametros__titulo">Cierre de clases</h3>
+            <label className="parametros__campo">
+              <span className="form__label">Si un alumno avisó su ausencia (monto total)</span>
+              <select
+                className="form__input"
+                value={borrador.repartoAusenciaAvisada}
+                onChange={(e) => editarParametros({ repartoAusenciaAvisada: e.target.value })}
+              >
+                {REPARTOS_AUSENCIA.map((opcion) => (
+                  <option key={opcion.valor} value={opcion.valor}>
+                    {opcion.label}
+                  </option>
+                ))}
+              </select>
+              <span className="parametros__hint">Se aplica al cerrar la clase y facturar.</span>
+            </label>
+            <label className="parametros__campo">
+              <span className="form__label">Si nadie asiste y hubo faltas sin aviso</span>
+              <select
+                className="form__input"
+                value={borrador.pagoProfesorSiTodosFaltanSinAviso}
+                onChange={(e) =>
+                  editarParametros({ pagoProfesorSiTodosFaltanSinAviso: e.target.value })
+                }
+              >
+                {PAGOS_SIN_AVISO.map((opcion) => (
+                  <option key={opcion.valor} value={opcion.valor}>
+                    {opcion.label}
+                  </option>
+                ))}
+              </select>
+              <span className="parametros__hint">Qué se le paga al profesor en ese caso.</span>
             </label>
           </div>
 

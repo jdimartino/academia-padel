@@ -53,19 +53,25 @@ import {
   ALERTA_DIAS_MAX,
   AUSENCIA_HORAS_MAX,
   LIMITE_NOMBRE_PERFIL,
+  METODOS_PAGO,
   MODOS_COBRO,
+  PAGOS_SIN_AVISO,
   PARAMETROS_DEFAULT,
   PERSONAS_MAX,
   PORCENTAJE_MAX,
+  REPARTOS_AUSENCIA,
   VENCIMIENTO_DIAS_MAX,
   alertaCobroValida,
+  calcularCierre,
   duracionesValidas,
   enteroEnRango,
   leerParametros,
   modoValido,
   motivoValido,
   pagoProfesorValido,
+  pagoSinAvisoValido,
   personasValidas,
+  repartoAusenciaValido,
   vencimientoValido,
 } from '../lib/cobros.js'
 import { LIMITE_MONTO_CENTS, LIMITE_TARIFA_CENTS, centsValidos } from '../lib/dinero.js'
@@ -727,6 +733,12 @@ const refCancha = (db, tenantId, sedeId, canchaId) =>
 const refPerfilCobro = (db, tenantId, perfilId) =>
   doc(db, 'academias', tenantId, 'perfilesCobro', perfilId)
 const refParametros = (db, tenantId) => doc(db, 'academias', tenantId, 'config', 'parametros')
+const refCargo = (db, tenantId, cargoId) => doc(db, 'academias', tenantId, 'cargos', cargoId)
+const refPagoProfesor = (db, tenantId, pagoId) =>
+  doc(db, 'academias', tenantId, 'pagosProfesor', pagoId)
+const coleccionCargos = (db, tenantId) => collection(db, 'academias', tenantId, 'cargos')
+const coleccionPagosProfesor = (db, tenantId) =>
+  collection(db, 'academias', tenantId, 'pagosProfesor')
 
 /* --------------------------------------------------------------------- */
 /* Lecturas                                                               */
@@ -1346,6 +1358,8 @@ export function validarParametros(entrada) {
     'vencimientoCreditoDias',
     'alertaCobro',
     'restringirCategoriaPorFranja',
+    'repartoAusenciaAvisada',
+    'pagoProfesorSiTodosFaltanSinAviso',
   ])
   for (const clave of Object.keys(d)) {
     if (!conocidos.has(clave)) {
@@ -1394,6 +1408,19 @@ export function validarParametros(entrada) {
   if (typeof restringir !== 'boolean') {
     throw new CobroInvalidoError('restringirCategoriaPorFranja debe ser booleano')
   }
+  const reparto = d.repartoAusenciaAvisada ?? PARAMETROS_DEFAULT.repartoAusenciaAvisada
+  if (!repartoAusenciaValido(reparto)) {
+    throw new CobroInvalidoError(
+      `repartoAusenciaAvisada debe ser ${REPARTOS_AUSENCIA.join(' | ')}`,
+    )
+  }
+  const pagoSinAviso =
+    d.pagoProfesorSiTodosFaltanSinAviso ?? PARAMETROS_DEFAULT.pagoProfesorSiTodosFaltanSinAviso
+  if (!pagoSinAvisoValido(pagoSinAviso)) {
+    throw new CobroInvalidoError(
+      `pagoProfesorSiTodosFaltanSinAviso debe ser ${PAGOS_SIN_AVISO.join(' | ')}`,
+    )
+  }
 
   return {
     avisoAusenciaHoras: aviso,
@@ -1404,6 +1431,8 @@ export function validarParametros(entrada) {
     vencimientoCreditoDias: vencimiento,
     alertaCobro: { dias: alerta.dias, referencia: alerta.referencia },
     restringirCategoriaPorFranja: restringir,
+    repartoAusenciaAvisada: reparto,
+    pagoProfesorSiTodosFaltanSinAviso: pagoSinAviso,
   }
 }
 
@@ -2374,21 +2403,12 @@ export async function asignarAlumnos(db, tenantId, claseId, alumnoIds, opciones 
   return { claseId }
 }
 
-/**
- * Registra la asistencia de una clase (embebida en el documento, §4) y la deja
- * en "pendiente de cobro" en la misma escritura.
- *
- * Los estados son `presente`, `ausente_avisada` y `ausente_sin_aviso` (+ motivo
- * opcional); cualquier otro valor se rechaza. Requiere exactamente una entrada
- * por alumno asignado. La regla de negocio de la ausencia (recuperación o nota
- * de crédito) y la ventana de aviso están SIN DEFINIR: acá solo se registra.
- * Tampoco se generan cargos ni liquidación al profesor.
- *
- * `ahora` es el único reloj: se usa para el sello `registradoEn` y para validar
- * que la clase ya terminó. Es inyectable para poder probarlo.
- */
-export async function registrarAsistencia(db, tenantId, claseId, asistencias, opciones = {}) {
-  const { uid = null, ahora = new Date() } = opciones
+/** Página por defecto / tope duro de los listados de cobros (Phase 4). */
+export const LIMITE_COBROS_PAGINA = 50
+export const LIMITE_COBROS_MAX = 100
+
+/** Normaliza y valida la asistencia que llega a `cerrarClase` / `registrarAsistencia`. */
+function normalizarAsistencias(asistencias, uid, ahora) {
   if (!Array.isArray(asistencias)) {
     throw new ClaseInvalidaError('asistencias debe ser un arreglo')
   }
@@ -2410,25 +2430,82 @@ export async function registrarAsistencia(db, tenantId, claseId, asistencias, op
   if (new Set(normalizadas.map((r) => r.alumnoId)).size !== normalizadas.length) {
     throw new ClaseInvalidaError('No se admiten alumnos repetidos en la asistencia')
   }
+  return normalizadas
+}
+
+/** Minutos entre horaInicio y horaFin de una clase; 0 si no se pueden leer. */
+function duracionDeClase(d) {
+  try {
+    const inicio = aMinutos(d.horaInicio)
+    const fin = aMinutos(d.horaFin)
+    return fin > inicio ? fin - inicio : 0
+  } catch {
+    return 0
+  }
+}
+
+/**
+ * Cierra una clase: registra la asistencia y, en la MISMA transacción, genera
+ * los cargos de los alumnos y el pago del profesor (Phase 4). Reemplaza a
+ * `registrarAsistencia` (abajo queda como atajo sin cobro).
+ *
+ * `datos`: `{ asistencias, seFactura = true, montoCents = null, motivoAjuste = null }`.
+ * - `asistencias`: exactamente una por alumno asignado, con los estados del enum.
+ * - `seFactura: false` (fuerza mayor: lluvia, luz): no genera cargos ni pago;
+ *   la clase queda cerrada con `facturada: false`.
+ * - `montoCents`: monto MANUAL de la clase. Es obligatorio cuando la clase no
+ *   tiene `cobro` y se factura; con `motivoAjuste` (`otro` por defecto).
+ *
+ * Guardas (las mismas de la asistencia): solo una clase `reservada`, no antes
+ * de `horaFin`, sin alumnos ajenos, sin doble cierre. Los IDs son deterministas
+ * (`${claseId}_${alumnoId}` para los cargos y `${claseId}` para el pago), así
+ * que un reintento nunca duplica.
+ *
+ * El estado final es `pendiente_cobro` (misma máquina de estados) y `facturada`
+ * marca si se generó dinero. `anularCierre` la devuelve a `reservada`.
+ *
+ * Phase 5 (planes mensuales y créditos): acá es donde un crédito del alumno
+ * debe aplicarse ANTES de crear su cargo (descontar del `montoCents` del cargo
+ * o no crearlo si el crédito cubre todo). Todavía NO se implementa.
+ */
+export async function cerrarClase(db, tenantId, claseId, datos = {}, opciones = {}) {
+  const { uid = null, ahora = new Date() } = opciones
+  const asistencias = normalizarAsistencias(datos.asistencias, uid, ahora)
+  const seFactura = datos.seFactura !== false
+  const montoManual = datos.montoCents ?? null
+  const motivoAjuste = datos.motivoAjuste ?? null
+  if (montoManual !== null && !centsValidos(montoManual, LIMITE_MONTO_CENTS)) {
+    throw new CobroInvalidoError(
+      `El monto de la clase debe ser un entero de centavos entre 0 y ${LIMITE_MONTO_CENTS}`,
+    )
+  }
+  if (!motivoValido(motivoAjuste)) {
+    throw new CobroInvalidoError(
+      `Motivo de ajuste inválido "${motivoAjuste}". Permitidos: descuento, cortesia, acuerdo, otro (o null)`,
+    )
+  }
 
   const claseRef = refClase(db, tenantId, claseId)
-  await runTransaction(db, async (tx) => {
-    const snap = await tx.get(claseRef)
-    if (!snap.exists()) throw new ClaseInvalidaError(`La clase ${claseId} no existe`)
-    const estadoActual = snap.data().estado
+  const parametrosRef = refParametros(db, tenantId)
+  let resultado = null
 
-    // Solo se puede cerrar una clase que está en estado "reservada".
-    if (estadoActual !== 'reservada') {
+  await runTransaction(db, async (tx) => {
+    const [snap, snapParametros] = await Promise.all([
+      tx.get(claseRef),
+      tx.get(parametrosRef),
+    ])
+    if (!snap.exists()) throw new ClaseInvalidaError(`La clase ${claseId} no existe`)
+    const d = snap.data()
+
+    if (d.estado !== 'reservada') {
       throw new ClaseInvalidaError(
-        estadoActual === 'cancelada'
+        d.estado === 'cancelada'
           ? `La clase ${claseId} está cancelada y no se puede cerrar`
-          : `La clase ${claseId} ya está cerrada (estado "${estadoActual}")`,
+          : `La clase ${claseId} ya está cerrada (estado "${d.estado}")`,
       )
     }
 
-    // No se puede cerrar una clase que todavía no terminó.
-    // Se compara en hora LOCAL para no depender de UTC (Caracas = UTC-4).
-    const d = snap.data()
+    // No se puede cerrar una clase que todavía no terminó (hora LOCAL).
     const [fy, fm, fd] = String(d.fecha ?? '').split('-').map(Number)
     if (fy && fm && fd && d.horaFin) {
       const finMinutos = aMinutos(d.horaFin)
@@ -2443,25 +2520,293 @@ export async function registrarAsistencia(db, tenantId, claseId, asistencias, op
       }
     }
 
-    // Exactamente una entrada por alumno asignado: ni de menos (falta alguno)
-    // ni de más (alumno que no pertenece a la clase).
-    const asignados = new Set(snap.data().alumnos ?? [])
-    const registrados = new Set(normalizadas.map((r) => r.alumnoId))
+    // Exactamente una entrada por alumno asignado (ni de menos ni de más).
+    const asignados = new Set(d.alumnos ?? [])
+    const registrados = new Set(asistencias.map((r) => r.alumnoId))
     if (asignados.size !== registrados.size || [...asignados].some((id) => !registrados.has(id))) {
       throw new ClaseInvalidaError(
         'La asistencia debe tener exactamente una entrada por cada alumno asignado',
       )
     }
 
+    // Snapshot final del cobro: el manual (siempre ajustado) o el guardado.
+    let cobro = d.cobro ?? null
+    if (montoManual !== null) {
+      cobro = cobro
+        ? { ...cobro, montoCents: montoManual, ajustado: true, motivoAjuste: motivoAjuste ?? cobro.motivoAjuste ?? 'otro' }
+        : {
+            perfilCobroId: null,
+            modo: 'total',
+            tarifaHoraCents: null,
+            montoEstandarCents: null,
+            montoCents: montoManual,
+            ajustado: true,
+            motivoAjuste: motivoAjuste ?? 'otro',
+          }
+      cobro = validarCobro(cobro)
+    }
+    if (seFactura && !cobro) {
+      throw new CobroInvalidoError(
+        'La clase no tiene precio: carga un monto para poder cerrarla con cobro',
+      )
+    }
+
+    const parametros = leerParametros(snapParametros.exists() ? snapParametros.data() : null)
+    const cierre = calcularCierre({
+      cobro,
+      duracionMin: duracionDeClase(d),
+      asistencias,
+      parametros,
+      seFactura,
+    })
+
+    const nombrePorId = {}
+    ;(d.alumnos ?? []).forEach((id, i) => {
+      nombrePorId[id] = (d.alumnoNombres ?? [])[i] ?? id
+    })
+
+    const cargos = cierre.cargos.map((cargo) => ({
+      id: `${claseId}_${cargo.alumnoId}`,
+      doc: {
+        claseId,
+        alumnoId: cargo.alumnoId,
+        alumnoNombre: nombrePorId[cargo.alumnoId] ?? cargo.alumnoId,
+        sedeId: d.sedeId,
+        fecha: d.fecha,
+        concepto: cargo.concepto,
+        montoCents: cargo.montoCents,
+        estado: 'pendiente',
+        pagadoEn: null,
+        metodoPago: null,
+        creadoEn: Timestamp.fromDate(ahora),
+      },
+    }))
+
+    const pagoProfesor =
+      cierre.pagoProfesor.montoCents > 0
+        ? {
+            claseId,
+            profesorId: d.profesorId,
+            profesorNombre: d.profesorNombre ?? null,
+            sedeId: d.sedeId,
+            fecha: d.fecha,
+            montoCents: cierre.pagoProfesor.montoCents,
+            base: { modo: parametros.pagoProfesor.modo, minutos: duracionDeClase(d) },
+            estado: 'pendiente',
+            pagadoEn: null,
+            metodoPago: null,
+          }
+        : null
+
     tx.update(claseRef, {
-      asistencias: normalizadas,
+      asistencias,
       estado: 'pendiente_cobro',
+      facturada: Boolean(seFactura),
+      cobro,
+      actualizadoPor: uid,
+      actualizadoEn: Timestamp.fromDate(ahora),
+    })
+    for (const cargo of cargos) {
+      tx.set(refCargo(db, tenantId, cargo.id), cargo.doc)
+    }
+    if (pagoProfesor) {
+      tx.set(refPagoProfesor(db, tenantId, claseId), pagoProfesor)
+    }
+
+    resultado = {
+      claseId,
+      estado: 'pendiente_cobro',
+      facturada: Boolean(seFactura),
+      cargos: cargos.map((cargo) => ({ id: cargo.id, ...cargo.doc })),
+      pagoProfesor: pagoProfesor ? { id: claseId, ...pagoProfesor } : null,
+      resumen: cierre.resumen,
+    }
+  })
+
+  return resultado
+}
+
+/**
+ * Atajo histórico: registra la asistencia SIN generar cobro. Es `cerrarClase`
+ * con `seFactura: false` (fuerza mayor), así que deja la clase en
+ * `pendiente_cobro` con `facturada: false` y sin cargos ni pago al profesor.
+ * Se conserva por compatibilidad; la UI usa `cerrarClase`.
+ */
+export async function registrarAsistencia(db, tenantId, claseId, asistencias, opciones = {}) {
+  return cerrarClase(db, tenantId, claseId, { asistencias, seFactura: false }, opciones)
+}
+
+/**
+ * Marca un cargo como pagado (pago COMPLETO; los parciales quedan fuera de
+ * alcance). `metodoPago` ∈ METODOS_PAGO. Idempotente si ya estaba pagado.
+ */
+export async function marcarCargoPagado(db, tenantId, cargoId, datos = {}, opciones = {}) {
+  const { ahora = new Date() } = opciones
+  const metodoPago = datos.metodoPago ?? null
+  if (!METODOS_PAGO.includes(metodoPago)) {
+    throw new CobroInvalidoError(`método de pago inválido "${metodoPago}"`)
+  }
+  const ref = refCargo(db, tenantId, cargoId)
+  await runTransaction(db, async (tx) => {
+    const snap = await tx.get(ref)
+    if (!snap.exists()) throw new ClaseInvalidaError(`El cargo ${cargoId} no existe`)
+    const estado = snap.data().estado
+    if (estado === 'pagado') return
+    if (estado !== 'pendiente') {
+      throw new CobroInvalidoError(`Solo se cobra un cargo pendiente (estado "${estado}")`)
+    }
+    tx.update(ref, {
+      estado: 'pagado',
+      pagadoEn: Timestamp.fromDate(ahora),
+      metodoPago,
+    })
+  })
+  return { cargoId, estado: 'pagado' }
+}
+
+/**
+ * Marca el pago de una clase al profesor como pagado (completo). Espejo de
+ * `marcarCargoPagado` sobre `pagosProfesor/{claseId}`.
+ */
+export async function marcarPagoProfesorPagado(db, tenantId, pagoId, datos = {}, opciones = {}) {
+  const { ahora = new Date() } = opciones
+  const metodoPago = datos.metodoPago ?? null
+  if (!METODOS_PAGO.includes(metodoPago)) {
+    throw new CobroInvalidoError(`método de pago inválido "${metodoPago}"`)
+  }
+  const ref = refPagoProfesor(db, tenantId, pagoId)
+  await runTransaction(db, async (tx) => {
+    const snap = await tx.get(ref)
+    if (!snap.exists()) throw new ClaseInvalidaError(`El pago ${pagoId} no existe`)
+    const estado = snap.data().estado
+    if (estado === 'pagado') return
+    if (estado !== 'pendiente') {
+      throw new CobroInvalidoError(`Solo se paga un pago pendiente (estado "${estado}")`)
+    }
+    tx.update(ref, {
+      estado: 'pagado',
+      pagadoEn: Timestamp.fromDate(ahora),
+      metodoPago,
+    })
+  })
+  return { pagoId, estado: 'pagado' }
+}
+
+/**
+ * Anula el cierre de una clase: marca `anulado` sus cargos y su pago (si no
+ * están pagados) y devuelve la clase a `reservada` para poder cerrarla otra
+ * vez. Se rechaza si algún cargo o el pago ya está `pagado` (primero hay que
+ * deshacer el cobro).
+ */
+export async function anularCierre(db, tenantId, claseId, opciones = {}) {
+  const { uid = null, ahora = new Date() } = opciones
+  const claseRef = refClase(db, tenantId, claseId)
+  const pagoRef = refPagoProfesor(db, tenantId, claseId)
+
+  await runTransaction(db, async (tx) => {
+    const snap = await tx.get(claseRef)
+    if (!snap.exists()) throw new ClaseInvalidaError(`La clase ${claseId} no existe`)
+    if (snap.data().estado !== 'pendiente_cobro') {
+      throw new ClaseInvalidaError(
+        `Solo se anula una clase cerrada (estado "${snap.data().estado}")`,
+      )
+    }
+    // El SDK web NO deja consultar (Query) dentro de una transacción, así que
+    // los cargos se leen con sus IDs deterministas (`${claseId}_${alumnoId}`).
+    const cargoIds = (snap.data().alumnos ?? []).map((alumnoId) => `${claseId}_${alumnoId}`)
+    const [snapCargos, snapPago] = await Promise.all([
+      Promise.all(cargoIds.map((cargoId) => tx.get(refCargo(db, tenantId, cargoId)))),
+      tx.get(pagoRef),
+    ])
+    const pagado =
+      snapCargos.some((d) => d.exists() && d.data().estado === 'pagado') ||
+      (snapPago.exists() && snapPago.data().estado === 'pagado')
+    if (pagado) {
+      throw new CobroInvalidoError(
+        'No se puede anular el cierre: hay un cobro o pago ya registrado. Deshazlo primero.',
+      )
+    }
+    snapCargos.forEach((d) => {
+      if (d.exists() && d.data().estado === 'pendiente') tx.update(d.ref, { estado: 'anulado' })
+    })
+    if (snapPago.exists() && snapPago.data().estado === 'pendiente') {
+      tx.update(pagoRef, { estado: 'anulado' })
+    }
+    tx.update(claseRef, {
+      estado: 'reservada',
+      facturada: false,
       actualizadoPor: uid,
       actualizadoEn: Timestamp.fromDate(ahora),
     })
   })
 
-  return { claseId, estado: 'pendiente_cobro' }
+  return { claseId, estado: 'reservada' }
+}
+
+/** Normaliza un rango de fechas opcional para los listados de cobros. */
+function rangoFechas(desde, hasta) {
+  return { desde: desde ?? null, hasta: hasta ?? null }
+}
+
+/**
+ * Cargos PENDIENTES, acotados por tenant y opcionalmente por sede y rango de
+ * fechas. Página chica: 50 por defecto, tope 100. Requiere los índices de
+ * `firestore.indexes.json`.
+ */
+export async function listarCargosPendientes(db, tenantId, opciones = {}) {
+  const { sedeId = null, limite } = opciones
+  const { desde, hasta } = rangoFechas(opciones.desde, opciones.hasta)
+  const tope = Math.min(Math.max(1, Number(limite) || LIMITE_COBROS_PAGINA), LIMITE_COBROS_MAX)
+  const filtros = [where('estado', '==', 'pendiente')]
+  if (sedeId) filtros.push(where('sedeId', '==', sedeId))
+  if (desde) filtros.push(where('fecha', '>=', desde))
+  if (hasta) filtros.push(where('fecha', '<=', hasta))
+  const q = query(
+    coleccionCargos(db, tenantId),
+    ...filtros,
+    orderBy('fecha'),
+    limit(tope),
+  )
+  const snap = await getDocs(q)
+  return snap.docs.map((d) => ({ id: d.id, ...d.data() }))
+}
+
+/**
+ * Pagos PENDIENTES al profesor, con los mismos filtros y topes que
+ * `listarCargosPendientes` (colección `pagosProfesor`).
+ */
+export async function listarPagosProfesorPendientes(db, tenantId, opciones = {}) {
+  const { sedeId = null, limite } = opciones
+  const { desde, hasta } = rangoFechas(opciones.desde, opciones.hasta)
+  const tope = Math.min(Math.max(1, Number(limite) || LIMITE_COBROS_PAGINA), LIMITE_COBROS_MAX)
+  const filtros = [where('estado', '==', 'pendiente')]
+  if (sedeId) filtros.push(where('sedeId', '==', sedeId))
+  if (desde) filtros.push(where('fecha', '>=', desde))
+  if (hasta) filtros.push(where('fecha', '<=', hasta))
+  const q = query(
+    coleccionPagosProfesor(db, tenantId),
+    ...filtros,
+    orderBy('fecha'),
+    limit(tope),
+  )
+  const snap = await getDocs(q)
+  return snap.docs.map((d) => ({ id: d.id, ...d.data() }))
+}
+
+/**
+ * Cierre de una clase para el detalle: sus cargos (todos los estados) y el pago
+ * al profesor, o `null`. 2 lecturas.
+ */
+export async function getCierreDeClase(db, tenantId, claseId) {
+  const cargosQuery = query(coleccionCargos(db, tenantId), where('claseId', '==', claseId))
+  const [snapCargos, snapPago] = await Promise.all([
+    getDocs(cargosQuery),
+    getDoc(refPagoProfesor(db, tenantId, claseId)),
+  ])
+  return {
+    cargos: snapCargos.docs.map((d) => ({ id: d.id, ...d.data() })),
+    pagoProfesor: snapPago.exists() ? { id: snapPago.id, ...snapPago.data() } : null,
+  }
 }
 
 /**

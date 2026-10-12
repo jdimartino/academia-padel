@@ -24,11 +24,13 @@ import {
   actualizarPerfilCobro,
   actualizarProfesor,
   asignarAlumnos,
+  anularCierre,
   bloquesDeClase,
   buscarAlumnos,
   cambiarActivaCancha,
   cambiarActivaPerfilCobro,
   cancelarClase,
+  cerrarClase,
   crearAlumno,
   crearCancha,
   crearClase,
@@ -41,6 +43,7 @@ import {
   getCanchas,
   getClase,
   getClasesDeSedePorFecha,
+  getCierreDeClase,
   getParametros,
   getProfesores,
   getSede,
@@ -49,8 +52,12 @@ import {
   horarioDelDia,
   listarAlumnos,
   listarCanchas,
+  listarCargosPendientes,
+  listarPagosProfesorPendientes,
   listarPerfilesCobro,
   listarSedes,
+  marcarCargoPagado,
+  marcarPagoProfesorPagado,
   nombreCompleto,
   nombreDeCancha,
   reactivarSede,
@@ -3076,5 +3083,264 @@ describe('[F3] cobro de la clase (snapshot)', () => {
     // Y una de 2 h sí se crea.
     const { claseId } = await reservar({ horaInicio: '18:00', horaFin: '20:00' })
     assert.equal((await getClase(adminDb, T1, claseId)).horaFin, '20:00')
+  })
+})
+
+/* --------------------------------------------------------------------- */
+/* [F4] Cierre de clase: cargos y pago al profesor                        */
+/* --------------------------------------------------------------------- */
+
+describe('[F4] cerrarClase: cargos y pago al profesor', () => {
+  const cobroPareja = {
+    perfilCobroId: 'pareja',
+    modo: 'total',
+    tarifaHoraCents: 5000,
+    montoEstandarCents: 5000,
+    montoCents: 5000,
+    ajustado: false,
+    motivoAjuste: null,
+  }
+
+  const presentes = (ids) => ids.map((alumnoId) => ({ alumnoId, estado: 'presente' }))
+
+  it('escribe asistencia, cargos y pago en una sola transacción', async () => {
+    const { claseId } = await reservar({ alumnos: ['a1', 'a2'], cobro: cobroPareja })
+    const res = await cerrarClase(
+      adminDb,
+      T1,
+      claseId,
+      { asistencias: presentes(['a1', 'a2']) },
+      { uid: ADMIN, ahora: DESPUES_DEL_FIN },
+    )
+
+    const clase = await getClase(adminDb, T1, claseId)
+    assert.equal(clase.estado, 'pendiente_cobro')
+    assert.equal(clase.facturada, true)
+    assert.equal(clase.asistencias.length, 2)
+
+    const { cargos, pagoProfesor } = await getCierreDeClase(adminDb, T1, claseId)
+    assert.deepEqual(
+      cargos.map((c) => c.id).sort(),
+      [`${claseId}_a1`, `${claseId}_a2`].sort(),
+    )
+    assert.ok(cargos.every((c) => c.estado === 'pendiente' && c.montoCents === 2500))
+    assert.ok(cargos.every((c) => c.concepto === 'clase' && c.sedeId === 'traki'))
+    assert.equal(pagoProfesor.id, claseId)
+    assert.equal(pagoProfesor.montoCents, 1500)
+    assert.deepEqual(pagoProfesor.base, { modo: 'por_hora', minutos: 60 })
+    assert.equal(pagoProfesor.estado, 'pendiente')
+    assert.equal(res.pagoProfesor.montoCents, 1500)
+  })
+
+  it('el doble cierre se rechaza y no duplica cargos (ids deterministas)', async () => {
+    const { claseId } = await reservar({ alumnos: ['a1', 'a2'], cobro: cobroPareja })
+    await cerrarClase(
+      adminDb,
+      T1,
+      claseId,
+      { asistencias: presentes(['a1', 'a2']) },
+      { uid: ADMIN, ahora: DESPUES_DEL_FIN },
+    )
+    await assert.rejects(
+      cerrarClase(
+        adminDb,
+        T1,
+        claseId,
+        { asistencias: presentes(['a1', 'a2']) },
+        { uid: ADMIN, ahora: DESPUES_DEL_FIN },
+      ),
+      /ya está cerrada/,
+    )
+    const { cargos } = await getCierreDeClase(adminDb, T1, claseId)
+    assert.equal(cargos.length, 2)
+  })
+
+  it('mantiene las guardias: alumno ajeno y hora de fin', async () => {
+    const { claseId } = await reservar({ alumnos: ['a1'] })
+    await assert.rejects(
+      cerrarClase(
+        adminDb,
+        T1,
+        claseId,
+        { asistencias: presentes(['a1', 'a2']) },
+        { uid: ADMIN, ahora: DESPUES_DEL_FIN },
+      ),
+      /exactamente una entrada/,
+    )
+    await assert.rejects(
+      cerrarClase(
+        adminDb,
+        T1,
+        claseId,
+        { asistencias: presentes(['a1']) },
+        { uid: ADMIN, ahora: AHORA_RESERVA },
+      ),
+      /todavía no terminó/,
+    )
+    assert.equal((await getClase(adminDb, T1, claseId)).estado, 'reservada')
+  })
+
+  it('seFactura false: cierra sin cargos ni pago', async () => {
+    const { claseId } = await reservar({ alumnos: ['a1'], cobro: cobroPareja })
+    await cerrarClase(
+      adminDb,
+      T1,
+      claseId,
+      { asistencias: presentes(['a1']), seFactura: false },
+      { uid: ADMIN, ahora: DESPUES_DEL_FIN },
+    )
+    const clase = await getClase(adminDb, T1, claseId)
+    assert.equal(clase.facturada, false)
+    const { cargos, pagoProfesor } = await getCierreDeClase(adminDb, T1, claseId)
+    assert.equal(cargos.length, 0)
+    assert.equal(pagoProfesor, null)
+  })
+
+  it('sin cobro exige monto manual; con él, genera el cargo', async () => {
+    const { claseId } = await reservar({ alumnos: ['a1'] })
+    await assert.rejects(
+      cerrarClase(
+        adminDb,
+        T1,
+        claseId,
+        { asistencias: presentes(['a1']) },
+        { uid: ADMIN, ahora: DESPUES_DEL_FIN },
+      ),
+      CobroInvalidoError,
+    )
+    await cerrarClase(
+      adminDb,
+      T1,
+      claseId,
+      { asistencias: presentes(['a1']), montoCents: 3000 },
+      { uid: ADMIN, ahora: DESPUES_DEL_FIN },
+    )
+    const { cargos } = await getCierreDeClase(adminDb, T1, claseId)
+    assert.equal(cargos.length, 1)
+    assert.equal(cargos[0].montoCents, 3000)
+    const clase = await getClase(adminDb, T1, claseId)
+    assert.equal(clase.cobro.montoCents, 3000)
+    assert.equal(clase.cobro.ajustado, true)
+  })
+})
+
+describe('[F4] marcar pagado y anular cierre', () => {
+  const cobroUno = {
+    perfilCobroId: 'individual',
+    modo: 'total',
+    tarifaHoraCents: 5000,
+    montoEstandarCents: 5000,
+    montoCents: 5000,
+    ajustado: false,
+    motivoAjuste: null,
+  }
+
+  async function cerrarUno() {
+    const { claseId } = await reservar({ alumnos: ['a1'], cobro: cobroUno })
+    await cerrarClase(
+      adminDb,
+      T1,
+      claseId,
+      { asistencias: [{ alumnoId: 'a1', estado: 'presente' }] },
+      { uid: ADMIN, ahora: DESPUES_DEL_FIN },
+    )
+    const { cargos, pagoProfesor } = await getCierreDeClase(adminDb, T1, claseId)
+    return { claseId, cargoId: cargos[0].id, cargos, pagoProfesor }
+  }
+
+  it('marca un cargo pagado y luego bloquea el anular', async () => {
+    const { claseId, cargoId } = await cerrarUno()
+    await marcarCargoPagado(adminDb, T1, cargoId, { metodoPago: 'efectivo' }, { uid: ADMIN })
+    const { cargos } = await getCierreDeClase(adminDb, T1, claseId)
+    assert.equal(cargos.find((c) => c.id === cargoId).estado, 'pagado')
+    assert.ok(cargos.find((c) => c.id === cargoId).pagadoEn)
+    await assert.rejects(anularCierre(adminDb, T1, claseId, { uid: ADMIN }), /cobro o pago ya registrado/)
+  })
+
+  it('valida el método de pago y la existencia', async () => {
+    const { cargoId } = await cerrarUno()
+    await assert.rejects(
+      marcarCargoPagado(adminDb, T1, cargoId, { metodoPago: 'bitcoin' }, { uid: ADMIN }),
+      CobroInvalidoError,
+    )
+    await assert.rejects(
+      marcarCargoPagado(adminDb, T1, 'nope', { metodoPago: 'efectivo' }, { uid: ADMIN }),
+      ClaseInvalidaError,
+    )
+  })
+
+  it('el método de pago del profesor usa el mismo catálogo', async () => {
+    const { claseId } = await cerrarUno()
+    await marcarPagoProfesorPagado(adminDb, T1, claseId, { metodoPago: 'zelle' }, { uid: ADMIN })
+    const { pagoProfesor } = await getCierreDeClase(adminDb, T1, claseId)
+    assert.equal(pagoProfesor.estado, 'pagado')
+    assert.equal(pagoProfesor.metodoPago, 'zelle')
+    await assert.rejects(anularCierre(adminDb, T1, claseId, { uid: ADMIN }), /cobro o pago ya registrado/)
+  })
+
+  it('anular el cierre vuelve la clase a reservada y permite cerrarla de nuevo', async () => {
+    const { claseId } = await cerrarUno()
+    await anularCierre(adminDb, T1, claseId, { uid: ADMIN })
+    const clase = await getClase(adminDb, T1, claseId)
+    assert.equal(clase.estado, 'reservada')
+    const cierre = await getCierreDeClase(adminDb, T1, claseId)
+    assert.ok(cierre.cargos.every((c) => c.estado === 'anulado'))
+    assert.equal(cierre.pagoProfesor.estado, 'anulado')
+
+    // Se puede volver a cerrar: los cargos y el pago vuelven a `pendiente`.
+    await cerrarClase(
+      adminDb,
+      T1,
+      claseId,
+      { asistencias: [{ alumnoId: 'a1', estado: 'presente' }] },
+      { uid: ADMIN, ahora: DESPUES_DEL_FIN },
+    )
+    const recerrado = await getCierreDeClase(adminDb, T1, claseId)
+    assert.ok(recerrado.cargos.every((c) => c.estado === 'pendiente'))
+    assert.equal(recerrado.pagoProfesor.estado, 'pendiente')
+  })
+})
+
+describe('[F4] listados de cobros pendientes', () => {
+  const cobro = {
+    perfilCobroId: 'individual',
+    modo: 'total',
+    tarifaHoraCents: 5000,
+    montoEstandarCents: 5000,
+    montoCents: 5000,
+    ajustado: false,
+    motivoAjuste: null,
+  }
+
+  it('devuelve cargos y pagos pendientes acotados por sede y fecha', async () => {
+    const { claseId } = await reservar({ alumnos: ['a1'], cobro })
+    await cerrarClase(
+      adminDb,
+      T1,
+      claseId,
+      { asistencias: [{ alumnoId: 'a1', estado: 'presente' }] },
+      { uid: ADMIN, ahora: DESPUES_DEL_FIN },
+    )
+
+    const cargos = await listarCargosPendientes(adminDb, T1, {
+      sedeId: 'traki',
+      desde: FECHA,
+      hasta: FECHA,
+    })
+    assert.equal(cargos.length, 1)
+    assert.equal(cargos[0].claseId, claseId)
+
+    const pagos = await listarPagosProfesorPendientes(adminDb, T1, {
+      sedeId: 'traki',
+      desde: FECHA,
+      hasta: FECHA,
+    })
+    assert.equal(pagos.length, 1)
+    assert.equal(pagos[0].claseId, claseId)
+    assert.equal(pagos[0].montoCents, 1500)
+
+    // Fuera del rango no aparece nada.
+    const fuera = await listarCargosPendientes(adminDb, T1, { desde: '2027-01-01', hasta: '2027-01-02' })
+    assert.equal(fuera.length, 0)
   })
 })

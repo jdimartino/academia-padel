@@ -195,7 +195,81 @@ service cloud.firestore {
                 && data.alertaCobro.dias <= 30
                 && data.alertaCobro.referencia in ['clase', 'vencimiento']))
         && (!data.keys().hasAny(['restringirCategoriaPorFranja'])
-            || data.restringirCategoriaPorFranja is bool);
+            || data.restringirCategoriaPorFranja is bool)
+        && (!data.keys().hasAny(['repartoAusenciaAvisada'])
+            || data.repartoAusenciaAvisada in ['absorbe_academia', 'reparte_entre_presentes'])
+        && (!data.keys().hasAny(['pagoProfesorSiTodosFaltanSinAviso'])
+            || data.pagoProfesorSiTodosFaltanSinAviso in ['completo', 'proporcional_cobrado', 'nada']);
+    }
+
+    // --- Cobros generados al cerrar la clase (Phase 4) -------------------
+
+    // Cargo de un alumno: campos exactos del modelo, enums y centavos enteros
+    // >= 0. Los IDs son deterministas (`claseId_alumnoId`), así que un reintento
+    // reescribe el mismo documento. No se borran: se anulan.
+    function cargoValido(data) {
+      return data.keys().hasOnly([
+            'claseId',
+            'alumnoId',
+            'alumnoNombre',
+            'sedeId',
+            'fecha',
+            'concepto',
+            'montoCents',
+            'estado',
+            'pagadoEn',
+            'metodoPago',
+            'creadoEn'
+          ])
+        && data.claseId is string
+        && data.alumnoId is string
+        && data.alumnoNombre is string
+        && data.sedeId is string
+        && data.fecha is string
+        && data.concepto in ['clase', 'falta_sin_aviso', 'mensualidad', 'otro']
+        && data.montoCents is int
+        && data.montoCents >= 0
+        && data.montoCents <= 1000000
+        && data.estado in ['pendiente', 'pagado', 'anulado']
+        && (!data.keys().hasAny(['pagadoEn']) || data.pagadoEn == null || data.pagadoEn is timestamp)
+        && (!data.keys().hasAny(['metodoPago'])
+            || data.metodoPago == null
+            || data.metodoPago in ['efectivo', 'zelle', 'pago_movil', 'transferencia', 'otro'])
+        && (!data.keys().hasAny(['creadoEn']) || data.creadoEn == null || data.creadoEn is timestamp);
+    }
+
+    // Pago al profesor por una clase: campos exactos, `base` con modo/minutos.
+    function pagoProfesorRegistradoValido(data) {
+      return data.keys().hasOnly([
+            'claseId',
+            'profesorId',
+            'profesorNombre',
+            'sedeId',
+            'fecha',
+            'montoCents',
+            'base',
+            'estado',
+            'pagadoEn',
+            'metodoPago'
+          ])
+        && data.claseId is string
+        && data.profesorId is string
+        && (data.profesorNombre == null || data.profesorNombre is string)
+        && data.sedeId is string
+        && data.fecha is string
+        && data.montoCents is int
+        && data.montoCents >= 0
+        && data.montoCents <= 1000000
+        && data.base is map
+        && data.base.keys().hasOnly(['modo', 'minutos'])
+        && data.base.modo in ['por_hora', 'por_clase']
+        && data.base.minutos is int
+        && data.base.minutos >= 0
+        && data.estado in ['pendiente', 'pagado', 'anulado']
+        && (!data.keys().hasAny(['pagadoEn']) || data.pagadoEn == null || data.pagadoEn is timestamp)
+        && (!data.keys().hasAny(['metodoPago'])
+            || data.metodoPago == null
+            || data.metodoPago in ['efectivo', 'zelle', 'pago_movil', 'transferencia', 'otro']);
     }
 
     // Snapshot de cobro de una clase: opcional. Si viene, es un mapa con
@@ -316,8 +390,18 @@ service cloud.firestore {
         allow read, write: if esAdmin(tenantId);
       }
 
+      // Cargos y pagos al profesor (Phase 4): solo admin, con la forma del
+      // modelo validada y SIN borrado (se anulan).
       match /cargos/{cargoId} {
-        allow read, write: if esAdmin(tenantId);
+        allow read: if esAdmin(tenantId);
+        allow create, update: if esAdmin(tenantId) && cargoValido(request.resource.data);
+        allow delete: if false;
+      }
+
+      match /pagosProfesor/{pagoId} {
+        allow read: if esAdmin(tenantId);
+        allow create, update: if esAdmin(tenantId) && pagoProfesorRegistradoValido(request.resource.data);
+        allow delete: if false;
       }
 
       match /pagos/{pagoId} {

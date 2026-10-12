@@ -47,16 +47,22 @@ import {
 } from '../src/lib/dinero.js'
 import {
   PARAMETROS_DEFAULT,
+  PAGOS_SIN_AVISO,
   PERFILES_COBRO_DEFAULT,
+  REPARTOS_AUSENCIA,
   alertaCobroValida,
+  calcularCierre,
   duracionesValidas,
   leerParametros,
   motivoValido,
   modoValido,
   pagoProfesorValido,
+  pagoSinAvisoValido,
   perfilPorCupo,
   personasValidas,
   recalcularCobro,
+  repartirCents,
+  repartoAusenciaValido,
   sugerirPrecioCents,
   vencimientoValido,
 } from '../src/lib/cobros.js'
@@ -1088,6 +1094,18 @@ describe('parámetros de la academia', () => {
     assert.equal(PARAMETROS_DEFAULT.vencimientoCreditoDias, null)
     assert.equal(PARAMETROS_DEFAULT.pagoProfesor.modo, 'por_hora')
     assert.equal(PARAMETROS_DEFAULT.pagoProfesor.montoCents, 1500)
+    assert.equal(PARAMETROS_DEFAULT.repartoAusenciaAvisada, 'absorbe_academia')
+    assert.equal(PARAMETROS_DEFAULT.pagoProfesorSiTodosFaltanSinAviso, 'completo')
+  })
+
+  it('repartoAusenciaValido y pagoSinAvisoValido', () => {
+    assert.equal(repartoAusenciaValido('absorbe_academia'), true)
+    assert.equal(repartoAusenciaValido('reparte_entre_presentes'), true)
+    assert.equal(repartoAusenciaValido('otra'), false)
+    assert.equal(pagoSinAvisoValido('completo'), true)
+    assert.equal(pagoSinAvisoValido('proporcional_cobrado'), true)
+    assert.equal(pagoSinAvisoValido('nada'), true)
+    assert.equal(pagoSinAvisoValido('mitad'), false)
   })
 
   it('pagoProfesorValido, alertaCobroValida y vencimientoValido', () => {
@@ -1124,6 +1142,8 @@ describe('parámetros de la academia', () => {
       vencimientoCreditoDias: null,
       alertaCobro: { dias: 2, referencia: 'clase' },
       restringirCategoriaPorFranja: false,
+      repartoAusenciaAvisada: 'absorbe_academia',
+      pagoProfesorSiTodosFaltanSinAviso: 'completo',
     })
   })
 
@@ -1146,5 +1166,239 @@ describe('parámetros de la academia', () => {
     assert.equal(leidos.vencimientoCreditoDias, 45)
     assert.deepEqual(leidos.alertaCobro, { dias: 1, referencia: 'vencimiento' })
     assert.equal(leidos.restringirCategoriaPorFranja, true)
+  })
+})
+
+/* ------------------------------------------------------------------ */
+/* calcularCierre (Phase 4)                                            */
+/* ------------------------------------------------------------------ */
+
+describe('cierre de clase: cálculo de cargos y pago al profesor', () => {
+  const PARAMS = { ...PARAMETROS_DEFAULT }
+
+  const cobroTotal = (montoCents = 5000, extra = {}) => ({
+    perfilCobroId: 'pareja',
+    modo: 'total',
+    tarifaHoraCents: 5000,
+    montoEstandarCents: 5000,
+    montoCents,
+    ajustado: false,
+    motivoAjuste: null,
+    ...extra,
+  })
+
+  const cobroPorPersona = (extra = {}) => ({
+    perfilCobroId: 'individual',
+    modo: 'por_persona',
+    tarifaHoraCents: 5000,
+    montoEstandarCents: 5000,
+    montoCents: 5000,
+    ajustado: false,
+    motivoAjuste: null,
+    ...extra,
+  })
+
+  const asis = (...estados) => estados.map((estado, i) => ({ alumnoId: `a${i + 1}`, estado }))
+
+  it('repartirCents reparte y manda el resto a los primeros', () => {
+    assert.deepEqual(repartirCents(10000, 3), [3334, 3333, 3333])
+    assert.deepEqual(repartirCents(100, 4), [25, 25, 25, 25])
+    assert.deepEqual(repartirCents(10, 4), [3, 3, 2, 2])
+    assert.deepEqual(repartirCents(0, 3), [0, 0, 0])
+    assert.deepEqual(repartirCents(100, 0), [])
+  })
+
+  it('modo total con todos presentes: reparto igual y pago completo', () => {
+    const { cargos, pagoProfesor, resumen } = calcularCierre({
+      cobro: cobroTotal(5000),
+      duracionMin: 60,
+      asistencias: asis('presente', 'presente'),
+      parametros: PARAMS,
+    })
+    assert.deepEqual(cargos, [
+      { alumnoId: 'a1', concepto: 'clase', montoCents: 2500 },
+      { alumnoId: 'a2', concepto: 'clase', montoCents: 2500 },
+    ])
+    assert.deepEqual(pagoProfesor, { montoCents: 1500, base: 1500 })
+    assert.equal(resumen.totalCargosCents, 5000)
+  })
+
+  it('modo por_persona sin ajustar: recalcula por alumno con la duración real', () => {
+    const { cargos, pagoProfesor } = calcularCierre({
+      cobro: cobroPorPersona(),
+      duracionMin: 90,
+      asistencias: asis('presente', 'presente'),
+      parametros: PARAMS,
+    })
+    // 5000 × 90/60 = 7500 por alumno.
+    assert.deepEqual(cargos, [
+      { alumnoId: 'a1', concepto: 'clase', montoCents: 7500 },
+      { alumnoId: 'a2', concepto: 'clase', montoCents: 7500 },
+    ])
+    // Pago por hora: 1500 × 90/60 = 2250.
+    assert.deepEqual(pagoProfesor, { montoCents: 2250, base: 2250 })
+  })
+
+  it('modo por_persona AJUSTADO: el monto es el total y se reparte igual', () => {
+    const { cargos } = calcularCierre({
+      cobro: cobroPorPersona({ montoCents: 9000, ajustado: true, motivoAjuste: 'acuerdo' }),
+      duracionMin: 60,
+      asistencias: asis('presente', 'presente'),
+      parametros: PARAMS,
+    })
+    assert.deepEqual(cargos, [
+      { alumnoId: 'a1', concepto: 'clase', montoCents: 4500 },
+      { alumnoId: 'a2', concepto: 'clase', montoCents: 4500 },
+    ])
+  })
+
+  it('pareja con una avisada: la academia absorbe (default)', () => {
+    const { cargos } = calcularCierre({
+      cobro: cobroTotal(5000),
+      duracionMin: 60,
+      asistencias: asis('presente', 'ausente_avisada'),
+      parametros: PARAMS,
+    })
+    assert.deepEqual(cargos, [{ alumnoId: 'a1', concepto: 'clase', montoCents: 2500 }])
+  })
+
+  it('pareja con una avisada: reparto entre presentes', () => {
+    const { cargos } = calcularCierre({
+      cobro: cobroTotal(5000),
+      duracionMin: 60,
+      asistencias: asis('presente', 'ausente_avisada'),
+      parametros: { ...PARAMS, repartoAusenciaAvisada: 'reparte_entre_presentes' },
+    })
+    assert.deepEqual(cargos, [{ alumnoId: 'a1', concepto: 'clase', montoCents: 5000 }])
+  })
+
+  it('falta sin aviso: cobra el porcentaje de la parte', () => {
+    const { cargos } = calcularCierre({
+      cobro: cobroTotal(5000),
+      duracionMin: 60,
+      asistencias: asis('presente', 'ausente_sin_aviso'),
+      parametros: PARAMS,
+    })
+    assert.deepEqual(cargos, [
+      { alumnoId: 'a1', concepto: 'clase', montoCents: 2500 },
+      { alumnoId: 'a2', concepto: 'falta_sin_aviso', montoCents: 1250 },
+    ])
+  })
+
+  it('todos avisaron: sin cargos y sin pago al profesor', () => {
+    const { cargos, pagoProfesor } = calcularCierre({
+      cobro: cobroTotal(5000),
+      duracionMin: 60,
+      asistencias: asis('ausente_avisada', 'ausente_avisada'),
+      parametros: PARAMS,
+    })
+    assert.deepEqual(cargos, [])
+    assert.deepEqual(pagoProfesor, { montoCents: 0, base: 1500 })
+  })
+
+  it('todos sin aviso: pago según el parámetro', () => {
+    const base = {
+      cobro: cobroTotal(2000),
+      duracionMin: 60,
+      asistencias: asis('ausente_sin_aviso', 'ausente_sin_aviso'),
+    }
+    // 2000 / 2 = 1000; 50% = 500 cada uno → total cobrado 1000.
+    const completo = calcularCierre({ ...base, parametros: PARAMS })
+    assert.deepEqual(completo.cargos, [
+      { alumnoId: 'a1', concepto: 'falta_sin_aviso', montoCents: 500 },
+      { alumnoId: 'a2', concepto: 'falta_sin_aviso', montoCents: 500 },
+    ])
+    assert.deepEqual(completo.pagoProfesor, { montoCents: 1500, base: 1500 })
+
+    const proporcional = calcularCierre({
+      ...base,
+      parametros: { ...PARAMS, pagoProfesorSiTodosFaltanSinAviso: 'proporcional_cobrado' },
+    })
+    assert.deepEqual(proporcional.pagoProfesor, { montoCents: 1000, base: 1500 })
+
+    const nada = calcularCierre({
+      ...base,
+      parametros: { ...PARAMS, pagoProfesorSiTodosFaltanSinAviso: 'nada' },
+    })
+    assert.deepEqual(nada.pagoProfesor, { montoCents: 0, base: 1500 })
+  })
+
+  it('seFactura false: ni cargos ni pago', () => {
+    const { cargos, pagoProfesor } = calcularCierre({
+      cobro: cobroTotal(5000),
+      duracionMin: 60,
+      asistencias: asis('presente', 'presente'),
+      parametros: PARAMS,
+      seFactura: false,
+    })
+    assert.deepEqual(cargos, [])
+    assert.deepEqual(pagoProfesor, { montoCents: 0, base: 1500 })
+  })
+
+  it('cortesía: sin cargos pero el profesor cobra si alguien vino', () => {
+    const { cargos, pagoProfesor } = calcularCierre({
+      cobro: cobroTotal(0, { ajustado: true, motivoAjuste: 'cortesia' }),
+      duracionMin: 60,
+      asistencias: asis('presente', 'ausente_sin_aviso'),
+      parametros: PARAMS,
+    })
+    assert.deepEqual(cargos, [])
+    assert.deepEqual(pagoProfesor, { montoCents: 1500, base: 1500 })
+  })
+
+  it('clase sin cobro con monto manual (total ajustado)', () => {
+    const { cargos, resumen } = calcularCierre({
+      cobro: {
+        perfilCobroId: null,
+        modo: 'total',
+        tarifaHoraCents: null,
+        montoEstandarCents: null,
+        montoCents: 3000,
+        ajustado: true,
+        motivoAjuste: 'otro',
+      },
+      duracionMin: 60,
+      asistencias: asis('presente', 'presente'),
+      parametros: PARAMS,
+    })
+    assert.deepEqual(cargos, [
+      { alumnoId: 'a1', concepto: 'clase', montoCents: 1500 },
+      { alumnoId: 'a2', concepto: 'clase', montoCents: 1500 },
+    ])
+    assert.equal(resumen.montoClaseCents, 3000)
+  })
+
+  it('los centavos del resto van a los primeros alumnos', () => {
+    const { cargos } = calcularCierre({
+      cobro: cobroTotal(10000),
+      duracionMin: 60,
+      asistencias: asis('presente', 'presente', 'presente'),
+      parametros: PARAMS,
+    })
+    assert.deepEqual(
+      cargos.map((c) => c.montoCents),
+      [3334, 3333, 3333],
+    )
+    assert.equal(
+      cargos.reduce((t, c) => t + c.montoCents, 0),
+      10000,
+    )
+  })
+
+  it('el pago por_clase no depende de la duración', () => {
+    const { pagoProfesor } = calcularCierre({
+      cobro: cobroTotal(5000),
+      duracionMin: 120,
+      asistencias: asis('presente'),
+      parametros: { ...PARAMS, pagoProfesor: { modo: 'por_clase', montoCents: 3000 } },
+    })
+    assert.deepEqual(pagoProfesor, { montoCents: 3000, base: 3000 })
+  })
+})
+
+describe('constantes de cierre (Phase 4)', () => {
+  it('exporta las listas de enums', () => {
+    assert.deepEqual(REPARTOS_AUSENCIA, ['absorbe_academia', 'reparte_entre_presentes'])
+    assert.deepEqual(PAGOS_SIN_AVISO, ['completo', 'proporcional_cobrado', 'nada'])
   })
 })

@@ -872,3 +872,150 @@ describe('[F3] cobro en la clase', () => {
     )
   })
 })
+
+/* --------------------------------------------------------------------- */
+/* [F4] Cargos y pagos al profesor: solo admin, con forma validada        */
+/* --------------------------------------------------------------------- */
+
+const cargo = (extra = {}) => ({
+  claseId: 'c1',
+  alumnoId: 'a1',
+  alumnoNombre: 'Aldo Adulto',
+  sedeId: 'traki',
+  fecha: FECHA,
+  concepto: 'clase',
+  montoCents: 2500,
+  estado: 'pendiente',
+  pagadoEn: null,
+  metodoPago: null,
+  creadoEn: new Date(),
+  ...extra,
+})
+
+const pagoProfesor = (extra = {}) => ({
+  claseId: 'c1',
+  profesorId: 'p1',
+  profesorNombre: 'Pablo Profesor',
+  sedeId: 'traki',
+  fecha: FECHA,
+  montoCents: 1500,
+  base: { modo: 'por_hora', minutos: 60 },
+  estado: 'pendiente',
+  pagadoEn: null,
+  metodoPago: null,
+  ...extra,
+})
+
+describe('[F4] cargos: solo admin, enums y centavos enteros', () => {
+  it('administrador CREA un cargo válido → ALLOW', async () => {
+    await assertSucceeds(
+      setDoc(doc(as(UID.adminT1), 'academias', T1, 'cargos', 'c1_a1'), cargo()),
+    )
+  })
+
+  it('profesor CREA un cargo → DENY', async () => {
+    await assertFails(setDoc(doc(as(UID.profT1), 'academias', T1, 'cargos', 'c1_a1'), cargo()))
+  })
+
+  it('administrador de t2 crea un cargo en t1 → DENY (otro tenant)', async () => {
+    await assertFails(setDoc(doc(as(UID.adminT2), 'academias', T1, 'cargos', 'c1_a1'), cargo()))
+  })
+
+  it('concepto o estado inválidos → DENY', async () => {
+    await assertFails(
+      setDoc(doc(as(UID.adminT1), 'academias', T1, 'cargos', 'x1'), cargo({ concepto: 'propina' })),
+    )
+    await assertFails(
+      setDoc(doc(as(UID.adminT1), 'academias', T1, 'cargos', 'x2'), cargo({ estado: 'raro' })),
+    )
+  })
+
+  it('monto negativo o float, o método inválido → DENY', async () => {
+    await assertFails(
+      setDoc(doc(as(UID.adminT1), 'academias', T1, 'cargos', 'x1'), cargo({ montoCents: -1 })),
+    )
+    await assertFails(
+      setDoc(doc(as(UID.adminT1), 'academias', T1, 'cargos', 'x2'), cargo({ montoCents: 12.5 })),
+    )
+    await assertFails(
+      setDoc(doc(as(UID.adminT1), 'academias', T1, 'cargos', 'x3'), cargo({ metodoPago: 'bitcoin' })),
+    )
+  })
+
+  it('un cargo con un campo de más → DENY', async () => {
+    await assertFails(
+      setDoc(doc(as(UID.adminT1), 'academias', T1, 'cargos', 'x1'), cargo({ propina: 100 })),
+    )
+  })
+
+  it('el admin marca un cargo pagado → ALLOW, pero borrarlo → DENY', async () => {
+    await assertSucceeds(
+      setDoc(doc(as(UID.adminT1), 'academias', T1, 'cargos', 'c1_a1'), cargo()),
+    )
+    await assertSucceeds(
+      updateDoc(doc(as(UID.adminT1), 'academias', T1, 'cargos', 'c1_a1'), {
+        estado: 'pagado',
+        pagadoEn: new Date(),
+        metodoPago: 'efectivo',
+      }),
+    )
+    await assertFails(deleteDoc(doc(as(UID.adminT1), 'academias', T1, 'cargos', 'c1_a1')))
+  })
+})
+
+describe('[F4] pagosProfesor: solo admin, con forma validada', () => {
+  it('administrador CREA un pago válido → ALLOW', async () => {
+    await assertSucceeds(
+      setDoc(doc(as(UID.adminT1), 'academias', T1, 'pagosProfesor', 'c1'), pagoProfesor()),
+    )
+  })
+
+  it('profesor CREA un pago → DENY', async () => {
+    await assertFails(
+      setDoc(doc(as(UID.profT1), 'academias', T1, 'pagosProfesor', 'c1'), pagoProfesor()),
+    )
+  })
+
+  it('base incompleta o monto float → DENY', async () => {
+    await assertFails(
+      setDoc(
+        doc(as(UID.adminT1), 'academias', T1, 'pagosProfesor', 'x1'),
+        pagoProfesor({ base: { modo: 'por_hora' } }),
+      ),
+    )
+    await assertFails(
+      setDoc(
+        doc(as(UID.adminT1), 'academias', T1, 'pagosProfesor', 'x2'),
+        pagoProfesor({ montoCents: 15.5 }),
+      ),
+    )
+  })
+
+  it('borrar un pago → DENY', async () => {
+    await assertSucceeds(
+      setDoc(doc(as(UID.adminT1), 'academias', T1, 'pagosProfesor', 'c1'), pagoProfesor()),
+    )
+    await assertFails(deleteDoc(doc(as(UID.adminT1), 'academias', T1, 'pagosProfesor', 'c1')))
+  })
+})
+
+describe('[F4] parámetros de cierre: enums validados', () => {
+  it('valores válidos → ALLOW; enum inválido → DENY', async () => {
+    await assertSucceeds(
+      setDoc(doc(as(UID.adminT1), 'academias', T1, 'config', 'parametros'), {
+        repartoAusenciaAvisada: 'reparte_entre_presentes',
+        pagoProfesorSiTodosFaltanSinAviso: 'proporcional_cobrado',
+      }),
+    )
+    await assertFails(
+      setDoc(doc(as(UID.adminT1), 'academias', T1, 'config', 'parametros'), {
+        repartoAusenciaAvisada: 'reparte',
+      }),
+    )
+    await assertFails(
+      setDoc(doc(as(UID.adminT1), 'academias', T1, 'config', 'parametros'), {
+        pagoProfesorSiTodosFaltanSinAviso: 'mitad',
+      }),
+    )
+  })
+})

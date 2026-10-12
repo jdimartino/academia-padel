@@ -103,6 +103,18 @@ export function recalcularCobro(cobroActual, sugerido = null) {
 export const PAGO_PROFESOR_MODOS = ['por_hora', 'por_clase']
 export const ALERTA_COBRO_REFERENCIAS = ['clase', 'vencimiento']
 
+/** Qué hace la academia con la parte del alumno que avisó su ausencia (modo total). */
+export const REPARTOS_AUSENCIA = ['absorbe_academia', 'reparte_entre_presentes']
+
+/** Qué se le paga al profesor cuando NADIE asistió y hubo al menos una falta sin aviso. */
+export const PAGOS_SIN_AVISO = ['completo', 'proporcional_cobrado', 'nada']
+
+/** Conceptos de un cargo de alumno (Phase 4). */
+export const CONCEPTOS_CARGO = ['clase', 'falta_sin_aviso', 'mensualidad', 'otro']
+
+/** Métodos de pago aceptados (pago completo; los parciales quedan fuera de alcance). */
+export const METODOS_PAGO = ['efectivo', 'zelle', 'pago_movil', 'transferencia', 'otro']
+
 export const AUSENCIA_HORAS_MAX = 168
 export const PORCENTAJE_MAX = 100
 export const VENCIMIENTO_DIAS_MAX = 365
@@ -124,6 +136,8 @@ export const PARAMETROS_DEFAULT = Object.freeze({
   vencimientoCreditoDias: null,
   alertaCobro: Object.freeze({ dias: 2, referencia: 'clase' }),
   restringirCategoriaPorFranja: false,
+  repartoAusenciaAvisada: 'absorbe_academia',
+  pagoProfesorSiTodosFaltanSinAviso: 'completo',
 })
 
 /** Entero dentro de [min, max] inclusive. */
@@ -177,6 +191,16 @@ export function vencimientoValido(valor) {
   return valor === null || enteroEnRango(valor, 1, VENCIMIENTO_DIAS_MAX)
 }
 
+/** ¿El reparto de una ausencia avisada es válido? */
+export function repartoAusenciaValido(valor) {
+  return REPARTOS_AUSENCIA.includes(valor)
+}
+
+/** ¿El pago al profesor cuando todos faltan sin aviso es válido? */
+export function pagoSinAvisoValido(valor) {
+  return PAGOS_SIN_AVISO.includes(valor)
+}
+
 /**
  * Lector TOLERANTE de los parámetros: rellena campo por campo con el default
  * cuando falta o está corrupto. Nunca lanza. Es lo que usan la agenda y el
@@ -213,5 +237,160 @@ export function leerParametros(doc) {
       typeof d.restringirCategoriaPorFranja === 'boolean'
         ? d.restringirCategoriaPorFranja
         : PARAMETROS_DEFAULT.restringirCategoriaPorFranja,
+    repartoAusenciaAvisada: repartoAusenciaValido(d.repartoAusenciaAvisada)
+      ? d.repartoAusenciaAvisada
+      : PARAMETROS_DEFAULT.repartoAusenciaAvisada,
+    pagoProfesorSiTodosFaltanSinAviso: pagoSinAvisoValido(d.pagoProfesorSiTodosFaltanSinAviso)
+      ? d.pagoProfesorSiTodosFaltanSinAviso
+      : PARAMETROS_DEFAULT.pagoProfesorSiTodosFaltanSinAviso,
+  }
+}
+
+/* ------------------------------------------------------------------ */
+/* Cierre de una clase: cargos del alumno y pago al profesor           */
+/* ------------------------------------------------------------------ */
+
+/**
+ * Reparte `total` centavos en `n` partes lo más iguales posible. El resto (los
+ * centavos que no se pueden dividir) se suma a las PRIMERAS partes, de modo que
+ * la suma de las partes es exactamente `total`. Devuelve [] si `n <= 0`.
+ */
+export function repartirCents(total, n) {
+  if (!Number.isInteger(total) || total < 0 || !Number.isInteger(n) || n <= 0) return []
+  const base = Math.floor(total / n)
+  const resto = total - base * n
+  return Array.from({ length: n }, (_, i) => base + (i < resto ? 1 : 0))
+}
+
+/** Redondeo half-up a centavos de una razón de dinero; 0 si no es finita o <= 0. */
+function redondearCents(valor) {
+  return Number.isFinite(valor) && valor > 0 ? Math.round(valor) : 0
+}
+
+/**
+ * Cálculo PURO del cierre de una clase (Phase 4). Sin Firestore ni React: la
+ * capa de datos lo usa dentro de la transacción de `cerrarClase` y los tests
+ * lo ejercitan directo.
+ *
+ * Devuelve `{ cargos, pagoProfesor: { montoCents, base }, resumen }`:
+ * - `cargos`: `[{ alumnoId, concepto, montoCents }]` (los de 0 centavos NO se
+ *   crean). `concepto` ∈ `clase` | `falta_sin_aviso`.
+ * - `pagoProfesor.montoCents`: lo que se le paga al profesor. `base` es el
+ *   monto base ANTES de la regla de "todos faltaron sin aviso".
+ * - `resumen`: conteos y totales para la UI.
+ *
+ * Reglas (ver docs/modelo-datos.md §5.3):
+ * - Monto de la clase: `cobro.montoCents`. Si el modo es `por_persona` y NO fue
+ *   ajustado a mano, se recalcula como `tarifaHoraCents × duración / 60` por
+ *   alumno (half-up); si fue ajustado, `montoCents` es el total.
+ * - Reparto por alumno: `total` → partes iguales entre TODOS los asignados
+ *   (resto a los primeros); `por_persona` → la parte de cada uno.
+ * - `presente` → cargo `clase`. `ausente_avisada` → sin cargo (o su parte se
+ *   reparte entre los presentes si `repartoAusenciaAvisada` =
+ *   `reparte_entre_presentes` y el modo es `total`). `ausente_sin_aviso` →
+ *   cargo `falta_sin_aviso` con `porcentajeFaltaSinAviso` % de su parte.
+ * - Cortesía (monto 0 con motivo `cortesia`): no se registra nada para alumnos.
+ * - `seFactura: false` (fuerza mayor): ni cargos ni pago al profesor.
+ */
+export function calcularCierre({ cobro, duracionMin, asistencias = [], parametros = {}, seFactura = true } = {}) {
+  const registros = Array.isArray(asistencias) ? asistencias : []
+  const alumnos = registros.map((r) => ({ alumnoId: r.alumnoId, estado: r.estado }))
+  const n = alumnos.length
+
+  const presentes = alumnos.filter((a) => a.estado === 'presente')
+  const avisadas = alumnos.filter((a) => a.estado === 'ausente_avisada')
+  const sinAviso = alumnos.filter((a) => a.estado === 'ausente_sin_aviso')
+
+  const modo = cobro?.modo ?? 'total'
+  const ajustado = Boolean(cobro?.ajustado)
+  const esCortesia = cobro != null && cobro.montoCents === 0 && cobro.motivoAjuste === 'cortesia'
+  const facturable = seFactura && !esCortesia && cobro != null && n > 0
+
+  // 1) Parte (share) de cada alumno, en el orden de `alumnos`.
+  let shares = alumnos.map(() => 0)
+  let montoClaseCents = 0
+  if (facturable) {
+    if (modo === 'por_persona' && !ajustado) {
+      const tarifa = Number.isInteger(cobro.tarifaHoraCents) ? cobro.tarifaHoraCents : 0
+      const porAlumno = redondearCents((tarifa * (Number(duracionMin) || 0)) / 60)
+      shares = alumnos.map(() => porAlumno)
+      montoClaseCents = porAlumno * n
+    } else {
+      // 'total' (o 'por_persona' ajustado, donde montoCents es el total).
+      montoClaseCents = centsValidos(cobro.montoCents, LIMITE_MONTO_CENTS) ? cobro.montoCents : 0
+      shares = repartirCents(montoClaseCents, n)
+    }
+  }
+
+  // 2) Reparto de la parte de los avisados entre los presentes (solo modo total).
+  const repartirAvisadas =
+    facturable && modo === 'total' && parametros.repartoAusenciaAvisada === 'reparte_entre_presentes'
+  if (repartirAvisadas && presentes.length > 0 && avisadas.length > 0) {
+    const pool = avisadas.reduce((total, a) => total + shares[alumnos.indexOf(a)], 0)
+    if (pool > 0) {
+      const extra = repartirCents(pool, presentes.length)
+      presentes.forEach((p, k) => {
+        shares[alumnos.indexOf(p)] += extra[k]
+      })
+    }
+  }
+
+  // 3) Cargos.
+  const pct = enteroEnRango(parametros.porcentajeFaltaSinAviso, 0, PORCENTAJE_MAX)
+    ? parametros.porcentajeFaltaSinAviso
+    : 0
+  const cargos = []
+  if (facturable) {
+    alumnos.forEach((alumno, i) => {
+      const parte = shares[i]
+      if (alumno.estado === 'presente') {
+        if (parte > 0) cargos.push({ alumnoId: alumno.alumnoId, concepto: 'clase', montoCents: parte })
+      } else if (alumno.estado === 'ausente_sin_aviso') {
+        const monto = redondearCents((parte * pct) / 100)
+        if (monto > 0) {
+          cargos.push({ alumnoId: alumno.alumnoId, concepto: 'falta_sin_aviso', montoCents: monto })
+        }
+      }
+    })
+  }
+  const totalCargosCents = cargos.reduce((total, cargo) => total + cargo.montoCents, 0)
+
+  // 4) Pago al profesor.
+  const pago = pagoProfesorValido(parametros.pagoProfesor)
+    ? parametros.pagoProfesor
+    : PARAMETROS_DEFAULT.pagoProfesor
+  const base =
+    pago.modo === 'por_hora'
+      ? redondearCents((pago.montoCents * (Number(duracionMin) || 0)) / 60)
+      : Number.isInteger(pago.montoCents)
+        ? pago.montoCents
+        : 0
+
+  let montoProfesor = 0
+  if (seFactura) {
+    if (presentes.length > 0) {
+      montoProfesor = base
+    } else if (sinAviso.length > 0) {
+      const regla =
+        parametros.pagoProfesorSiTodosFaltanSinAviso ??
+        PARAMETROS_DEFAULT.pagoProfesorSiTodosFaltanSinAviso
+      if (regla === 'completo') montoProfesor = base
+      else if (regla === 'proporcional_cobrado') montoProfesor = Math.min(base, totalCargosCents)
+      // 'nada' → 0
+    }
+  }
+
+  return {
+    cargos,
+    pagoProfesor: { montoCents: montoProfesor, base },
+    resumen: {
+      totalAlumnos: n,
+      presentes: presentes.length,
+      ausentesAvisadas: avisadas.length,
+      ausentesSinAviso: sinAviso.length,
+      montoClaseCents,
+      totalCargosCents,
+      baseProfesorCents: base,
+    },
   }
 }
