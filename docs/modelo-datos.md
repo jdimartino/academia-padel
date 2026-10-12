@@ -361,8 +361,12 @@ reservada ──(asistencia)──▶ pendiente_cobro ──▶ cobrada
 - `pendiente_cobro`: la clase ya se cerró (`cerrarClase`, Fase 4): asistencia
   registrada y `cargos`/pago al profesor generados (o ninguno, si
   `facturada: false`). `anularCierre` la devuelve a `reservada`.
-- `cobrada`: *sin definir.* El cobro efectivo hoy se marca cargo por cargo con
-  `marcarCargoPagado`; el paso agregado de la clase a `cobrada` queda pendiente.
+- `cobrada`: la clase ya no tiene nada por cobrar: todos sus `cargos` y su pago
+  al profesor están `pagado`/`anulado` (o no existen). La resuelven
+  `marcarCargoPagado`/`marcarPagoProfesorPagado` y, si el cierre no produce nada
+  (todo cubierto por crédito y sin pago), `cerrarClase` la deja así directo
+  (Fase 5, §5.3/§5.4). `anularCierre` la devuelve a `reservada` si nada está
+  `pagado`.
 - `cancelada`: no se dictó. *Sin definir si una cancelada genera cargo o no.*
 
 `ejecutada` permanece en el enum de `src/lib/agenda.js` por compatibilidad, pero
@@ -536,7 +540,12 @@ Cuota sin costo: **20.000 escrituras/día**, **20.000 borrados/día**,
 | `anuladoPor` | string \| null | uid |
 | `creadoEn` | Timestamp | |
 
-### `academias/{tenantId}/pagos/{pagoId}`
+### `academias/{tenantId}/pagos/{pagoId}` — OBSOLETA / NO PLANIFICADA
+
+> **Obsoleta.** El **único modelo de pago** es el cargo (`cargos`) con
+> `estado`/`metodoPago` (§5.3 y §5.4). Esta colección (`en_revision`/`aprobado`,
+> con `cargoIds`) **no se usa ni se va a implementar**; se conserva la tabla por
+> compatibilidad de datos existentes y el `match` de reglas.
 
 | Campo | Tipo | Nota |
 | --- | --- | --- |
@@ -563,18 +572,23 @@ Cuota sin costo: **20.000 escrituras/día**, **20.000 borrados/día**,
 | `creadoPor` | string | uid |
 | `creadoEn` | Timestamp | |
 
-**Justificación de colecciones separadas:** `cargos`, `pagos` y `notasCredito`
-crecen en el tiempo y se consultan por alumno/periodo/estado. Tenerlos como
-colecciones permite acotar por esos campos e indexar. Meterlos como arrays
-dentro de `alumnos` haría crecer el documento del alumno sin límite y obligaría
-a leer toda la historia para mostrar el saldo.
+**Justificación de colecciones separadas:** `cargos` y `notasCredito` crecen en
+el tiempo y se consultan por alumno/periodo/estado. Tenerlos como colecciones
+permite acotar por esos campos e indexar. Meterlos como arrays dentro de
+`alumnos` haría crecer el documento del alumno sin límite y obligaría a leer toda
+la historia para mostrar el saldo.
 
-**Saldo del alumno:** se calcula con agregaciones (`sum`) sobre `cargos` y
-`pagos`, no se almacena un contador mutable (evita escrituras y contención por
-el límite de ~1 escritura/segundo por documento). *Sin definir si se cachea un
-saldo denormalizado.*
+**Saldo del alumno:** se calcula con agregaciones (`sum`) sobre `cargos`, no se
+almacena un contador mutable (evita escrituras y contención por el límite de
+~1 escritura/segundo por documento). *Sin definir si se cachea un saldo
+denormalizado.*
 
-### Liquidación de profesores
+### Liquidación de profesores — OBSOLETA / NO PLANIFICADA
+
+> **Obsoleta.** Hoy el pago al profesor es por clase, en `pagosProfesor` (§5.3).
+> La liquidación mensual en `academias/{tenantId}/liquidaciones/{liquidacionId}`
+> queda **no planificada**; se conservan la tabla y el `match` de reglas por
+> compatibilidad.
 
 Pago por hora: hacen falta las horas efectivamente dictadas.
 
@@ -583,7 +597,7 @@ Pago por hora: hacen falta las horas efectivamente dictadas.
 - Opción B: generar `academias/{tenantId}/liquidaciones/{liquidacionId}` al
   cerrar el mes, con detalle embebido.
 
-**Sin definir.** Se deja fuera de Fase 0 (no se construye UI ni modelo final).
+**Sin definir / no planificada.** No se construye UI ni modelo final.
 
 ---
 
@@ -684,6 +698,8 @@ incompleto, `leerParametros` rellena campo por campo con `PARAMETROS_DEFAULT`.
 | `restringirCategoriaPorFranja` | bool | `false` | *Sin implementar todavía* |
 | `repartoAusenciaAvisada` | string | `absorbe_academia` | **Fase 4.** `absorbe_academia` \| `reparte_entre_presentes`. Solo importa en modo `total`: si un alumno avisó su ausencia, su parte se la queda la academia o se reparte entre los presentes |
 | `pagoProfesorSiTodosFaltanSinAviso` | string | `completo` | **Fase 4.** `completo` \| `proporcional_cobrado` \| `nada`. Qué se le paga al profesor cuando NADIE asistió y hubo al menos una falta sin aviso |
+| `faltaSinAvisoConCredito` | string | `descuenta_proporcional` | **Fase 5.** `descuenta_proporcional` \| `descuenta_completo` \| `cobra_aparte`. Qué hace una falta sin aviso cuando el alumno tiene crédito: descuenta el `porcentajeFaltaSinAviso` % de los minutos de la clase (half-up), descuenta la clase completa o genera el cargo normal |
+| `creditoRequierePago` | bool | `false` | **Fase 5.** `false` = el crédito sirve apenas se crea el lote; `true` = solo cuando la `mensualidad` de ese lote está `pagado` |
 
 Funciones: `getParametros` (1 lectura, tolerante), `validarParametros`
 (obligatoria antes de escribir; completa con defaults y rechaza campos/rangos
@@ -725,9 +741,11 @@ el mismo documento, así que nunca se duplica.
 | `claseId` | string | |
 | `alumnoId` | string | |
 | `alumnoNombre` | string | Denormalizado |
-| `sedeId` | string | |
-| `fecha` | string | `"YYYY-MM-DD"` de la clase; filtro de los listados |
-| `concepto` | string | `clase` \| `falta_sin_aviso` (+ `mensualidad` \| `otro` reservados para Fase 5) |
+| `sedeId` | string \| null | `null` en un cargo de `mensualidad` |
+| `fecha` | string | `"YYYY-MM-DD"` de la clase (o de la compra); filtro de los listados |
+| `concepto` | string | `clase` \| `falta_sin_aviso` \| `mensualidad` \| `otro`. En `mensualidad` (Fase 5) `claseId: null` y `creditoId` obligatorio |
+| `creditoId` | string \| null | Solo `mensualidad`: lote que paga este cargo |
+| `planId` / `planNombre` | string \| null | Solo `mensualidad`: plan denormalizado |
 | `montoCents` | number | Entero de centavos >= 0. Los cargos de 0 no se crean |
 | `estado` | string | `pendiente` \| `pagado` \| `anulado` |
 | `pagadoEn` | Timestamp \| null | |
@@ -736,15 +754,14 @@ el mismo documento, así que nunca se duplica.
 
 > Este esquema **reemplaza** al borrador previo de `cargos`
 > (`montoCentavos`/`moneda`/`periodo`/`anuladoPor`). El `periodo` se descartó:
-> cada cargo es de una clase y se filtra por `sedeId` + `fecha`; el saldo por
-> alumno/periodo se resolverá en Fase 5 si hace falta. Los índices compuestos
-> se ajustaron en consecuencia (§6).
+> cada cargo es de una clase (o de una mensualidad) y se filtra por `sedeId` +
+> `fecha`; el cargo con `estado`/`metodoPago` es el **único modelo de pago**
+> (Fase 5, §5.4). Los índices compuestos se ajustaron en consecuencia (§6).
 
 ### `academias/{tenantId}/pagosProfesor/{pagoId}` (Fase 4)
 
 `pagoId` es **determinista**: `${claseId}`. **No** es la colección `pagos`
-(esa es para los cobros de alumnos, con `cargoIds`, y sigue sin implementar).
-Tampoco es `liquidaciones` (pago mensual, sin definir).
+(obsoleta/no planificada) ni `liquidaciones` (tampoco planificada).
 
 | Campo | Tipo | Nota |
 | --- | --- | --- |
@@ -792,17 +809,116 @@ rango de fechas, página de 50, tope 100) y `getCierreDeClase` para el detalle.
 
 ```
 reservada ──(cerrarClase)──▶ pendiente_cobro ──(marcar pagado)──▶ cobrada
-    ▲                              │
-    └──────(anularCierre)──────────┘
+    ▲                              │                              │
+    └──────(anularCierre)──────────┴──────────────────────────────┘
 ```
 
-`anularCierre` solo se permite mientras ningún cargo ni el pago esté `pagado`.
-La clase vuelve a `reservada` y se puede cerrar de nuevo (los cargos/pago se
-reescriben con los mismos IDs deterministas).
+`cerrarClase` deja la clase **`cobrada`** de una vez cuando el cierre no produce
+nada por cobrar (por ejemplo, todo cubierto por crédito y sin pago al profesor).
+Si no, queda `pendiente_cobro` y pasa a `cobrada` cuando **todos** sus cargos y
+su pago están `pagado`/`anulado` (o no existen): lo resuelve
+`marcarCargoPagado` / `marcarPagoProfesorPagado` sin consultas dentro de la
+transacción, con los IDs deterministas.
 
-> **Fase 5 (NO implementada):** planes mensuales y consumo de créditos. El
-> punto de enganche está marcado en `cerrarClase` (db.js): un crédito debe
-> aplicarse **antes** de crear el cargo de un alumno.
+`anularCierre` se permite en `pendiente_cobro` o `cobrada` mientras **nada** esté
+`pagado`; revierte los movimientos de crédito (devuelve los minutos a sus lotes),
+anula cargos y pago, y deja la clase en `reservada` para cerrarla de nuevo (los
+IDs deterministas se reescriben).
+
+---
+
+## 5.4 Mensualidades y créditos (Fase 5)
+
+Un alumno puede pagar por adelantado un plan de horas (`planesAlumno`) y consumir
+esas horas al cerrar la clase. Todo se guarda como **lotes de crédito**
+(`creditos`) con **movimientos** deterministas (`movimientosCredito`) y un cargo
+de `mensualidad`. El vencimiento es **perezoso** (no hay Functions ni jobs): un
+lote se evalúa al leerlo y al consumirlo.
+
+### `academias/{tenantId}/planesAlumno/{planId}`
+
+| Campo | Tipo | Nota |
+| --- | --- | --- |
+| `alumnoId` | string | |
+| `nombre` | string | Requerido, recortado, máx. 100 |
+| `frecuencia` | string | `semanal` \| `mensual` |
+| `minutosIncluidos` | number | Entero > 0 y múltiplo de `MINUTOS_BLOQUE` (30) |
+| `precioCents` | number | Entero de centavos > 0 (el precio de la mensualidad) |
+| `descuentoHermanos` | bool | **Solo alumnos menores**: descuenta `descuentoHermanosPct` % del precio |
+| `activo` | bool | Un alumno puede tener **como mucho un plan activo** |
+| `creadoEn` / `actualizadoEn` / `actualizadoPor` | | |
+
+Funciones: `crearPlanAlumno`, `actualizarPlanAlumno`, `desactivarPlanAlumno`
+(soft delete: NUNCA se borran), `getPlanActivo` y `listarPlanesAlumno`.
+
+### `academias/{tenantId}/creditos/{creditoId}`
+
+Un lote por compra/renovación.
+
+| Campo | Tipo | Nota |
+| --- | --- | --- |
+| `alumnoId` | string | |
+| `planId` | string | Plan activo al comprar |
+| `minutosComprados` | number | Entero > 0 |
+| `minutosUsados` | number | Entero >= 0 |
+| `inicio` | string | `"YYYY-MM-DD"` de la compra |
+| `venceEn` | string \| null | `null` = no vence; si no, `inicio` + `vencimientoCreditoDias`. El día de vencimiento TODAVÍA sirve (`fecha > venceEn` = vencido) |
+| `cargoId` | string | Cargo de `mensualidad` de este lote |
+| `estado` | string | `activo` \| `agotado` \| `vencido` \| `anulado` (el vencimiento se calcula igual) |
+| `creadoEn` | Timestamp | |
+
+`comprarCredito(alumnoId)` crea el lote **y** su cargo de `mensualidad` en una
+sola transacción. `anularCredito(creditoId)` solo se permite si
+`minutosUsados == 0` y el cargo no está `pagado`; marca el lote y el cargo
+`anulado`. `getCreditoAlumno(alumnoId, fecha)` devuelve los lotes usables en
+orden **FIFO** (por `venceEn` ascendente, los que no vencen al final, y después
+`inicio`), el total disponible y los vencidos; respeta `creditoRequierePago`.
+
+### `academias/{tenantId}/movimientosCredito/{${claseId}_${alumnoId}}`
+
+El consumo de crédito de una clase. ID **determinista**, así que un reintento
+reescribe el mismo documento y nunca duplica. Se revierten (SIN borrar) al
+anular el cierre.
+
+| Campo | Tipo | Nota |
+| --- | --- | --- |
+| `claseId` | string | |
+| `alumnoId` | string | |
+| `minutos` | number | Entero >= 0 |
+| `asignaciones` | map[] | `[{creditoId, minutos}]`, en orden FIFO |
+| `motivo` | string | `clase` \| `falta_sin_aviso` |
+| `creadoEn` | Timestamp | |
+
+### Cargo de `mensualidad`
+
+Reutiliza la forma del cargo de Fase 4, con `claseId: null`, `sedeId: null`,
+`concepto: 'mensualidad'` y `creditoId` (más `planId`/`planNombre`
+denormalizados). El monto es `precioCents` menos `descuentoHermanosPct` % cuando
+el plan tiene `descuentoHermanos` (half-up). El pago al profesor **no cambia**
+por el crédito.
+
+### Consumo al cerrar la clase
+
+Antes de crear el cargo de cada alumno (`previsualizarCreditoAlumno` es la misma
+regla pura que usa la UI):
+
+- **`presente`** con crédito suficiente → descuenta los minutos de la clase
+  (FIFO entre lotes), escribe el movimiento y **no** crea cargo.
+- **`presente`** sin crédito suficiente → cargo normal + advertencia
+  `credito_insuficiente` (sin consumo parcial).
+- **`ausente_sin_aviso`** → según `faltaSinAvisoConCredito`: descuenta los
+  minutos (proporcional o completo) si alcanza; si no, cae al cargo normal;
+  `cobra_aparte` = siempre cargo normal.
+- **`ausente_avisada`** o `seFactura: false` → sin descuento.
+
+Las lecturas de lotes se hacen FUERA de la transacción (el SDK web no admite
+queries dentro) y se revalidan con `tx.get`: si los minutos cambiaron entre la
+pre-lectura y el commit, se cae limpiamente al cargo normal.
+
+> El **cargo con `estado`/`metodoPago`** es el **único modelo de pago**. Las
+> colecciones antiguas `pagos` (`en_revision`/`aprobado`) y `liquidaciones` se
+> marcan **obsoletas / no planificadas**: se conservan los match de reglas por
+> compatibilidad de datos, pero no se construye UI ni flujo nuevo sobre ellas.
 
 ---
 
@@ -824,12 +940,16 @@ Declarados en `firestore.indexes.json`. Mínimos para las consultas previstas:
   (buscador por prefijo de nombre o apellido de `buscarAlumnos` y listado
   paginado de `listarAlumnos`).
 - `profesores`: `activo` + `sedes` (array-contains) para `getProfesores({sedeId})`.
+- `planesAlumno`: `alumnoId` + `activo` (Fase 5: `getPlanActivo`). Los lotes de
+  `creditos` se leen por `alumnoId` y los `movimientosCredito` por `claseId`
+  (índices de un solo campo).
 
 **Fase 4:** se reemplazaron los dos compuestos viejos de `cargos`
 (`alumnoId`/`periodo`, `estado`/`periodo`) por los de `estado`+`fecha` y
 `estado`+`sedeId`+`fecha`, y se agregaron los equivalentes de `pagosProfesor`.
-El resto de los índices no cambió. El de `pagos` (`estado`+`creadoEn`) se
-conserva porque esa colección sigue reservada para los cobros de alumnos.
+**Fase 5** agregó `planesAlumno: alumnoId + activo`; el resto de los índices no
+cambió. El de `pagos` (`estado`+`creadoEn`) se conserva por compatibilidad aunque
+esa colección quedó obsoleta.
 
 > El **emulador no enforcea índices**: que los tests pasen no prueba que el
 > índice exista. La lista de arriba es la referencia para el deploy real.
@@ -848,18 +968,19 @@ publicarse.
 - **Reparto exacto de permisos entre `administrador` y "recepción"** (decisión 6:
   recepción es un admin reducido, pero *qué* quita todavía no está escrito).
 - **Facturación / cobros:** la **configuración** (perfiles, tarifas por sede,
-  parámetros y el snapshot de precio: §5.2) y el **cierre con cargos y pago al
-  profesor** (Fase 4: §5.3) ya están. Siguen **sin definir**: los **planes
-  mensuales y el consumo de créditos** (Fase 5), el cobro de los alumnos con
-  comprobante (la colección `pagos` con `en_revision`/`aprobado`, sin UI), la
+  parámetros y el snapshot de precio: §5.2), el **cierre con cargos y pago al
+  profesor** (Fase 4: §5.3) y las **mensualidades con crédito** (Fase 5: §5.4) ya
+  están. Siguen **sin definir**: el cobro de los alumnos con comprobante (la
+  colección `pagos` con `en_revision`/`aprobado`, **obsoleta/no planificada**), la
   **liquidación** mensual del profesor (hoy el pago es por clase en
-  `pagosProfesor`), el paso agregado de la clase a `cobrada`, y si una clase
-  `cancelada` genera cargo o no. `tarifaHoraCentavos` de la ficha del profesor
-  sigue sin escribirse (el pago sale de `config/parametros.pagoProfesor`).
+  `pagosProfesor`; `liquidaciones` también obsoleta), y si una clase `cancelada`
+  genera cargo o no. `tarifaHoraCentavos` de la ficha del profesor sigue sin
+  escribirse (el pago sale de `config/parametros.pagoProfesor`).
 - **Ventana de aviso (horas) de una ausencia:** ya es un parámetro por academia
   (`config/parametros.avisoAusenciaHoras`, §5.2) y `porcentajeFaltaSinAviso`
-  guarda el % a cobrar. Lo que sigue **sin definir** es la regla de negocio que
-  los usa (clase de recuperación vs nota de crédito) y no se implementan
+  guarda el % a cobrar. El **consumo de crédito** por falta sin aviso ya está
+  implementado (`faltaSinAvisoConCredito`, §5.4); lo que sigue **sin definir** es
+  la recuperación (clase de recuperación vs nota de crédito) y no se implementan
   notificaciones. El administrador decide si una ausencia fue "avisada".
 - **Doble reserva de un alumno a la misma hora:** no se bloquea en la
   transacción ni se crean bloques de alumno. Queda como nota de diseño.

@@ -174,12 +174,26 @@ firestore.indexes.json
   viven en el documento único `academias/{tenantId}/config/parametros`.
 - Al reservar, el formulario **sugiere** el precio (tarifa × duración, × personas
   en `por_persona`) y lo guarda como **snapshot** en `clase.cobro`. Se puede
-  ajustar a mano con un motivo. **No se generan cargos ni pagos**: eso sigue
-  fuera de alcance.
+  ajustar a mano con un motivo.
 
 Se administra en **Configuración → Cobros** y el seed siembra perfiles, tarifas
 por sede y parámetros para el tenant de ensayo. El dinero se guarda siempre en
 **enteros de centavos de USD**.
+
+### Cierre, cargos y mensualidades (Fases 4 y 5)
+
+- Al **cerrar la clase** se registra la asistencia y, en una transacción, se
+  generan los **cargos** de los alumnos y el **pago al profesor**
+  (`pagosProfesor`), con IDs deterministas.
+- La clase pasa a **`cobrada`** cuando no queda nada por cobrar; `anularCierre`
+  la revierte.
+- Los **planes de alumno** (`planesAlumno`) y los **lotes de crédito**
+  (`creditos`) permiten prepago por horas: al cerrar, el crédito se consume FIFO
+  antes de crear el cargo. El vencimiento del crédito es perezoso (no hay
+  Functions) y un lote por compra queda con su cargo de **`mensualidad`**.
+- El **único modelo de pago** es el cargo con `estado`/`metodoPago`. Las
+  colecciones antiguas `pagos` y `liquidaciones` quedan **obsoletas / no
+  planificadas**.
 
 Ver `docs/modelo-datos.md` para el detalle.
 
