@@ -1,26 +1,17 @@
-import { useState } from 'react'
+import { useCallback, useEffect, useState } from 'react'
 import { useAuth } from '../context/AuthContext'
 import { useAvisos } from '../context/AvisosContext'
 import { db } from '../firebase/config'
-import { asignarAlumnos, cancelarClase, registrarAsistencia } from '../firebase/db'
+import { anularCierre, asignarAlumnos, cancelarClase, getCierreDeClase } from '../firebase/db'
 import useCierreSeguro from '../hooks/useCierreSeguro'
+import CerrarClase from './CerrarClase'
 import { CloseIcon } from './Icons'
 import { estadoDe, etiquetaCategoriaGrupo, formatHora12, tituloClase } from '../lib/agenda'
 import { formatearUSD } from '../lib/dinero'
-import { hayCambios } from '../lib/avisos'
 import { formatearFechaLarga } from '../lib/fechas'
 import SelectorAlumnos from './SelectorAlumnos'
 
 const ESTADOS_CERRADOS = ['pendiente_cobro', 'cobrada', 'cancelada']
-
-const OPCIONES_ASISTENCIA = [
-  { valor: 'presente', label: 'Presente' },
-  { valor: 'ausente_avisada', label: 'Ausente avisada' },
-  { valor: 'ausente_sin_aviso', label: 'Ausente sin aviso' },
-]
-
-/** Registro de asistencia por defecto de un alumno sin datos previos. */
-const ASISTENCIA_POR_DEFECTO = { estado: 'presente', motivo: '' }
 
 /** Etiquetas de los motivos de ajuste del precio de una clase. */
 const MOTIVOS_AJUSTE_LABEL = {
@@ -30,31 +21,24 @@ const MOTIVOS_AJUSTE_LABEL = {
   otro: 'Ajustado',
 }
 
+const CONCEPTOS_CARGO_LABEL = {
+  clase: 'Clase',
+  falta_sin_aviso: 'Falta sin aviso',
+  mensualidad: 'Mensualidad',
+  otro: 'Otro',
+}
+
+const ESTADO_COBRO_LABEL = {
+  pendiente: 'Pendiente',
+  pagado: 'Pagado',
+  anulado: 'Anulado',
+}
+
 /** Empareja IDs de alumnos con sus nombres denormalizados. */
 function alumnosDeClase(clase) {
   const ids = clase.alumnos ?? []
   const nombres = clase.alumnoNombres ?? []
   return ids.map((id, i) => ({ id, nombre: nombres[i] ?? id }))
-}
-
-/** Asistencias iniciales de la clase, indexadas por alumno. */
-function asistenciasDeClase(alumnos, asistencias) {
-  return Object.fromEntries(
-    alumnos.map((alumno) => {
-      const previa = (asistencias ?? []).find((a) => a.alumnoId === alumno.id)
-      return [
-        alumno.id,
-        { estado: previa?.estado ?? ASISTENCIA_POR_DEFECTO.estado, motivo: previa?.motivo ?? '' },
-      ]
-    }),
-  )
-}
-
-/** Copia del estado actual de asistencias, para volver a marcar el punto limpio. */
-function fotoAsistencias(asistencias) {
-  return Object.fromEntries(
-    Object.entries(asistencias).map(([id, registro]) => [id, { ...registro }]),
-  )
 }
 
 export default function DetailSheet({
@@ -64,6 +48,7 @@ export default function DetailSheet({
   sedeNombre,
   tenantId,
   rol,
+  parametros = null,
   onClose,
   onChanged,
   onReprogramar,
@@ -76,41 +61,33 @@ export default function DetailSheet({
   const alumnos = alumnosDeClase(clase)
 
   const esAdmin = rol === 'administrador'
-  // Solo el administrador registra asistencia: profesor, alumno y representante son
-  // fichas sin acceso.
-  const puedeAsistir = esAdmin && !ESTADOS_CERRADOS.includes(clase.estado)
+  // El administrador cierra la clase (asistencia + cobro). Profesor, alumno y
+  // representante son fichas sin acceso.
+  const puedeCerrar = esAdmin && clase.estado === 'reservada'
   const puedeCancelar = esAdmin && !ESTADOS_CERRADOS.includes(clase.estado)
   const puedeReprogramar = esAdmin && clase.estado === 'reservada'
   // La asignación de alumnos solo se permite en una clase `reservada`.
   const puedeAsignar = esAdmin && clase.estado === 'reservada'
 
-  const [asistencias, setAsistencias] = useState(() =>
-    asistenciasDeClase(alumnos, clase.asistencias),
-  )
-  // Punto limpio de la asistencia: la foto que trajo la clase al abrir el panel.
-  const [asistenciasIniciales, setAsistenciasIniciales] = useState(() =>
-    asistenciasDeClase(alumnos, clase.asistencias),
-  )
-  // La selección se deriva de la clase (fuente de verdad): tras asignar, el
-  // refresh del día trae la lista nueva y no hay copia local que se desincronice.
-  const seleccion = alumnosDeClase(clase)
   const [ocupado, setOcupado] = useState(false)
   const [confirmando, setConfirmando] = useState(false)
   const [guardandoAlumnos, setGuardandoAlumnos] = useState(false)
+  const [cierre, setCierre] = useState(null)
+  const [anulando, setAnulando] = useState(false)
 
-  // Cambios sin guardar: algún alumno con la asistencia distinta de la inicial.
-  // Un alumno recién asignado no cuenta: no tiene registro propio todavía.
-  const sucio = Object.entries(asistencias).some(([alumnoId, registro]) =>
-    hayCambios(asistenciasIniciales[alumnoId] ?? ASISTENCIA_POR_DEFECTO, registro),
-  )
+  const recargarCierre = useCallback(() => {
+    getCierreDeClase(db, tenantId, clase.id)
+      .then((data) => setCierre(data))
+      .catch(() => setCierre(null))
+  }, [tenantId, clase.id])
 
-  /*
-   * Escape: si está abierta la confirmación en línea de "¿Cancelar esta clase?"
-   * la cierra solo a ella; si no, cierra el panel (con cambios sin guardar en
-   * la asistencia, primero pregunta).
-   */
+  // Al abrir una clase CERRADA se leen sus cargos y su pago al profesor.
+  useEffect(() => {
+    if (clase.estado === 'pendiente_cobro') recargarCierre()
+  }, [clase.estado, recargarCierre])
+
   useCierreSeguro({
-    sucio,
+    sucio: false,
     onCerrar: onClose,
     interceptar: () => {
       if (!confirmando) return false
@@ -118,10 +95,6 @@ export default function DetailSheet({
       return true
     },
   })
-
-  function cambiarAsistencia(alumnoId, cambios) {
-    setAsistencias((prev) => ({ ...prev, [alumnoId]: { ...prev[alumnoId], ...cambios } }))
-  }
 
   async function cambiarAlumnos(nueva) {
     setGuardandoAlumnos(true)
@@ -138,22 +111,22 @@ export default function DetailSheet({
     }
   }
 
-  async function guardarAsistencia() {
+  function alCerrar() {
+    mostrarExito('Clase cerrada')
+    recargarCierre()
+    onChanged?.()
+  }
+
+  async function anular() {
     setOcupado(true)
+    setAnulando(false)
     try {
-      const registros = alumnos.map((alumno) => ({
-        alumnoId: alumno.id,
-        estado: asistencias[alumno.id]?.estado ?? 'presente',
-        motivo: asistencias[alumno.id]?.motivo || null,
-      }))
-      await registrarAsistencia(db, tenantId, clase.id, registros, { uid: user?.uid ?? null })
-      // La hoja queda abierta: el refresh trae el estado nuevo y la propia
-      // clase ya no ofrece asistencia (quedó en pendiente_cobro).
-      mostrarExito('Asistencia guardada')
-      setAsistenciasIniciales(fotoAsistencias(asistencias))
+      await anularCierre(db, tenantId, clase.id, { uid: user?.uid ?? null })
+      mostrarExito('Cierre anulado')
+      setCierre(null)
       onChanged?.()
     } catch (err) {
-      mostrarErrorTecnico('guardar-asistencia', err)
+      mostrarErrorTecnico('anular-cierre', err)
     } finally {
       setOcupado(false)
     }
@@ -173,6 +146,10 @@ export default function DetailSheet({
       setOcupado(false)
     }
   }
+
+  const cargos = clase.estado === 'pendiente_cobro' ? (cierre?.cargos ?? []) : []
+  const pago = clase.estado === 'pendiente_cobro' ? (cierre?.pagoProfesor ?? null) : null
+  const algoPagado = cargos.some((c) => c.estado === 'pagado') || pago?.estado === 'pagado'
 
   return (
     <aside className="sheet glass-strong" role="dialog" aria-label="Detalle de la clase">
@@ -241,7 +218,7 @@ export default function DetailSheet({
           <SelectorAlumnos
             tenantId={tenantId}
             cupo={cupo}
-            seleccionados={seleccion}
+            seleccionados={alumnos}
             onChange={cambiarAlumnos}
             clases={clases}
             claseId={clase.id}
@@ -263,45 +240,90 @@ export default function DetailSheet({
         </div>
       ) : null}
 
-      {puedeAsistir && alumnos.length ? (
+      {puedeCerrar && alumnos.length ? (
+        <CerrarClase
+          clase={clase}
+          parametros={parametros}
+          tenantId={tenantId}
+          onCerrado={alCerrar}
+        />
+      ) : null}
+
+      {clase.estado === 'pendiente_cobro' && (cargos.length || pago) ? (
         <div className="sheet__slots">
-          <h3 className="sheet__subtitulo">Asistencia</h3>
-          <ul className="asistencia-lista">
-            {alumnos.map((alumno) => {
-              const registro = asistencias[alumno.id] ?? { estado: 'presente', motivo: '' }
-              const esAusencia = registro.estado !== 'presente'
-              return (
-                <li key={alumno.id} className="asistencia-fila">
-                  <span className="asistencia-nombre">{alumno.nombre}</span>
-                  <div className="seg" role="group" aria-label={`Asistencia de ${alumno.nombre}`}>
-                    {OPCIONES_ASISTENCIA.map((opcion) => (
-                      <button
-                        key={opcion.valor}
-                        type="button"
-                        className={`seg__op${registro.estado === opcion.valor ? ' is-sel' : ''}`}
-                        aria-pressed={registro.estado === opcion.valor}
-                        onClick={() => cambiarAsistencia(alumno.id, { estado: opcion.valor })}
-                      >
-                        {opcion.label}
-                      </button>
-                    ))}
-                  </div>
-                  {esAusencia ? (
-                    <input
-                      className="form__input"
-                      type="text"
-                      placeholder="Motivo (opcional)"
-                      value={registro.motivo}
-                      onChange={(e) => cambiarAsistencia(alumno.id, { motivo: e.target.value })}
-                    />
-                  ) : null}
-                </li>
-              )
-            })}
+          <h3 className="sheet__subtitulo">Cobros del cierre</h3>
+          <ul className="cierre-lista">
+            {cargos.map((cargo) => (
+              <li key={cargo.id} className="cierre-lista__fila">
+                <span className="cierre-lista__nombre">
+                  {cargo.alumnoNombre}
+                  <span className="cierre-lista__concepto">
+                    {CONCEPTOS_CARGO_LABEL[cargo.concepto] ?? cargo.concepto}
+                  </span>
+                </span>
+                <span className="cierre-lista__monto">
+                  {formatearUSD(cargo.montoCents)}
+                  <span className={`badge badge--${cargo.estado}`}>
+                    {ESTADO_COBRO_LABEL[cargo.estado] ?? cargo.estado}
+                  </span>
+                </span>
+              </li>
+            ))}
+            {pago ? (
+              <li className="cierre-lista__fila cierre-lista__fila--prof">
+                <span className="cierre-lista__nombre">
+                  {pago.profesorNombre}
+                  <span className="cierre-lista__concepto">Pago al profesor</span>
+                </span>
+                <span className="cierre-lista__monto">
+                  {formatearUSD(pago.montoCents)}
+                  <span className={`badge badge--${pago.estado}`}>
+                    {ESTADO_COBRO_LABEL[pago.estado] ?? pago.estado}
+                  </span>
+                </span>
+              </li>
+            ) : null}
           </ul>
-          <button type="button" className="btn" disabled={ocupado} onClick={guardarAsistencia}>
-            {ocupado ? 'Guardando…' : 'Guardar asistencia'}
-          </button>
+
+          {!clase.facturada ? (
+            <p className="parametros__hint">Cerrada sin facturar (fuerza mayor).</p>
+          ) : null}
+
+          {anulando ? (
+            <div className="confirm-box">
+              <p className="confirm-box__texto">
+                ¿Anular el cierre? Los cargos y el pago quedan anulados y la clase vuelve a
+                “reservada” para cerrarla de nuevo.
+              </p>
+              <button type="button" className="btn" disabled={ocupado} onClick={anular}>
+                {ocupado ? 'Anulando…' : 'Sí, anular el cierre'}
+              </button>
+              <button
+                type="button"
+                className="btn btn--secondary"
+                disabled={ocupado}
+                onClick={() => setAnulando(false)}
+              >
+                No, volver
+              </button>
+            </div>
+          ) : (
+            <>
+              <button
+                type="button"
+                className="btn btn--secondary"
+                disabled={ocupado || algoPagado}
+                onClick={() => setAnulando(true)}
+              >
+                Anular cierre
+              </button>
+              {algoPagado ? (
+                <p className="parametros__hint">
+                  No se puede anular: hay un cargo o pago ya cobrado.
+                </p>
+              ) : null}
+            </>
+          )}
         </div>
       ) : null}
 

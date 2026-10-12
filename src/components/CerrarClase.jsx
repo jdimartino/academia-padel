@@ -1,0 +1,243 @@
+import { useMemo, useState } from 'react'
+import { useAuth } from '../context/AuthContext'
+import { useAvisos } from '../context/AvisosContext'
+import { db } from '../firebase/config'
+import { cerrarClase } from '../firebase/db'
+import { PARAMETROS_DEFAULT, calcularCierre } from '../lib/cobros'
+import { aMinutos } from '../lib/agenda'
+import { formatearUSD, parsearUSD } from '../lib/dinero'
+import { esErrorDeNegocio } from '../lib/avisos'
+
+const ESTADOS = [
+  { valor: 'presente', label: 'Presente' },
+  { valor: 'ausente_avisada', label: 'Avisó' },
+  { valor: 'ausente_sin_aviso', label: 'Faltó sin aviso' },
+]
+
+const MOTIVOS = [
+  { valor: 'descuento', label: 'Descuento' },
+  { valor: 'acuerdo', label: 'Acuerdo' },
+  { valor: 'otro', label: 'Otro' },
+]
+
+/** Minutos de la clase; 0 si las horas no se pueden leer. */
+function duracionDe(clase) {
+  try {
+    const fin = aMinutos(clase.horaFin)
+    const inicio = aMinutos(clase.horaInicio)
+    return fin > inicio ? fin - inicio : 0
+  } catch {
+    return 0
+  }
+}
+
+/** Estado de asistencia inicial por alumno (todo presente salvo lo guardado). */
+function inicial(clase) {
+  const guardadas = clase.asistencias ?? []
+  return Object.fromEntries(
+    (clase.alumnos ?? []).map((id) => {
+      const previa = guardadas.find((a) => a.alumnoId === id)
+      return [id, previa?.estado ?? 'presente']
+    }),
+  )
+}
+
+/**
+ * Cierre de una clase (Phase 4): se marca la asistencia, se decide si se
+ * factura, se confirma el monto (obligatorio si la clase no tenía precio) y se
+ * ve, EN VIVO, cada cargo del alumno y el pago al profesor. El botón primario
+ * (lime) confirma; la generación real la hace `cerrarClase` en una transacción.
+ */
+export default function CerrarClase({ clase, parametros, tenantId, onCerrado }) {
+  const { user } = useAuth()
+  const { mostrarErrorTecnico } = useAvisos()
+
+  const alumnos = useMemo(
+    () =>
+      (clase.alumnos ?? []).map((id, i) => ({
+        id,
+        nombre: (clase.alumnoNombres ?? [])[i] ?? id,
+      })),
+    [clase],
+  )
+
+  const [asistencias, setAsistencias] = useState(() => inicial(clase))
+  const [seFactura, setSeFactura] = useState(true)
+  const inicialTexto = clase.cobro ? formatearUSD(clase.cobro.montoCents) : ''
+  const [montoTexto, setMontoTexto] = useState(inicialTexto)
+  const [motivoAjuste, setMotivoAjuste] = useState(clase.cobro?.motivoAjuste ?? 'otro')
+  const [ocupado, setOcupado] = useState(false)
+  const [error, setError] = useState('')
+
+  const editado = montoTexto.trim() !== inicialTexto
+  const requiereMonto = seFactura && !clase.cobro
+  const montoCents = parsearUSD(montoTexto)
+
+  const registros = alumnos.map((alumno) => ({
+    alumnoId: alumno.id,
+    estado: asistencias[alumno.id] ?? 'presente',
+  }))
+
+  // Preview: mismo cálculo puro que usa el cierre real.
+  const preview = useMemo(() => {
+    const params = parametros ?? PARAMETROS_DEFAULT
+    let cobro = clase.cobro ?? null
+    if (editado || requiereMonto) {
+      cobro = {
+        perfilCobroId: clase.cobro?.perfilCobroId ?? null,
+        modo: clase.cobro?.modo ?? 'total',
+        tarifaHoraCents: clase.cobro?.tarifaHoraCents ?? null,
+        montoEstandarCents: clase.cobro?.montoEstandarCents ?? null,
+        montoCents: montoCents ?? 0,
+        ajustado: true,
+        motivoAjuste,
+      }
+    }
+    return calcularCierre({
+      cobro,
+      duracionMin: duracionDe(clase),
+      asistencias: registros,
+      parametros: params,
+      seFactura,
+    })
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [clase, parametros, asistencias, seFactura, montoTexto, motivoAjuste])
+
+  const cargosPorAlumno = Object.fromEntries(preview.cargos.map((c) => [c.alumnoId, c]))
+
+  function marcar(alumnoId, estado) {
+    setAsistencias((prev) => ({ ...prev, [alumnoId]: estado }))
+  }
+
+  async function cerrar() {
+    if (requiereMonto && montoCents === null) {
+      setError('Carga un monto para la clase (o apaga "¿Se factura?")')
+      return
+    }
+    setOcupado(true)
+    setError('')
+    try {
+      const datos = { asistencias: registros, seFactura }
+      if (editado || requiereMonto) {
+        datos.montoCents = montoCents ?? 0
+        datos.motivoAjuste = motivoAjuste
+      }
+      await cerrarClase(db, tenantId, clase.id, datos, { uid: user?.uid ?? null })
+      onCerrado?.()
+    } catch (err) {
+      if (esErrorDeNegocio(err)) setError(err.message)
+      else {
+        setError('No se pudo cerrar la clase. Inténtalo de nuevo.')
+        mostrarErrorTecnico('cerrar-clase', err)
+      }
+    } finally {
+      setOcupado(false)
+    }
+  }
+
+  return (
+    <div className="cierre">
+      <h3 className="sheet__subtitulo">Cerrar clase</h3>
+
+      <ul className="asistencia-lista">
+        {alumnos.map((alumno) => {
+          const cargo = cargosPorAlumno[alumno.id]
+          return (
+            <li key={alumno.id} className="asistencia-fila">
+              <span className="asistencia-nombre">
+                {alumno.nombre}
+                {seFactura ? (
+                  <span className="cierre__monto">
+                    {cargo ? formatearUSD(cargo.montoCents) : 'sin cargo'}
+                  </span>
+                ) : null}
+              </span>
+              <div className="seg" role="group" aria-label={`Asistencia de ${alumno.nombre}`}>
+                {ESTADOS.map((opcion) => (
+                  <button
+                    key={opcion.valor}
+                    type="button"
+                    className={`seg__op${asistencias[alumno.id] === opcion.valor ? ' is-sel' : ''}`}
+                    aria-pressed={asistencias[alumno.id] === opcion.valor}
+                    onClick={() => marcar(alumno.id, opcion.valor)}
+                  >
+                    {opcion.label}
+                  </button>
+                ))}
+              </div>
+            </li>
+          )
+        })}
+      </ul>
+
+      <label className="parametros__check">
+        <input type="checkbox" checked={seFactura} onChange={(e) => setSeFactura(e.target.checked)} />
+        <span>¿Se factura?</span>
+      </label>
+      <span className="parametros__hint">Apágalo por fuerza mayor (lluvia, luz).</span>
+
+      {seFactura ? (
+        <div className="cierre__monto-caja">
+          <label className="parametros__campo">
+            <span className="form__label">Monto de la clase (USD)</span>
+            <input
+              className="form__input"
+              type="text"
+              inputMode="decimal"
+              value={montoTexto}
+              placeholder={requiereMonto ? 'Obligatorio' : ''}
+              onChange={(e) => setMontoTexto(e.target.value)}
+            />
+          </label>
+          {editado || requiereMonto ? (
+            <label className="parametros__campo">
+              <span className="form__label">Motivo</span>
+              <select
+                className="form__input"
+                value={motivoAjuste}
+                onChange={(e) => setMotivoAjuste(e.target.value)}
+              >
+                {MOTIVOS.map((m) => (
+                  <option key={m.valor} value={m.valor}>
+                    {m.label}
+                  </option>
+                ))}
+              </select>
+            </label>
+          ) : null}
+          <button
+            type="button"
+            className="btn btn--secondary"
+            onClick={() => {
+              setMontoTexto('0')
+              setMotivoAjuste('cortesia')
+            }}
+          >
+            Cortesía
+          </button>
+        </div>
+      ) : null}
+
+      <div className="cierre__preview" role="status">
+        <div className="cierre__fila">
+          <span>Total a cobrar</span>
+          <strong>{formatearUSD(preview.resumen.totalCargosCents)}</strong>
+        </div>
+        <div className="cierre__fila">
+          <span>Pago al profesor</span>
+          <strong>{formatearUSD(preview.pagoProfesor.montoCents)}</strong>
+        </div>
+      </div>
+
+      {error ? (
+        <p className="form__error" role="alert">
+          {error}
+        </p>
+      ) : null}
+
+      <button type="button" className="btn-cta" disabled={ocupado} onClick={cerrar}>
+        {ocupado ? 'Cerrando…' : 'Cerrar clase'}
+      </button>
+    </div>
+  )
+}

@@ -290,6 +290,7 @@ export default function Agenda() {
             sedeNombre={sede?.nombre}
             tenantId={academia}
             rol={rol}
+            parametros={parametros}
             onClose={cerrarDetalle}
             onChanged={recargar}
             onReprogramar={abrirReprogramar}
@@ -366,6 +367,7 @@ export default function Agenda() {
               sedeNombre={sede?.nombre}
               tenantId={academia}
               rol={rol}
+              parametros={parametros}
               onClose={cerrarDetalle}
               onChanged={recargar}
               onReprogramar={abrirReprogramar}

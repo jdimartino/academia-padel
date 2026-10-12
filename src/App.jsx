@@ -4,6 +4,7 @@ import { AuthProvider } from './context/AuthContext'
 import { AvisosProvider } from './context/AvisosContext'
 import Agenda from './pages/Agenda'
 import Alumnos from './pages/Alumnos'
+import Cobros from './pages/Cobros'
 import Configuracion from './pages/Configuracion'
 import Home from './pages/Home'
 import Login from './pages/Login'
@@ -37,6 +38,14 @@ export default function App() {
               element={
                 <ProtectedRoute>
                   <Profesores />
+                </ProtectedRoute>
+              }
+            />
+            <Route
+              path="/:academia/cobros"
+              element={
+                <ProtectedRoute>
+                  <Cobros />
                 </ProtectedRoute>
               }
             />

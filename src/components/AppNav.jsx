@@ -11,6 +11,7 @@ export default function AppNav({ onNavigate }) {
     { to: `/${academia}/agenda`, label: 'Agenda' },
     { to: `/${academia}/alumnos`, label: 'Alumnos' },
     { to: `/${academia}/profesores`, label: 'Profesores' },
+    { to: `/${academia}/cobros`, label: 'Cobros' },
     { to: `/${academia}/configuracion`, label: 'Configuración' },
   ]
 

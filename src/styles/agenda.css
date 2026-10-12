@@ -884,3 +884,104 @@
     max-height: none;
   }
 }
+
+/* ============================================================
+   Cierre de clase (Phase 4): montos, preview y cobros generados
+   ============================================================ */
+
+.badge--pagado {
+  background: var(--estado-ejecutada-bg);
+  color: var(--estado-ejecutada-texto);
+}
+
+.badge--anulado {
+  background: var(--estado-cancelada-bg);
+  color: var(--estado-cancelada-texto);
+  border: var(--estado-cancelada-border);
+}
+
+.cierre {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.cierre__monto-caja {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.cierre__monto-caja .btn {
+  align-self: flex-start;
+}
+
+.cierre__monto {
+  margin-left: 8px;
+  font-size: 12px;
+  font-weight: 500;
+  color: var(--texto-muted, rgba(255, 255, 255, 0.65));
+}
+
+.cierre__preview {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 12px 14px;
+  border-radius: var(--radio-md, 14px);
+  background: rgba(255, 255, 255, 0.06);
+  border: 1px solid rgba(255, 255, 255, 0.14);
+}
+
+.cierre__fila {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 12px;
+  font-size: 14px;
+}
+
+.cierre-lista {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.cierre-lista__fila {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 10px 12px;
+  border-radius: var(--radio-md, 14px);
+  background: rgba(255, 255, 255, 0.05);
+}
+
+.cierre-lista__fila--prof {
+  border: 1px solid rgba(255, 255, 255, 0.16);
+}
+
+.cierre-lista__nombre {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  font-size: 14px;
+  font-weight: 600;
+}
+
+.cierre-lista__concepto {
+  font-size: 12px;
+  font-weight: 500;
+  color: var(--texto-muted, rgba(255, 255, 255, 0.65));
+}
+
+.cierre-lista__monto {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 14px;
+  font-weight: 700;
+}

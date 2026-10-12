@@ -918,3 +918,81 @@
     grid-template-columns: repeat(2, minmax(0, 1fr));
   }
 }
+
+/* ============================================================
+   Cobros pendientes (Phase 4)
+   ============================================================ */
+
+.cobros__filtros {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 12px;
+  margin-bottom: 18px;
+}
+
+.cobros__filtros .parametros__campo {
+  flex: 1 1 160px;
+}
+
+.cobros__bloque {
+  margin-top: 20px;
+}
+
+.cobros__total {
+  margin-left: 8px;
+  font-size: 14px;
+  font-weight: 700;
+  color: var(--texto-muted, rgba(255, 255, 255, 0.65));
+}
+
+.cobros__lista {
+  list-style: none;
+  margin: 10px 0 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.cobros__fila {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 12px 14px;
+  border-radius: var(--radio-md, 14px);
+  background: rgba(255, 255, 255, 0.05);
+  border: 1px solid rgba(255, 255, 255, 0.12);
+}
+
+.cobros__nombre {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  flex: 1 1 180px;
+  font-size: 14px;
+  font-weight: 600;
+}
+
+.cobros__meta {
+  font-size: 12px;
+  font-weight: 500;
+  color: var(--texto-muted, rgba(255, 255, 255, 0.65));
+}
+
+.cobros__monto {
+  font-size: 15px;
+  font-weight: 700;
+}
+
+.cobros__accion {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+}
+
+.cobros__accion .form__input {
+  max-width: 160px;
+}
