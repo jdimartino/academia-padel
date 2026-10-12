@@ -148,6 +148,7 @@ async function crearClaseEnSeed(datos) {
     tipo: 'variable',
     serieId: null,
     estado: datos.estado ?? 'reservada',
+    facturada: datos.facturada ?? false,
     categoria: datos.categoria ?? null,
     categoriaGrupo: datos.categoriaGrupo ?? null,
     asistencias: datos.asistencias ?? [],
@@ -854,6 +855,7 @@ async function main() {
       { alumnoId: 'a2', estado: 'ausente_sin_aviso', motivo: 'enfermedad', registradoPor: 'seed', registradoEn: new Date() },
     ],
     estado: 'pendiente_cobro',
+    facturada: true,
     // Cobro AJUSTADO a mano: ejercita el badge "Descuento" en el detalle.
     cobro: {
       perfilCobroId: 'cuatro',
@@ -897,34 +899,54 @@ async function main() {
     },
   })
 
-  const periodo = diaRelativo(0).slice(0, 7)
-  await setDoc(`${tenant}/cargos/cg1`, {
+  /*
+   * Cargos y pago al profesor del cierre de la clase c2 (Phase 4). c2 quedó
+   * `pendiente_cobro` con un monto AJUSTADO de $40.00 total entre 2 alumnos:
+   *   - a1 presente  → cargo `clase` de $20.00, YA PAGADO (efectivo).
+   *   - a2 sin aviso → cargo `falta_sin_aviso` del 50% de su parte = $10.00.
+   * El pago al profesor (por hora, $15.00/h, 60 min) queda PENDIENTE.
+   * Los IDs son deterministas, igual que en `cerrarClase` de db.js.
+   */
+  const creadoEn = new Date()
+  await setDoc(`${tenant}/cargos/c2_a1`, {
+    claseId: 'c2',
     alumnoId: 'a1',
     alumnoNombre: 'Aldo Adulto',
+    sedeId: 'traki',
+    fecha: ayerAbierto,
     concepto: 'clase',
+    montoCents: 2000,
+    estado: 'pagado',
+    pagadoEn: creadoEn,
+    metodoPago: 'efectivo',
+    creadoEn,
+  })
+  await setDoc(`${tenant}/cargos/c2_a2`, {
     claseId: 'c2',
-    planId: null,
-    periodo,
-    montoCentavos: 1500,
-    moneda: 'USD',
+    alumnoId: 'a2',
+    alumnoNombre: 'Marta Menor',
+    sedeId: 'traki',
+    fecha: ayerAbierto,
+    concepto: 'falta_sin_aviso',
+    montoCents: 1000,
     estado: 'pendiente',
-    anuladoPor: null,
-    creadoEn: new Date(),
+    pagadoEn: null,
+    metodoPago: null,
+    creadoEn,
   })
-  await setDoc(`${tenant}/pagos/pg1`, {
-    alumnoId: 'a1',
-    cargoIds: ['cg1'],
-    montoCentavos: 1500,
-    metodo: 'transferencia',
-    referencia: 'REF-0001',
-    comprobante: null,
-    estado: 'en_revision',
-    motivoRechazo: null,
-    revisadoPor: null,
-    creadoEn: new Date(),
-    revisadoEn: null,
+  await setDoc(`${tenant}/pagosProfesor/c2`, {
+    claseId: 'c2',
+    profesorId: 'p1',
+    profesorNombre: nombreCompleto(PROFESORES_POR_ID.p1),
+    sedeId: 'traki',
+    fecha: ayerAbierto,
+    montoCents: 1500,
+    base: { modo: 'por_hora', minutos: 60 },
+    estado: 'pendiente',
+    pagadoEn: null,
+    metodoPago: null,
   })
-  console.log('· Profesores, alumnos, clases, cargos y pagos')
+  console.log('· Profesores, alumnos, clases, cargos y pago al profesor')
 
   const ids = {}
   for (const usuario of USUARIOS) {
