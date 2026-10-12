@@ -116,6 +116,15 @@ emulador: horario libre, solapamiento exacto y parcial, horarios adyacentes,
 cancelación que libera los bloques y dos reservas simultáneas del mismo slot
 (gana una sola).
 
+### Tests de librerías puras
+
+```bash
+npm run test:lib     # tests/lib.test.js + tests/avisos.test.js
+```
+
+Sin emulador: helpers puros de `src/lib/*` (agenda, fechas, dinero y cobros) y de
+`db.js` que no tocan Firestore.
+
 ### Build de producción
 
 ```bash
@@ -154,6 +163,23 @@ firestore.indexes.json
 - La reserva no se solapa gracias a `academias/{tenantId}/bloques/{bloqueId}`:
   un documento por bloque de 30 minutos de cancha (y otro del profesor), con ID
   determinista, escritos en la misma transacción que la clase.
+
+### Cobros configurables (Fase 3)
+
+- Los **perfiles de cobro** viven en `academias/{tenantId}/perfilesCobro/{id}`
+  (nombre, personas 1-4 o `null`, modo `total`/`por_persona`, `activo`, `orden`).
+- Cada **sede** lleva un mapa `tarifas` de `<perfilId>` a centavos por hora.
+- Los **parámetros** de la academia (avisos, % de falta sin aviso, pago del
+  profesor, descuentos, duraciones permitidas, vencimiento de créditos, alertas)
+  viven en el documento único `academias/{tenantId}/config/parametros`.
+- Al reservar, el formulario **sugiere** el precio (tarifa × duración, × personas
+  en `por_persona`) y lo guarda como **snapshot** en `clase.cobro`. Se puede
+  ajustar a mano con un motivo. **No se generan cargos ni pagos**: eso sigue
+  fuera de alcance.
+
+Se administra en **Configuración → Cobros** y el seed siembra perfiles, tarifas
+por sede y parámetros para el tenant de ensayo. El dinero se guarda siempre en
+**enteros de centavos de USD**.
 
 Ver `docs/modelo-datos.md` para el detalle.
 

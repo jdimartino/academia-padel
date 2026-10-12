@@ -141,6 +141,7 @@ carga por su cuenta.
 | `activa` | bool | |
 | `orden` | number | Para ordenar en la UI |
 | `horario` | map | Horario **por día de la semana**: claves `'0'` (lunes) … `'6'` (domingo), el mismo índice que `diaSemana` de `src/lib/fechas.js`. Cada día es `null` (cerrado) o `{apertura, cierre}` en **MINUTOS** desde medianoche, múltiplos de `MINUTOS_BLOQUE` (30), dentro de 0-1440 y con `cierre > apertura` (7:30 → 450). Si falta (sedes viejas) o está corrupto, `horarioDeSede` cae al default **07:00-23:00 los 7 días**. El formato VIEJO (un solo `{apertura, cierre}` en horas enteras 0-24) se sigue LEYENDO y se expande a los 7 días, pero al ESCRIBIR se exige el formato por día |
+| `tarifas` | map | **Fase 3.** Precio por hora de cada perfil de cobro en ESTA sede: `{ <perfilId>: <cents> }` (entero de centavos entre 0 y `LIMITE_TARIFA_CENTS`). Una clave AUSENTE = "sin tarifa para ese perfil en esta sede". Lo escribe `setTarifasSede` (reemplaza el mapa completo) y lo valida `validarTarifas` contra los perfiles REALES de la academia. Si falta, la sede no sugiere precios (el admin carga el monto a mano) |
 
 `horarioDeSede(sede)` devuelve el mapa de los 7 días y
 `horarioDelDia(fecha, horarioSemanal)` la franja del día de esa fecha (o `null`
@@ -281,6 +282,7 @@ sin solapamientos.
 | `categoriaGrupo` | string \| null | Opcional y **distinta** de `categoria` (el nivel): `infantil` \| `junior` \| `adulto`, o `null`. Validada en `crearClase`/`reprogramarClase` (y en firestore.rules); se muestra en la reserva y en el detalle de la clase. Todavía no afecta precios. |
 | `cupo` | number | |
 | `alumnos` | string[] | IDs de alumnos asignados. `crearClase`, `reprogramarClase` y `asignarAlumnos` los validan (existen, activos, sin duplicados, dentro del `cupo`). |
+| `cobro` | map \| null | **Fase 3. SNAPSHOT** del precio acordado al reservar: `{perfilCobroId, modo, tarifaHoraCents, montoEstandarCents, montoCents, ajustado, motivoAjuste}` (montos en centavos). `montoCents` es el que se cobra; `montoEstandarCents` el sugerido por la tarifa y `ajustado` marca si se cambió a mano (con `motivoAjuste` ∈ `descuento`\|`cortesia`\|`acuerdo`\|`otro`). Cambios posteriores de tarifas **no** lo tocan. `null` = clase sin precio. Lo valida `validarCobro` en `crearClase`/`reprogramarClase` y `cobroValido` en firestore.rules |
 | `asistencias` | map[] | `[{alumnoId, estado, motivo, registradoPor, registradoEn}]`. `estado` ∈ `presente` \| `ausente_avisada` \| `ausente_sin_aviso`; `motivo` opcional. |
 | `estado` | string | `reservada` → `pendiente_cobro` → `cobrada`; también `cancelada`. `ejecutada` sigue existiendo en el enum pero el cierre por asistencia va directo a `pendiente_cobro`. |
 | `sedeNombre` | string | Denormalizado |
@@ -327,6 +329,11 @@ recuperación vs nota de crédito) también está **sin definir**.
 **Cobrar (o no) a los alumnos ausentes está SIN DEFINIR.** El código no crea
 `cargos` ni toca el saldo de nadie al registrar la asistencia: la clase queda en
 `pendiente_cobro` y el cobro es un paso posterior, manual, por definir.
+
+**Precio de la clase (Fase 3):** al reservar/reprogramar se guarda un SNAPSHOT en
+`cobro` (ver §5.2). Es solo el precio acordado: **no** genera `cargos`, ni
+movimientos de crédito, ni liquidaciones. El cobro efectivo y la facturación
+siguen sin implementar.
 
 **No solapamiento:** es una regla de **negocio** y se valida en la capa de
 escritura (`src/firebase/db.js`), porque Firestore no tiene constraints únicos
@@ -621,6 +628,71 @@ Lista de la pantalla de Profesores. Sin paginación: el catálogo es chico.
 
 ---
 
+## 5.2 Configuración de cobros (Fase 3)
+
+Fase 3 es **configuración**: se guardan perfiles de cobro, tarifas por sede y
+parámetros de negocio, y se **sugiere** un precio al reservar. **No** se generan
+cargos, pagos, créditos ni liquidaciones (eso sigue sin definir, ver §7). Todo el
+dinero se guarda en **enteros de centavos de USD** (`src/lib/dinero.js`); nunca
+hay floats guardados.
+
+### `academias/{tenantId}/perfilesCobro/{perfilId}`
+
+| Campo | Tipo | Nota |
+| --- | --- | --- |
+| `nombre` | string | Requerido, normalizado y único en el tenant (sin distinguir caja, espacios ni acentos), máx. 100 |
+| `personas` | number \| null | 1..4 o `null` (= cualquiera, p. ej. Corporativo). Es la cantidad que "encaja" con el `cupo` de una clase |
+| `modo` | string | `total` \| `por_persona`. Con `por_persona` el monto se multiplica por la cantidad de alumnos |
+| `activo` | bool | Soft delete: **nunca se borran**, se desactivan |
+| `orden` | number | Orden de presentación; si falta se asigna el siguiente entero |
+
+Los **defaults** (`PERFILES_COBRO_DEFAULT` en `src/lib/cobros.js`) tienen `id`
+FIJO para que el seed escriba las tarifas por sede apuntándolos y la app los
+reconozca: `individual` (1), `pareja` (2), `tres` (3), `cuatro` (4),
+`corporativo` (`null`) y `especial` (`null`). Funciones: `listarPerfilesCobro`
+(incluye inactivos; acotada por tenant y `limit(50)`), `crearPerfilCobro`,
+`actualizarPerfilCobro` y `cambiarActivaPerfilCobro` (soft delete). Solo las
+escribe el administrador.
+
+### `academias/{tenantId}/config/parametros` (documento único)
+
+Parámetros de negocio de la academia. Un solo documento; si falta o está
+incompleto, `leerParametros` rellena campo por campo con `PARAMETROS_DEFAULT`.
+
+| Campo | Tipo | Default | Nota |
+| --- | --- | --- | --- |
+| `avisoAusenciaHoras` | number | `24` | 0..168. Ventana de aviso de una ausencia |
+| `porcentajeFaltaSinAviso` | number | `50` | 0..100. % a cobrar por una ausencia sin aviso |
+| `pagoProfesor` | map | `{modo:'por_hora', montoCents:1500}` | `modo` ∈ `por_hora`\|`por_clase`; `montoCents` entero >= 0 |
+| `descuentoHermanosPct` | number | `10` | 0..100 |
+| `duracionesPermitidas` | number[] | `[60,90,120]` | Lista no vacía, sin repetidos, ascendente, múltiplos de 30 entre 60 y 240. **Fuente de verdad de las duraciones de una clase** (`bloquesDeClase`) |
+| `vencimientoCreditoDias` | number \| null | `null` | `null` = no vence; si no, 1..365 |
+| `alertaCobro` | map | `{dias:2, referencia:'clase'}` | `dias` 0..30; `referencia` ∈ `clase`\|`vencimiento` |
+| `restringirCategoriaPorFranja` | bool | `false` | *Sin implementar todavía* |
+
+Funciones: `getParametros` (1 lectura, tolerante), `validarParametros`
+(obligatoria antes de escribir; completa con defaults y rechaza campos/rangos
+inválidos) y `setParametros` (cambios parciales que se mezclan sobre los
+actuales). Solo el administrador escribe.
+
+### Precio de una clase (`clase.cobro`)
+
+Al reservar o reprogramar, el formulario **sugiere** el monto:
+
+`sugerirPrecioCents({tarifaHoraCents, duracionMin, modo, cantidadAlumnos})` =
+`tarifaHoraCents × duracionMin / 60`, multiplicado por `cantidadAlumnos` cuando
+el modo es `por_persona` (redondeo half-up a centavos). Devuelve `null` si no
+hay tarifa para ese perfil en esa sede (el admin carga el monto a mano).
+
+El resultado se guarda como SNAPSHOT en `clase.cobro` (campos en §4). Al
+reprogramar, `recalcularCobro(cobroActual, sugerido)` actualiza el monto si la
+clase no fue ajustada a mano, y si lo fue conserva el monto y el motivo pero
+refresca `montoEstandarCents`. `validarCobro` es la validación de tipos/enums/
+montos del snapshot; `cobroValido` la repite en firestore.rules. **Nada de esto
+mueve dinero**: es el precio acordado, a la espera de la fase de cargos.
+
+---
+
 ## 6. Índices compuestos
 
 Declarados en `firestore.indexes.json`. Mínimos para las consultas previstas:
@@ -661,15 +733,19 @@ publicarse.
 - Catálogo de métodos de pago, niveles de alumno y tipos de cancha.
 - **Reparto exacto de permisos entre `administrador` y "recepción"** (decisión 6:
   recepción es un admin reducido, pero *qué* quita todavía no está escrito).
-- **Facturación / cobros (todo sin definir):** tarifa por hora del profesor
-  (`tarifaHoraCentavos` no se escribe), generación del `cargo` al cerrar la
-  clase y a la liquidación del profesor, cobro o no de la clase cancelada y de
-  los alumnos ausentes. `registrarAsistencia` solo deja la clase en
-  `pendiente_cobro`; no crea cargos, notas de crédito, recuperaciones ni toca
+- **Facturación / cobros:** la **configuración** ya está (perfiles, tarifas por
+  sede, parámetros y el snapshot de precio de la clase: §5.2). Siguen **sin
+  definir** la tarifa por hora del profesor como dato de liquidación
+  (`tarifaHoraCentavos` de la ficha no se escribe), la generación del `cargo` al
+  cerrar la clase, la liquidación del profesor y el cobro (o no) de la clase
+  cancelada y de los alumnos ausentes. `registrarAsistencia` solo deja la clase
+  en `pendiente_cobro`; no crea cargos, notas de crédito, recuperaciones ni toca
   saldos.
-- **Ventana de aviso (horas) de una ausencia:** parámetro por academia, hoy sin
-  definir y sin hardcodear. El administrador decide si una ausencia fue
-  "avisada"; no se implementan notificaciones.
+- **Ventana de aviso (horas) de una ausencia:** ya es un parámetro por academia
+  (`config/parametros.avisoAusenciaHoras`, §5.2) y `porcentajeFaltaSinAviso`
+  guarda el % a cobrar. Lo que sigue **sin definir** es la regla de negocio que
+  los usa (clase de recuperación vs nota de crédito) y no se implementan
+  notificaciones. El administrador decide si una ausencia fue "avisada".
 - **Doble reserva de un alumno a la misma hora:** no se bloquea en la
   transacción ni se crean bloques de alumno. Queda como nota de diseño.
 - Cuándo y cómo se habilita Cloud Storage para subir comprobantes (decisión 5:
