@@ -118,6 +118,20 @@ export default function CerrarClase({ clase, parametros, tenantId, onCerrado }) 
     estado: asistencias[alumno.id] ?? 'presente',
   }))
 
+  // Descripción en lenguaje humano de lo que se está por cerrar: duración,
+  // profesor y desglose de la asistencia marcada.
+  const presentes = registros.filter((r) => r.estado === 'presente').length
+  const avisaron = registros.filter((r) => r.estado === 'ausente_avisada').length
+  const faltaron = registros.filter((r) => r.estado === 'ausente_sin_aviso').length
+  const partesAsistencia = [
+    `${presentes} ${presentes === 1 ? 'presente' : 'presentes'}`,
+    avisaron ? `${avisaron} que ${avisaron === 1 ? 'avisó' : 'avisaron'}` : null,
+    faltaron ? `${faltaron} sin aviso` : null,
+  ].filter(Boolean)
+  const descripcion = `Clase de ${horasTexto(duracionDe(clase))}${
+    clase.profesorNombre ? ` con ${clase.profesorNombre}` : ''
+  } y ${registros.length} ${registros.length === 1 ? 'alumno' : 'alumnos'}: ${partesAsistencia.join(', ')}.`
+
   // Preview: mismo cálculo puro que usa el cierre real.
   const preview = useMemo(() => {
     let cobro = clase.cobro ?? null
@@ -186,6 +200,8 @@ export default function CerrarClase({ clase, parametros, tenantId, onCerrado }) 
           Confirmado por profesor {clase.profesorNombre ?? clase.profesorId}
         </p>
       ) : null}
+
+      <p className="cierre__descripcion">{descripcion}</p>
 
       <ul className="asistencia-lista">
         {alumnos.map((alumno) => {

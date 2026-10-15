@@ -275,6 +275,16 @@
   text-overflow: ellipsis;
 }
 
+.bloque__alumnos {
+  margin-top: auto;
+  font-size: 11px;
+  line-height: 1.2;
+  opacity: 0.92;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
 .bloque__avatares {
   display: flex;
   margin-top: auto;
@@ -1169,4 +1179,15 @@
     grid-template-columns: repeat(auto-fill, minmax(320px, 1fr));
     align-items: start;
   }
+}
+
+/* Descripción en lenguaje humano de lo que se cierra. */
+.cierre__descripcion {
+  margin: 0 0 12px;
+  padding: 10px 12px;
+  border-radius: 12px;
+  background: rgba(255, 255, 255, 0.06);
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  font-size: 13px;
+  line-height: 1.45;
 }

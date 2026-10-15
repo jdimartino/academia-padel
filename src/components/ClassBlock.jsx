@@ -3,7 +3,6 @@ import {
   estaSinCerrar,
   etiquetaCategoriaGrupo,
   formatHora12,
-  iniciales,
   rangoClase,
   tituloClase,
 } from '../lib/agenda'
@@ -20,6 +19,7 @@ export default function ClassBlock({ clase, escala, minutoInicio, onSelect }) {
   const estado = estadoDe(clase.estado)
   const grupo = etiquetaCategoriaGrupo(clase.categoriaGrupo)
   const alumnos = clase.alumnoNombres ?? []
+  const nombresAlumnos = alumnos.join(', ')
   const sinCerrar = estaSinCerrar(clase)
   const top = (rango.inicio - minutoInicio) * escala
   const alto = (rango.fin - rango.inicio) * escala
@@ -30,7 +30,8 @@ export default function ClassBlock({ clase, escala, minutoInicio, onSelect }) {
       className={`bloque bloque--${estado.tono}${sinCerrar ? ' bloque--sin-cerrar' : ''}`}
       style={{ top: `${top}px`, height: `${alto}px` }}
       onClick={() => onSelect(clase)}
-      aria-label={`${tituloClase(clase)}, ${formatHora12(clase.horaInicio)} a ${formatHora12(clase.horaFin)}, ${estado.label}${grupo ? `, grupo ${grupo}` : ''}${sinCerrar ? ', sin cerrar' : ''}`}
+      title={nombresAlumnos ? `${tituloClase(clase)} · ${nombresAlumnos}` : tituloClase(clase)}
+      aria-label={`${tituloClase(clase)}, ${formatHora12(clase.horaInicio)} a ${formatHora12(clase.horaFin)}, ${estado.label}${grupo ? `, grupo ${grupo}` : ''}${nombresAlumnos ? `, alumnos ${nombresAlumnos}` : ''}${sinCerrar ? ', sin cerrar' : ''}`}
     >
       {sinCerrar ? (
         <span
@@ -50,12 +51,8 @@ export default function ClassBlock({ clase, escala, minutoInicio, onSelect }) {
       </span>
       <span className="bloque__profe">{clase.profesorNombre}</span>
       {alumnos.length ? (
-        <span className="bloque__avatares">
-          {alumnos.slice(0, 4).map((nombre, i) => (
-            <span key={`${nombre}-${i}`} className="avatar" title={nombre}>
-              {iniciales(nombre)}
-            </span>
-          ))}
+        <span className="bloque__alumnos" title={nombresAlumnos}>
+          {nombresAlumnos}
         </span>
       ) : null}
     </button>
