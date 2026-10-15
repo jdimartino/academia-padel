@@ -1,9 +1,10 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useMemo, useState } from 'react'
 import { useParams } from 'react-router-dom'
 import FichaProfesorSheet from '../components/FichaProfesorSheet'
 import PageChrome from '../components/PageChrome'
+import TablaPersonas from '../components/TablaPersonas'
 import { db } from '../firebase/config'
-import { LIMITE_PROFESORES, getProfesores, nombreCompleto } from '../firebase/db'
+import { LIMITE_PROFESORES, getProfesores, listarSedes, nombreCompleto } from '../firebase/db'
 
 const ESTADOS = [
   { valor: 'activos', label: 'Activos' },
@@ -13,14 +14,18 @@ const ESTADOS = [
 
 /*
  * Pantalla de Profesores: lista completa del tenant (limit 200) ordenada por
- * apellidos y después nombre, con filtro de estado y sin buscador. El alta y la
- * edición (incluida la reactivación) van en el sheet.
+ * apellidos y después nombre, con filtro de estado y buscador client-side (el
+ * conjunto ya está acotado). Usa la misma tabla compacta que Alumnos
+ * (`TablaPersonas`). El alta y la edición (incluida la reactivación) van en el
+ * sheet.
  */
 export default function Profesores() {
   const { academia } = useParams()
   const [estado, setEstado] = useState('activos')
+  const [texto, setTexto] = useState('')
   // `null` = todavía no cargó.
   const [profesores, setProfesores] = useState(null)
+  const [sedes, setSedes] = useState([])
   const [error, setError] = useState('')
   const [editando, setEditando] = useState(null)
   const [recarga, setRecarga] = useState(0)
@@ -43,77 +48,120 @@ export default function Profesores() {
     }
   }, [academia, estado, recarga])
 
+  // Nombres de sedes para mostrar las asignaciones del profesor.
+  useEffect(() => {
+    let activo = true
+    listarSedes(db, academia)
+      .then((lista) => {
+        if (activo) setSedes(lista)
+      })
+      .catch(() => {
+        if (activo) setSedes([])
+      })
+    return () => {
+      activo = false
+    }
+  }, [academia])
+
   const lista = profesores ?? []
   const cargando = profesores === null
+
+  const nombreSede = useMemo(
+    () => Object.fromEntries(sedes.map((sede) => [sede.id, sede.nombre])),
+    [sedes],
+  )
+
+  // Filtro client-side por nombre/apellidos (el listado ya está acotado a 200).
+  const query = texto.trim().toLowerCase()
+  const filas = query
+    ? lista.filter((profesor) =>
+        nombreCompleto(profesor).toLowerCase().includes(query),
+      )
+    : lista
+
   const mensajeVacio =
     estado === 'inactivos'
       ? 'No hay profesores inactivos.'
-      : 'Todavia no hay profesores activos. Crea el primero con Nuevo profesor.'
+      : 'Todavía no hay profesores activos. Crea el primero con Nuevo profesor.'
+
+  const columnas = [
+    {
+      id: 'nombre',
+      label: 'Nombre',
+      render: (profesor) => (
+        <span className="celda-nombre">
+          {nombreCompleto(profesor)}
+          {profesor.activo === false ? <span className="ficha-item__marca">Inactivo</span> : null}
+        </span>
+      ),
+    },
+    {
+      id: 'telefono',
+      label: 'Teléfono',
+      render: (profesor) => profesor.telefono ?? 'Sin teléfono',
+    },
+    {
+      id: 'sedes',
+      label: 'Sedes',
+      render: (profesor) => {
+        const ids = profesor.sedes ?? []
+        if (!ids.length) return 'Sin sede'
+        return ids.map((id) => nombreSede[id] ?? 'Sede').join(', ')
+      },
+    },
+    {
+      id: 'acciones',
+      label: 'Acciones',
+      className: 'tabla-comp__acciones',
+      render: (profesor) => (
+        <button
+          type="button"
+          className="btn-icono"
+          onClick={(evento) => {
+            evento.stopPropagation()
+            setEditando({ profesor })
+          }}
+        >
+          Ver
+        </button>
+      ),
+    },
+  ]
 
   return (
     <PageChrome titulo="Profesores">
-      <div className="fichas">
-        <div className="fichas__barra">
-          <button type="button" className="btn-cta" onClick={() => setEditando({})}>
-            Nuevo profesor
-          </button>
-        </div>
+      {error ? (
+        <p className="alert alert--error" role="alert">
+          {error}
+        </p>
+      ) : null}
 
-        <div className="seg" role="group" aria-label="Filtrar profesores por estado">
-          {ESTADOS.map((opcion) => (
-            <button
-              key={opcion.valor}
-              type="button"
-              className={`seg__op${estado === opcion.valor ? ' is-sel' : ''}`}
-              aria-pressed={estado === opcion.valor}
-              onClick={() => {
-                setEstado(opcion.valor)
-                setProfesores(null)
-                setError('')
-              }}
-            >
-              {opcion.label}
-            </button>
-          ))}
-        </div>
-
-        {error ? (
-          <p className="alert alert--error" role="alert">
-            {error}
-          </p>
-        ) : null}
-
-        <span className="fichas__contador">
-          {cargando
+      <TablaPersonas
+        columnas={columnas}
+        filas={filas}
+        onFila={(profesor) => setEditando({ profesor })}
+        cargando={cargando}
+        vacio={mensajeVacio}
+        textoBusqueda={texto}
+        onBuscar={setTexto}
+        placeholderBusqueda="Buscar por nombre o apellido"
+        sinResultados="No hay profesores que coincidan con la búsqueda."
+        estados={ESTADOS}
+        estadoValor={estado}
+        onEstado={(nuevo) => {
+          setEstado(nuevo)
+          setTexto('')
+          setProfesores(null)
+          setError('')
+        }}
+        onNuevo={() => setEditando({})}
+        etiquetaNuevo="Nuevo profesor"
+        contador={
+          cargando
             ? 'Cargando…'
-            : `${lista.length} ${estado === 'inactivos' ? 'inactivos' : estado === 'todos' ? 'en total' : 'activos'}`}
-        </span>
-
-        {cargando ? <p className="aviso glass">Cargando profesores…</p> : null}
-        {!cargando && lista.length === 0 ? <p className="aviso glass">{mensajeVacio}</p> : null}
-
-        {lista.length > 0 ? (
-          <ul className="fichas__lista">
-            {lista.map((profesor) => (
-              <li key={profesor.id}>
-                <button
-                  type="button"
-                  className="ficha-item glass"
-                  onClick={() => setEditando({ profesor })}
-                >
-                  <span className="ficha-item__nombre">
-                    {nombreCompleto(profesor)}
-                    {profesor.activo === false ? (
-                      <span className="ficha-item__marca">Inactivo</span>
-                    ) : null}
-                  </span>
-                  <span className="ficha-item__meta">{profesor.telefono ?? 'Sin telefono'}</span>
-                </button>
-              </li>
-            ))}
-          </ul>
-        ) : null}
-      </div>
+            : `${filas.length} ${estado === 'inactivos' ? 'inactivos' : estado === 'todos' ? 'en total' : 'activos'}`
+        }
+      />
 
       {editando ? (
         <FichaProfesorSheet

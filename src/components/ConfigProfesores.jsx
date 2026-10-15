@@ -177,7 +177,7 @@ export default function ConfigProfesores({ tenantId }) {
             {lista.map((acceso) => (
               <li key={acceso.id} className="lista-sedes__item">
                 <span>
-                  {nombrePorProfesor[acceso.profesorId] ?? acceso.profesorId}
+                  {nombrePorProfesor[acceso.profesorId] ?? 'Profesor'}
                   <span className="parametros__hint"> {acceso.email}</span>
                 </span>
                 <button

@@ -47,7 +47,7 @@ const ESTADO_COBRO_LABEL = {
 function alumnosDeClase(clase) {
   const ids = clase.alumnos ?? []
   const nombres = clase.alumnoNombres ?? []
-  return ids.map((id, i) => ({ id, nombre: nombres[i] ?? id }))
+  return ids.map((id, i) => ({ id, nombre: nombres[i] ?? 'Alumno' }))
 }
 
 export default function DetailSheet({
@@ -181,7 +181,7 @@ export default function DetailSheet({
         </div>
         <div className="sheet__fila">
           <dt>Cancha</dt>
-          <dd>{cancha?.nombre ?? clase.canchaId}</dd>
+          <dd>{cancha?.nombre ?? clase.canchaNombre ?? 'Cancha'}</dd>
         </div>
         <div className="sheet__fila">
           <dt>Fecha</dt>
@@ -263,6 +263,8 @@ export default function DetailSheet({
           clase={clase}
           parametros={parametros}
           tenantId={tenantId}
+          sedeNombre={clase.sedeNombre ?? sedeNombre}
+          canchaNombre={cancha?.nombre ?? clase.canchaNombre}
           onCerrado={alCerrar}
         />
       ) : null}
@@ -290,7 +292,7 @@ export default function DetailSheet({
             {movimientos.map((movimiento) => (
               <li key={movimiento.id} className="cierre-lista__fila">
                 <span className="cierre-lista__nombre">
-                  {nombrePorAlumno[movimiento.alumnoId] ?? movimiento.alumnoId}
+                  {nombrePorAlumno[movimiento.alumnoId] ?? 'Alumno'}
                   <span className="cierre-lista__concepto">
                     {MOTIVOS_MOVIMIENTO_LABEL[movimiento.motivo] ?? 'Crédito'}
                   </span>

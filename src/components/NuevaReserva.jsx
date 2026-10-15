@@ -119,7 +119,7 @@ export default function NuevaReserva({
   const [alumnosSel, setAlumnosSel] = useState(() => {
     const ids = clase?.alumnos ?? []
     const nombres = clase?.alumnoNombres ?? []
-    return ids.map((id, i) => ({ id, nombre: nombres[i] ?? id }))
+    return ids.map((id, i) => ({ id, nombre: nombres[i] ?? 'Alumno' }))
   })
   /*
    * Cobro: perfil elegido (o "Sin precio"), monto en USD y motivo de ajuste. El

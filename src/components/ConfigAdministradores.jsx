@@ -174,7 +174,7 @@ export default function ConfigAdministradores({ tenantId }) {
                 <li key={miembro.id} className="lista-sedes__item">
                   <span className="admin-item__texto">
                     <span className="admin-item__nombre">
-                      {miembro.nombre || miembro.email || miembro.id}
+                      {miembro.nombre || miembro.email || 'Administrador'}
                       {esUnoMismo ? <span className="parametros__hint"> (tú)</span> : null}
                     </span>
                     <span className="parametros__hint">

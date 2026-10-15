@@ -125,13 +125,13 @@ export default function AsistenciaProfesor() {
           const abierta = clase.estado === 'reservada'
           const alumnos = (clase.alumnos ?? []).map((id, i) => ({
             id,
-            nombre: (clase.alumnoNombres ?? [])[i] ?? id,
+            nombre: (clase.alumnoNombres ?? [])[i] ?? 'Alumno',
           }))
           return (
             <article key={clase.id} className="clase-card">
               <header className="clase-card__head">
                 <h2 className="clase-card__titulo">
-                  {clase.canchaNombre ?? clase.canchaId}
+                  {clase.canchaNombre ?? 'Cancha'}
                   {clase.sedeNombre ? <span className="clase-card__sede">{clase.sedeNombre}</span> : null}
                 </h2>
                 <p className="clase-card__cuando">

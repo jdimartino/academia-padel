@@ -5,8 +5,9 @@ import { db } from '../firebase/config'
 import { cerrarClase, getCreditoAlumno } from '../firebase/db'
 import { PARAMETROS_DEFAULT, calcularCierre, previsualizarCreditoAlumno } from '../lib/cobros'
 import { estadoCierreAEstadoProfesor } from '../lib/profesores'
-import { aMinutos } from '../lib/agenda'
+import { aMinutos, formatHora12 } from '../lib/agenda'
 import { formatearUSD, parsearUSD } from '../lib/dinero'
+import { formatearFechaLarga } from '../lib/fechas'
 import { esErrorDeNegocio } from '../lib/avisos'
 
 const ESTADOS = [
@@ -66,7 +67,7 @@ function inicial(clase) {
  * ve, EN VIVO, cada cargo del alumno y el pago al profesor. El botón primario
  * (lime) confirma; la generación real la hace `cerrarClase` en una transacción.
  */
-export default function CerrarClase({ clase, parametros, tenantId, onCerrado }) {
+export default function CerrarClase({ clase, parametros, tenantId, sedeNombre, canchaNombre, onCerrado }) {
   const { user } = useAuth()
   const { mostrarErrorTecnico } = useAvisos()
 
@@ -74,7 +75,7 @@ export default function CerrarClase({ clase, parametros, tenantId, onCerrado }) 
     () =>
       (clase.alumnos ?? []).map((id, i) => ({
         id,
-        nombre: (clase.alumnoNombres ?? [])[i] ?? id,
+        nombre: (clase.alumnoNombres ?? [])[i] ?? 'Alumno',
       })),
     [clase],
   )
@@ -85,6 +86,7 @@ export default function CerrarClase({ clase, parametros, tenantId, onCerrado }) 
   const [montoTexto, setMontoTexto] = useState(inicialTexto)
   const [motivoAjuste, setMotivoAjuste] = useState(clase.cobro?.motivoAjuste ?? 'otro')
   const [ocupado, setOcupado] = useState(false)
+  const [confirmando, setConfirmando] = useState(false)
   const [error, setError] = useState('')
   const [minutosCredito, setMinutosCredito] = useState({})
 
@@ -197,9 +199,38 @@ export default function CerrarClase({ clase, parametros, tenantId, onCerrado }) 
 
       {clase.asistenciaProfesor ? (
         <p className="cierre__confirmado" role="status">
-          Confirmado por profesor {clase.profesorNombre ?? clase.profesorId}
+          Confirmado por profesor {clase.profesorNombre ?? 'Profesor'}
         </p>
       ) : null}
+
+      <dl className="cierre__resumen">
+        <div className="cierre__resumen-fila">
+          <dt>Fecha</dt>
+          <dd>{formatearFechaLarga(clase.fecha)}</dd>
+        </div>
+        <div className="cierre__resumen-fila">
+          <dt>Horario</dt>
+          <dd>
+            {formatHora12(clase.horaInicio)} - {formatHora12(clase.horaFin)}
+          </dd>
+        </div>
+        <div className="cierre__resumen-fila">
+          <dt>Sede</dt>
+          <dd>{clase.sedeNombre ?? sedeNombre ?? 'Sede'}</dd>
+        </div>
+        <div className="cierre__resumen-fila">
+          <dt>Cancha</dt>
+          <dd>{clase.canchaNombre ?? canchaNombre ?? 'Cancha'}</dd>
+        </div>
+        <div className="cierre__resumen-fila">
+          <dt>Profesor</dt>
+          <dd>{clase.profesorNombre ?? 'Profesor'}</dd>
+        </div>
+        <div className="cierre__resumen-fila">
+          <dt>Alumnos</dt>
+          <dd>{alumnos.length ? alumnos.map((a) => a.nombre).join(', ') : 'Sin alumnos'}</dd>
+        </div>
+      </dl>
 
       <p className="cierre__descripcion">{descripcion}</p>
 
@@ -319,9 +350,36 @@ export default function CerrarClase({ clase, parametros, tenantId, onCerrado }) 
         </p>
       ) : null}
 
-      <button type="button" className="btn-cta" disabled={ocupado} onClick={cerrar}>
-        {ocupado ? 'Cerrando…' : 'Cerrar clase'}
-      </button>
+      {confirmando ? (
+        <div className="confirm-box">
+          <p className="confirm-box__texto">
+            ¿Cerrar la clase de {formatearFechaLarga(clase.fecha)} de {formatHora12(clase.horaInicio)} a{' '}
+            {formatHora12(clase.horaFin)} en {clase.sedeNombre ?? sedeNombre ?? 'la sede'} (
+            {clase.canchaNombre ?? canchaNombre ?? 'cancha'}) con {clase.profesorNombre ?? 'el profesor'} y{' '}
+            {alumnos.length ? alumnos.map((a) => a.nombre).join(', ') : 'sin alumnos'}?
+          </p>
+          <button type="button" className="btn" disabled={ocupado} onClick={cerrar}>
+            {ocupado ? 'Cerrando…' : 'Sí, cerrar la clase'}
+          </button>
+          <button
+            type="button"
+            className="btn btn--secondary"
+            disabled={ocupado}
+            onClick={() => setConfirmando(false)}
+          >
+            No, volver
+          </button>
+        </div>
+      ) : (
+        <button
+          type="button"
+          className="btn-cta"
+          disabled={ocupado}
+          onClick={() => setConfirmando(true)}
+        >
+          Cerrar clase
+        </button>
+      )}
     </div>
   )
 }
