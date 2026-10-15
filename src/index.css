@@ -2,6 +2,7 @@
 @import './styles/base.css';
 @import './styles/background.css';
 @import './styles/glass.css';
+@import './styles/feedback.css';
 @import './styles/agenda.css';
 @import './styles/fichas.css';
 @import './styles/configuracion.css';

@@ -1,0 +1,99 @@
+/* Feedback de acciones (Parte 1): botón de acción, spinner y barra de progreso. */
+
+.btn-accion {
+  position: relative;
+}
+
+.btn-accion__contenido {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 0;
+}
+
+/* Reserva el ancho del estado en reposo para que el botón no dé saltos. */
+.btn-accion__base {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.btn-accion__estado {
+  position: absolute;
+  inset: 0;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 0.5ch;
+  white-space: nowrap;
+}
+
+.btn-accion__spinner {
+  flex: none;
+  width: 1em;
+  height: 1em;
+  border-radius: 50%;
+  border: 2px solid currentColor;
+  border-top-color: transparent;
+  animation: btn-accion-girar 0.7s linear infinite;
+}
+
+@keyframes btn-accion-girar {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+/* Barra de progreso global de carga de página. */
+.barra-progreso {
+  position: fixed;
+  top: 0;
+  left: 0;
+  right: 0;
+  height: 3px;
+  z-index: 200;
+  overflow: hidden;
+  opacity: 0;
+  pointer-events: none;
+}
+
+/* El retraso es puramente CSS: espera RETRASO y recién ahí se desvanece. */
+.barra-progreso.is-visible {
+  opacity: 1;
+  transition: opacity 0.2s ease 0.5s;
+}
+
+.barra-progreso__pista {
+  display: block;
+  height: 100%;
+  width: 30%;
+  border-radius: 999px;
+  background: var(--accent);
+  animation: barra-progreso-mover 1.1s ease-in-out infinite;
+}
+
+@keyframes barra-progreso-mover {
+  0% {
+    transform: translateX(-100%);
+  }
+
+  100% {
+    transform: translateX(400%);
+  }
+}
+
+/* Menos movimiento: spinner quieto y barra estática. */
+@media (prefers-reduced-motion: reduce) {
+  .btn-accion__spinner {
+    animation: none;
+    border-top-color: currentColor;
+    opacity: 0.65;
+  }
+
+  .barra-progreso__pista {
+    animation: none;
+    width: 100%;
+    opacity: 0.6;
+  }
+}

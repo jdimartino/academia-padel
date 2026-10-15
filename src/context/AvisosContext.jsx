@@ -11,6 +11,7 @@ import {
   hayDialogo as hayDialogoEnEstado,
   mostrarConfirmacion,
   mostrarError as encolarError,
+  mostrarErrorToast as encolarErrorToast,
   mostrarExito as encolarExito,
 } from '../lib/avisos'
 
@@ -48,6 +49,10 @@ export function AvisosProvider({ children }) {
 
   const mostrarExito = useCallback((mensaje) => {
     setEstado((prev) => encolarExito(prev, mensaje))
+  }, [])
+
+  const avisarError = useCallback((mensaje) => {
+    setEstado((prev) => encolarErrorToast(prev, mensaje))
   }, [])
 
   const confirmar = useCallback((opciones) => {
@@ -98,10 +103,11 @@ export function AvisosProvider({ children }) {
       mostrarError,
       mostrarErrorTecnico,
       mostrarExito,
+      avisarError,
       confirmar,
       hayDialogo: hayDialogoEnEstado(estado),
     }),
-    [confirmar, estado, mostrarError, mostrarErrorTecnico, mostrarExito],
+    [avisarError, confirmar, estado, mostrarError, mostrarErrorTecnico, mostrarExito],
   )
 
   return (

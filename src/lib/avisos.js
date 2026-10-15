@@ -13,6 +13,9 @@ import { formatHora12 } from './agenda.js'
 /** Milisegundos que un toast queda visible antes de irse solo. */
 export const DURACION_TOAST = 3500
 
+/** Los errores duran un poco más: hay que alcanzar a leerlos. */
+export const DURACION_TOAST_ERROR = 6000
+
 /** Tope de toasts visibles a la vez; el más viejo se descarta. */
 export const MAX_TOASTS = 3
 
@@ -189,24 +192,43 @@ export function hayDialogo(estado) {
   return estado.dialogos.length > 0
 }
 
+/** Duración del toast según su tipo. */
+function duracionDeToast(tipo) {
+  return tipo === 'error' ? DURACION_TOAST_ERROR : DURACION_TOAST
+}
+
 /**
- * Encola un toast de éxito. Cada toast tiene id y duración propios; con más de
- * MAX_TOASTS visibles se descarta el más viejo.
+ * Encola un toast genérico (éxito o error). Cada toast tiene id y duración
+ * propios; con más de MAX_TOASTS visibles se descarta el más viejo.
+ *
+ * El toast de éxito conserva EXACTAMENTE la misma forma de siempre (sin `tipo`)
+ * para no romper a quien lo inspecciona; el de error agrega `tipo: 'error'`.
  */
-export function mostrarExito(estado, mensaje, ahora = Date.now()) {
+export function mostrarToast(estado, mensaje, tipo = 'exito', ahora = Date.now()) {
   const texto = String(mensaje ?? '').trim()
   if (!texto) return estado
   const toast = {
     id: `toast-${estado.siguienteToast}`,
     mensaje: texto,
     creadoEn: ahora,
-    duracion: DURACION_TOAST,
+    duracion: duracionDeToast(tipo),
   }
+  if (tipo === 'error') toast.tipo = 'error'
   return {
     ...estado,
     siguienteToast: estado.siguienteToast + 1,
     toasts: [...estado.toasts, toast].slice(-MAX_TOASTS),
   }
+}
+
+/** Encola un toast de éxito (guardado importante). */
+export function mostrarExito(estado, mensaje, ahora = Date.now()) {
+  return mostrarToast(estado, mensaje, 'exito', ahora)
+}
+
+/** Encola un toast de error (siempre visible, se va solo). */
+export function mostrarErrorToast(estado, mensaje, ahora = Date.now()) {
+  return mostrarToast(estado, mensaje, 'error', ahora)
 }
 
 /** Cierra un toast por id (clic del usuario). */

@@ -4,6 +4,7 @@ import GuardRol from './components/GuardRol'
 import ProtectedRoute from './components/ProtectedRoute'
 import { AuthProvider } from './context/AuthContext'
 import { AvisosProvider } from './context/AvisosContext'
+import { CargandoProvider } from './context/CargandoContext'
 import { TasasProvider } from './context/TasasContext'
 import Agenda from './pages/Agenda'
 import Alumnos from './pages/Alumnos'
@@ -19,9 +20,10 @@ export default function App() {
   return (
     <BrowserRouter>
       <AuthProvider>
-        <AvisosProvider>
-          <TasasProvider>
-            <Routes>
+        <CargandoProvider>
+          <AvisosProvider>
+            <TasasProvider>
+              <Routes>
               <Route path="/login" element={<Login />} />
               <Route
                 path="/:academia/agenda"
@@ -91,9 +93,10 @@ export default function App() {
                   </ProtectedRoute>
                 }
               />
-            </Routes>
-          </TasasProvider>
-        </AvisosProvider>
+              </Routes>
+            </TasasProvider>
+          </AvisosProvider>
+        </CargandoProvider>
       </AuthProvider>
     </BrowserRouter>
   )

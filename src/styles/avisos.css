@@ -72,20 +72,21 @@
 }
 
 /* ============================================================
-   Toasts de éxito (arriba, por encima de los sheets)
+   Toasts globales (abajo): a la derecha en desktop, a todo el
+   ancho en mobile. Por encima de los sheets, no roban el foco.
    ============================================================ */
 
 .toasts {
   position: fixed;
-  top: 0;
   left: 0;
   right: 0;
-  z-index: 90;
+  bottom: 0;
+  z-index: 110;
   display: flex;
   flex-direction: column;
   gap: 8px;
   padding: 12px;
-  padding-top: calc(12px + env(safe-area-inset-top, 0px));
+  padding-bottom: calc(12px + env(safe-area-inset-bottom, 0px));
   pointer-events: none;
 }
 
@@ -99,10 +100,15 @@
   animation: toast-entrada 180ms ease-out;
 }
 
+.toast--error {
+  border-color: rgba(248, 113, 113, 0.6);
+  color: #ffd9d9;
+}
+
 @keyframes toast-entrada {
   from {
     opacity: 0;
-    transform: translateY(-8px);
+    transform: translateY(8px);
   }
 
   to {
@@ -113,7 +119,11 @@
 
 @media (min-width: 48rem) {
   .toasts {
-    align-items: center;
+    left: auto;
+    right: 0;
+    width: auto;
+    max-width: 28rem;
+    align-items: flex-end;
   }
 
   .toast {
