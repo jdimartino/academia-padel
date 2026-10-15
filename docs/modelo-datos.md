@@ -1001,6 +1001,49 @@ pre-lectura y el commit, se cae limpiamente al cargo normal.
 
 ---
 
+## 5.5 Reportes (Parte B)
+
+Pantalla **solo-administrador** (`/:academia/reportes`, entrada "Reportes" en el
+menú). No crea colecciones nuevas: lee datos existentes con consultas acotadas
+por rango de fechas (por defecto, el mes en curso) y con tope. El profesor no
+tiene membresía y las reglas le niegan toda lectura, así que los informes quedan
+fuera de su alcance sin ampliar permisos.
+
+**Arquitectura.** La agregación es pura y vive en `src/lib/reportes.js`
+(`INFORMES` es el catálogo de los 15 informes; cada uno expone `construir`,
+`fuentes` y `filtros`). La lectura de datos vive en `db.js`
+(`listarClasesPorRango`, `listarCargosPorRango`, `listarCargosDeAlumno`,
+`listarPagosProfesorPorRango`, `listarPlanes`, `listarCreditos`,
+`listarAlumnosReporte`). La vista es una sola (`src/components/ReportView.jsx`)
+para todos: encabezado imprimible, tarjetas de resumen, tabla con totales y barra
+de exportación.
+
+**Exportación.** PDF con `window.print()` + `@media print` (nombre de la
+academia, título, filtros, fecha/hora, tasa BCV; sin navegación ni botones);
+WhatsApp con `https://wa.me/?text=` (o `wa.me/<58...>?text=` cuando el informe
+apunta a una persona, con el teléfono normalizado a `58...`) y "Compartir" vía
+`navigator.share` cuando exista; CSV compatible con Excel (BOM UTF-8, separador
+`;`, importes como números en USD). Los importes se muestran en USD con su
+equivalente en Bs/EUR según la tasa BCV vigente; el monto guardado nunca cambia.
+
+| # | Informe | Fuente |
+|---|---------|--------|
+| 1 | Clases agendadas | `clases` (abiertas, fecha ≥ hoy) + `sedes` |
+| 2 | Clases realizadas | `clases` (cerradas; cuenta presentes/avisaron/sin aviso) |
+| 3 | Ocupación de canchas | `clases` + `sedes`/`canchas` (minutos reservados ÷ minutos abiertos del horario) |
+| 4 | Agenda semanal por profesor | `clases` + `sedes` |
+| 5 | Listado de alumnos | `alumnos` |
+| 6 | Planes y crédito | `planesAlumno` + `creditos` + `alumnos` |
+| 7 | Alumnos inactivos | `alumnos` + `clases` (sin clase en los últimos N días, N por defecto 30) |
+| 8 | Estado de cuenta del alumno | `cargos` del alumno (WhatsApp al representante o al alumno) |
+| 9 | Listado de profesores | `profesores` |
+| 10 | Horas y pago por profesor | `clases` + `pagosProfesor` |
+| 11 | Cuentas por cobrar | `cargos` pendientes con antigüedad 0-7 / 8-30 / >30 días |
+| 12 | Cobros recibidos | `cargos` pagados + `clases.cobro` (por sede y perfil) |
+| 13 | Pagos a profesores | `pagosProfesor` (pendientes y pagados) |
+| 14 | Faltas, cortesías y descuentos | `clases.cobro` (ajustes) + `cargos` de falta |
+| 15 | Resumen del mes | `clases` + `cargos` + `pagosProfesor` |
+
 ## 6. Índices compuestos
 
 Declarados en `firestore.indexes.json`. Mínimos para las consultas previstas:
@@ -1024,6 +1067,10 @@ Declarados en `firestore.indexes.json`. Mínimos para las consultas previstas:
 - `planesAlumno`: `alumnoId` + `activo` (Fase 5: `getPlanActivo`). Los lotes de
   `creditos` se leen por `alumnoId` y los `movimientosCredito` por `claseId`
   (índices de un solo campo).
+- `clases`: `sedeId` + `profesorId` + `fecha` (Parte B: informes que filtran por
+  sede y profesor a la vez, p. ej. clases agendadas).
+- `cargos`: `alumnoId` + `fecha` (Parte B: estado de cuenta del alumno, que ordena
+  los cargos del alumno por fecha).
 
 **Fase 4:** se reemplazaron los dos compuestos viejos de `cargos`
 (`alumnoId`/`periodo`, `estado`/`periodo`) por los de `estado`+`fecha` y
