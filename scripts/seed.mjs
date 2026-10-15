@@ -855,6 +855,66 @@ async function main() {
     },
   })
 
+  /*
+   * Clases de días PASADOS que quedaron ABIERTAS (`reservada`): son las que la
+   * agenda marca como "sin cerrar" para la demo. Las fechas son relativas al
+   * momento de correr el seed y siempre caen en el pasado, así el aviso aparece
+   * sin fabricar fechas a mano.
+   */
+  await crearClaseEnSeed({
+    id: 'c5',
+    sedeId: 'traki',
+    sedeNombre: 'Traki',
+    canchaId: 'c4',
+    canchaNombre: 'Cancha 4',
+    profesorId: 'p1',
+    profesorNombre: nombreCompleto(PROFESORES_POR_ID.p1),
+    fecha: diaRelativoAbierto(-2, horarioTraki),
+    horaInicio: '09:00',
+    horaFin: '10:00',
+    cupo: 4,
+    categoria: '4a',
+    categoriaGrupo: 'adulto',
+    alumnosIds: ['a4', 'a8'],
+    estado: 'reservada',
+    cobro: {
+      perfilCobroId: 'pareja',
+      modo: 'total',
+      tarifaHoraCents: 4500,
+      montoEstandarCents: 4500,
+      montoCents: 4500,
+      ajustado: false,
+      motivoAjuste: null,
+    },
+  })
+
+  await crearClaseEnSeed({
+    id: 'c6',
+    sedeId: 'traki',
+    sedeNombre: 'Traki',
+    canchaId: 'c5',
+    canchaNombre: 'Cancha 5',
+    profesorId: 'p1',
+    profesorNombre: nombreCompleto(PROFESORES_POR_ID.p1),
+    fecha: diaRelativoAbierto(-3, horarioTraki),
+    horaInicio: '10:30',
+    horaFin: '12:00',
+    cupo: 4,
+    categoria: '6a',
+    categoriaGrupo: 'junior',
+    alumnosIds: ['a5', 'a7'],
+    estado: 'reservada',
+    cobro: {
+      perfilCobroId: 'pareja',
+      modo: 'total',
+      tarifaHoraCents: 4500,
+      montoEstandarCents: 6750,
+      montoCents: 6750,
+      ajustado: false,
+      motivoAjuste: null,
+    },
+  })
+
   // Reserva futura con categoría de grupo: la grilla la muestra como
   // "Grupal · 6ta · Infantil" y el detalle trae la fila "Categoría de grupo".
   await crearClaseEnSeed({

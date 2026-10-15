@@ -1629,3 +1629,106 @@ describe('[F7] asistencia del profesor: solo en sus clases abiertas y solo ese c
     await assertFails(deleteDoc(doc(as(UID.profeAcceso), 'academias', T1, 'clases', ABIERTA)))
   })
 })
+
+describe('[F7] administradores: el admin nunca toca su propia membresía', () => {
+  const miembro = (uid, rol, extra = {}) => ({
+    uid,
+    rol,
+    activo: true,
+    nombre: uid,
+    creadoEn: null,
+    ...extra,
+  })
+  const refMiembro = (uid, db = as(UID.adminT1)) =>
+    doc(db, 'academias', T1, 'miembros', uid)
+
+  it('el admin CREA su propia membresía → DENY (no se auto-escribe)', async () => {
+    await assertFails(setDoc(refMiembro(UID.adminT1), miembro(UID.adminT1, 'administrador')))
+  })
+
+  it('el admin ACTUALIZA su propia membresía (activo) → DENY', async () => {
+    await assertFails(updateDoc(refMiembro(UID.adminT1), { activo: false }))
+  })
+
+  it('el admin se DEGRADA el rol a sí mismo → DENY', async () => {
+    await assertFails(updateDoc(refMiembro(UID.adminT1), { rol: 'profesor' }))
+  })
+
+  it('el admin BORRA su propia membresía → DENY', async () => {
+    await assertFails(deleteDoc(refMiembro(UID.adminT1)))
+  })
+
+  it('el admin CREA otra membresía administrador con email → ALLOW', async () => {
+    await assertSucceeds(
+      setDoc(
+        refMiembro('uid-admin-nuevo'),
+        miembro('uid-admin-nuevo', 'administrador', { email: 'jefa@x.test' }),
+      ),
+    )
+  })
+
+  it('el admin DESACTIVA la membresía de otro administrador → ALLOW', async () => {
+    await assertSucceeds(
+      setDoc(refMiembro('uid-admin-dos'), miembro('uid-admin-dos', 'administrador')),
+    )
+    await assertSucceeds(updateDoc(refMiembro('uid-admin-dos'), { activo: false }))
+  })
+
+  it('el admin BORRA la membresía de otro → ALLOW', async () => {
+    await assertSucceeds(
+      setDoc(refMiembro('uid-a-borrar'), miembro('uid-a-borrar', 'alumno_adulto')),
+    )
+    await assertSucceeds(deleteDoc(refMiembro('uid-a-borrar')))
+  })
+
+  it('el admin CREA una membresía con rol inválido → DENY', async () => {
+    await assertFails(
+      setDoc(refMiembro('uid-rol-malo'), miembro('uid-rol-malo', 'superadmin')),
+    )
+  })
+
+  it('el admin CREA una membresía con uid distinto del path → DENY', async () => {
+    await assertFails(
+      setDoc(refMiembro('uid-path'), miembro('uid-otro', 'administrador')),
+    )
+  })
+
+  it('el admin CREA una membresía con un campo de más → DENY', async () => {
+    await assertFails(
+      setDoc(refMiembro('uid-extra'), miembro('uid-extra', 'administrador', { extra: true })),
+    )
+  })
+
+  it('el admin CREA una membresía con activo no booleano → DENY', async () => {
+    await assertFails(
+      setDoc(refMiembro('uid-activo-malo'), miembro('uid-activo-malo', 'administrador', { activo: 'sí' })),
+    )
+  })
+
+  it('el admin CREA una membresía con email no string → DENY', async () => {
+    await assertFails(
+      setDoc(
+        refMiembro('uid-email-malo'),
+        miembro('uid-email-malo', 'administrador', { email: 42 }),
+      ),
+    )
+  })
+
+  it('el admin CREA una membresía con creadoEn no timestamp → DENY', async () => {
+    await assertFails(
+      setDoc(
+        refMiembro('uid-creado-malo'),
+        miembro('uid-creado-malo', 'administrador', { creadoEn: 'ayer' }),
+      ),
+    )
+  })
+
+  it('un profesor CREA una membresía administrador → DENY', async () => {
+    await assertFails(
+      setDoc(
+        doc(as(UID.profT1), 'academias', T1, 'miembros', 'uid-prof-crea'),
+        miembro('uid-prof-crea', 'administrador'),
+      ),
+    )
+  })
+})

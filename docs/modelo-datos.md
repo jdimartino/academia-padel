@@ -105,10 +105,23 @@ todo el sistema** (las reglas lo leen).
 | Campo | Tipo | Nota |
 | --- | --- | --- |
 | `uid` | string | Igual a `request.auth.uid` (para el collection group) |
-| `rol` | string | `administrador` \| `alumno_adulto` \| `alumno_menor`. **Hoy solo `administrador` tiene acceso real**; alumno adulto/menor y representante quedan "sin acceso" (usuarios negativos de prueba). El **profesor NO tiene membresía**: su acceso vive en `usuarios/{uid}` (Fase 7). **Decisión 6: no se agrega un rol "recepción"** — recepción es un `administrador` con permisos reducidos (*reparto exacto sin definir*). |
+| `rol` | string | `administrador` \| `profesor` \| `alumno_adulto` \| `alumno_menor`. **Hoy solo `administrador` tiene acceso real**; alumno adulto/menor y representante quedan "sin acceso" (usuarios negativos de prueba). El **profesor NO usa esta membresía para su acceso**: el login del profesor vive en `usuarios/{uid}` (Fase 7); `miembros` con rol `profesor` se conserva solo por compatibilidad. **Decisión 6: no se agrega un rol "recepción"** — recepción es un `administrador` con permisos reducidos (*reparto exacto sin definir*). |
 | `activo` | bool | |
 | `nombre` | string | Denormalizado, para mostrar sin leer el perfil |
+| `email` | string \| null | Opcional. Copia del email de Auth, útil para listar administradores sin leer Auth |
 | `creadoEn` | Timestamp | |
+| `actualizadoPor` | string \| null | uid del admin que cambió `activo` (opcional) |
+| `actualizadoEn` | Timestamp \| null | Cuándo se cambió `activo` (opcional) |
+
+**Escritura de membresías (Fase 7 — módulo Administradores):** solo un
+`administrador` activo escribe membresías, y **nunca la propia**
+(`request.auth.uid != uid`, para que un admin no se degrade ni se desactive a sí
+mismo y no se pueda dejar el tenant sin administradores). La forma del documento
+se valida con `membresiaValida` (claves permitidas, `uid == path`, rol del enum,
+`activo` booleano). El alta que crea la cuenta de Auth pasa por
+`crearAccesoAdmin` en `db.js` (la contraseña nunca se escribe en Firestore). La
+lectura sigue siendo: admin ve todas las membresías del tenant, cualquiera ve la
+suya.
 
 > **Campos eliminados (login obsoleto):** `profesorId` y `alumnoId` en la
 > membresía ya no se usan. La ficha se referencia por id desde las clases

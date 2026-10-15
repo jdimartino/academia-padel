@@ -93,6 +93,11 @@ import {
   getUsuarioProfesor,
   guardarAsistenciaProfesor,
   listarUsuariosProfesor,
+  LIMITE_MIEMBROS,
+  cambiarActivoMiembro,
+  crearAccesoAdmin,
+  getMiembro,
+  listarMiembros,
 } from '../src/firebase/db.js'
 import { PARAMETROS_DEFAULT } from '../src/lib/cobros.js'
 
@@ -4034,5 +4039,158 @@ describe('[F7] acceso de profesores y asistencia del profesor', () => {
       { uid: ADMIN, ahora: DESPUES_DEL_FIN },
     )
     assert.equal((await getClase(adminDb, T1, claseId)).confirmadoPorProfesorId, undefined)
+  })
+})
+
+/* --------------------------------------------------------------------- */
+/* [F7] Administradores del tenant (miembros)                             */
+/* --------------------------------------------------------------------- */
+
+describe('[F7] administradores del tenant (miembros)', () => {
+  it('listarMiembros y getMiembro leen las membresías del tenant', async () => {
+    const lista = await listarMiembros(adminDb, T1)
+    assert.deepEqual(
+      lista.map((m) => m.id).sort(),
+      [ADMIN, ALUMNO].sort(),
+    )
+    const admin = await getMiembro(adminDb, T1, ADMIN)
+    assert.equal(admin.rol, 'administrador')
+    assert.equal(admin.activo, true)
+    assert.equal(await getMiembro(adminDb, T1, 'nadie'), null)
+  })
+
+  it('limita el listado de miembros al tope duro', async () => {
+    const lista = await listarMiembros(adminDb, T1, { limite: 9999 })
+    assert.ok(lista.length <= LIMITE_MIEMBROS)
+  })
+
+  it('crearAccesoAdmin usa la función inyectada y escribe miembros/{uid}', async () => {
+    const llamadas = []
+    const fake = async ({ email, password }) => {
+      llamadas.push({ email, password })
+      return { uid: 'uid-admin-nuevo' }
+    }
+    const { uid } = await crearAccesoAdmin(
+      adminDb,
+      T1,
+      { email: 'Jefa@X.test', password: 'secreta123', nombre: 'Jefa' },
+      { crearCuenta: fake, uidActual: ADMIN },
+    )
+    assert.equal(uid, 'uid-admin-nuevo')
+    assert.deepEqual(llamadas, [{ email: 'jefa@x.test', password: 'secreta123' }])
+
+    const miembro = await getMiembro(adminDb, T1, 'uid-admin-nuevo')
+    assert.equal(miembro.rol, 'administrador')
+    assert.equal(miembro.email, 'jefa@x.test')
+    assert.equal(miembro.nombre, 'Jefa')
+    assert.equal(miembro.activo, true)
+    assert.ok(miembro.creadoEn != null)
+  })
+
+  it('crearAccesoAdmin rechaza crear el propio acceso', async () => {
+    await assert.rejects(
+      () =>
+        crearAccesoAdmin(
+          adminDb,
+          T1,
+          { email: 'yo@x.test', password: 'secreta123', nombre: 'Yo' },
+          { crearCuenta: async () => ({ uid: ADMIN }), uidActual: ADMIN },
+        ),
+      FichaInvalidaError,
+    )
+    assert.equal((await getMiembro(adminDb, T1, ADMIN)).email, undefined)
+  })
+
+  it('crearAccesoAdmin exige nombre, email y creador de cuentas', async () => {
+    await assert.rejects(
+      () => crearAccesoAdmin(adminDb, T1, { email: 'x@y.test', password: 'p' }, { crearCuenta: async () => ({ uid: 'z' }) }),
+      FichaInvalidaError,
+    )
+    await assert.rejects(
+      () => crearAccesoAdmin(adminDb, T1, { nombre: 'Sin correo', password: 'p' }, { crearCuenta: async () => ({ uid: 'z' }) }),
+      FichaInvalidaError,
+    )
+    await assert.rejects(
+      () => crearAccesoAdmin(adminDb, T1, { email: 'x@y.test', password: 'p', nombre: 'X' }),
+      FichaInvalidaError,
+    )
+  })
+
+  it('cambiarActivoMiembro desactiva y reactiva sin tocar el rol', async () => {
+    await cambiarActivoMiembro(adminDb, T1, ALUMNO, false, { actualizadoPor: ADMIN })
+    assert.equal((await getMiembro(adminDb, T1, ALUMNO)).activo, false)
+    await cambiarActivoMiembro(adminDb, T1, ALUMNO, true, { actualizadoPor: ADMIN })
+    const alumno = await getMiembro(adminDb, T1, ALUMNO)
+    assert.equal(alumno.activo, true)
+    assert.equal(alumno.rol, 'alumno_adulto')
+  })
+})
+
+/* --------------------------------------------------------------------- */
+/* [F7] Flujo integrado: asistencia del profesor → cierre → cobros        */
+/* --------------------------------------------------------------------- */
+
+describe('[F7] flujo integrado de cierre de clase', () => {
+  const cobroPareja = {
+    perfilCobroId: 'pareja',
+    modo: 'total',
+    tarifaHoraCents: 5000,
+    montoEstandarCents: 5000,
+    montoCents: 5000,
+    ajustado: false,
+    motivoAjuste: null,
+  }
+
+  it('el profesor avisa la asistencia, el admin cierra y quedan los cargos pendientes', async () => {
+    const { claseId } = await reservar({ alumnos: ['a1', 'a2'], cobro: cobroPareja })
+
+    await guardarAsistenciaProfesor(
+      profeDb,
+      T1,
+      claseId,
+      { a1: 'presente', a2: 'presente' },
+      { uid: PROFE, profesorId: 'p1' },
+    )
+
+    await cerrarClase(
+      adminDb,
+      T1,
+      claseId,
+      {
+        asistencias: [
+          { alumnoId: 'a1', estado: 'presente' },
+          { alumnoId: 'a2', estado: 'presente' },
+        ],
+        confirmadoPorProfesorId: 'p1',
+      },
+      { uid: ADMIN, ahora: DESPUES_DEL_FIN },
+    )
+
+    const clase = await getClase(adminDb, T1, claseId)
+    assert.equal(clase.estado, 'pendiente_cobro')
+    assert.equal(clase.confirmadoPorProfesorId, 'p1')
+    assert.deepEqual(clase.asistenciaProfesor.porAlumno, {
+      a1: 'presente',
+      a2: 'presente',
+    })
+
+    const cargos = await listarCargosPendientes(adminDb, T1, {
+      sedeId: 'traki',
+      desde: FECHA,
+      hasta: FECHA,
+    })
+    assert.deepEqual(
+      cargos.map((c) => c.id).sort(),
+      [`${claseId}_a1`, `${claseId}_a2`].sort(),
+    )
+    assert.ok(cargos.every((c) => c.estado === 'pendiente'))
+
+    const pagos = await listarPagosProfesorPendientes(adminDb, T1, {
+      sedeId: 'traki',
+      desde: FECHA,
+      hasta: FECHA,
+    })
+    assert.equal(pagos.length, 1)
+    assert.equal(pagos[0].estado, 'pendiente')
   })
 })
