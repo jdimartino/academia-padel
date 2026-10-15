@@ -197,6 +197,12 @@ export default function DetailSheet({
           <dt>Profesor</dt>
           <dd>{clase.profesorNombre}</dd>
         </div>
+        {clase.asistenciaProfesor ? (
+          <div className="sheet__fila">
+            <dt>Asistencia</dt>
+            <dd>Confirmada por el profesor</dd>
+          </div>
+        ) : null}
         {clase.categoriaGrupo ? (
           <div className="sheet__fila">
             <dt>Categoría de grupo</dt>

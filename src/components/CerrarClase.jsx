@@ -4,6 +4,7 @@ import { useAvisos } from '../context/AvisosContext'
 import { db } from '../firebase/config'
 import { cerrarClase, getCreditoAlumno } from '../firebase/db'
 import { PARAMETROS_DEFAULT, calcularCierre, previsualizarCreditoAlumno } from '../lib/cobros'
+import { estadoCierreAEstadoProfesor } from '../lib/profesores'
 import { aMinutos } from '../lib/agenda'
 import { formatearUSD, parsearUSD } from '../lib/dinero'
 import { esErrorDeNegocio } from '../lib/avisos'
@@ -40,13 +41,21 @@ function horasTexto(minutos) {
   return `${min} min`
 }
 
-/** Estado de asistencia inicial por alumno (todo presente salvo lo guardado). */
+/**
+ * Estado de asistencia inicial por alumno. Si la clase ya tiene la asistencia
+ * cargada por su profesor (`asistenciaProfesor`), se precarga mapeando su enum
+ * al del cierre; un valor desconocido se ignora y cae en el default. Todo lo
+ * demás presente salvo lo ya guardado en `asistencias`.
+ */
 function inicial(clase) {
   const guardadas = clase.asistencias ?? []
+  const delProfesor = clase.asistenciaProfesor?.porAlumno ?? null
   return Object.fromEntries(
     (clase.alumnos ?? []).map((id) => {
       const previa = guardadas.find((a) => a.alumnoId === id)
-      return [id, previa?.estado ?? 'presente']
+      if (previa) return [id, previa.estado]
+      const equivalencia = delProfesor ? estadoCierreAEstadoProfesor(delProfesor[id]) : null
+      return [id, equivalencia ?? 'presente']
     }),
   )
 }
@@ -152,6 +161,9 @@ export default function CerrarClase({ clase, parametros, tenantId, onCerrado }) 
         datos.montoCents = montoCents ?? 0
         datos.motivoAjuste = motivoAjuste
       }
+      // Deja el sello de quién confirmó la asistencia desde el móvil, si la
+      // clase la cargó su profesor.
+      if (clase.asistenciaProfesor) datos.confirmadoPorProfesorId = clase.profesorId
       await cerrarClase(db, tenantId, clase.id, datos, { uid: user?.uid ?? null })
       onCerrado?.()
     } catch (err) {
@@ -168,6 +180,12 @@ export default function CerrarClase({ clase, parametros, tenantId, onCerrado }) 
   return (
     <div className="cierre">
       <h3 className="sheet__subtitulo">Cerrar clase</h3>
+
+      {clase.asistenciaProfesor ? (
+        <p className="cierre__confirmado" role="status">
+          Confirmado por profesor {clase.profesorNombre ?? clase.profesorId}
+        </p>
+      ) : null}
 
       <ul className="asistencia-lista">
         {alumnos.map((alumno) => {

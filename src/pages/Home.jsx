@@ -2,26 +2,33 @@ import { useEffect, useState } from 'react'
 import { Navigate } from 'react-router-dom'
 import { useAuth } from '../context/AuthContext'
 import { db } from '../firebase/config'
-import { getMisMembresias } from '../firebase/db'
+import { getMisAccesosProfesor, getMisMembresias } from '../firebase/db'
 
 /*
- * Resuelve el tenant del usuario con getMisMembresias y redirige a
- * /{academia}/agenda. Si tiene varias membresías activas, entra a la primera.
+ * Resuelve a dónde va el usuario al iniciar sesión. El administrador (con
+ * `miembros`) entra a la agenda del primer tenant activo; el profesor (con
+ * `usuarios`, sin membresía) entra a la pantalla de asistencia de su academia.
+ * Cualquier otra cuenta cae en el aviso de "no pertenece a ninguna academia".
  */
 export default function Home() {
   const { user } = useAuth()
-  const [estado, setEstado] = useState({ cargando: true, tenantId: null, error: '' })
+  const [estado, setEstado] = useState({ cargando: true, destino: null, error: '' })
 
   useEffect(() => {
     let activo = true
     getMisMembresias(db, user.uid)
-      .then((membresias) => {
-        if (!activo) return
-        const activa = membresias.find((m) => m.activo !== false) ?? membresias[0]
-        setEstado({ cargando: false, tenantId: activa?.tenantId ?? null, error: '' })
+      .then(async (membresias) => {
+        const admin = membresias.find((m) => m.activo !== false && m.rol === 'administrador')
+        if (admin) return { destino: `/${admin.tenantId}/agenda`, error: '' }
+        const accesos = await getMisAccesosProfesor(db, user.uid)
+        if (accesos[0]) return { destino: `/${accesos[0].tenantId}/asistencia`, error: '' }
+        return { destino: null, error: '' }
+      })
+      .then((res) => {
+        if (activo) setEstado({ cargando: false, ...res })
       })
       .catch((err) => {
-        if (activo) setEstado({ cargando: false, tenantId: null, error: err.message })
+        if (activo) setEstado({ cargando: false, destino: null, error: err.message })
       })
     return () => {
       activo = false
@@ -36,8 +43,8 @@ export default function Home() {
     )
   }
 
-  if (estado.tenantId) {
-    return <Navigate to={`/${estado.tenantId}/agenda`} replace />
+  if (estado.destino) {
+    return <Navigate to={estado.destino} replace />
   }
 
   return (

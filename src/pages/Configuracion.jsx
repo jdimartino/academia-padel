@@ -2,6 +2,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { useParams, useSearchParams } from 'react-router-dom'
 import PageChrome from '../components/PageChrome'
 import ConfigCobros from '../components/ConfigCobros'
+import ConfigProfesores from '../components/ConfigProfesores'
 import MenuAcciones from '../components/MenuAcciones'
 import { ChevronDown, PencilIcon, PlusIcon } from '../components/Icons'
 import { useAuth } from '../context/AuthContext'
@@ -1109,9 +1110,13 @@ export default function Configuracion() {
   const [error, setError] = useState('')
   const [version, setVersion] = useState(0)
   const [listaAbierta, setListaAbierta] = useState(false)
-  // Sección visible: "sedes" (layout de siempre) o "cobros" (perfiles y
-  // parámetros). Queda en la URL (?area=) para que un reload la conserve.
-  const [area, setArea] = useState(() => (searchParams.get('area') === 'cobros' ? 'cobros' : 'sedes'))
+  // Sección visible: "sedes" (layout de siempre), "cobros" (perfiles y
+  // parámetros) o "profesores" (acceso de profesores). Queda en la URL (?area=)
+  // para que un reload la conserve.
+  const [area, setArea] = useState(() => {
+    const pedida = searchParams.get('area')
+    return pedida === 'cobros' || pedida === 'profesores' ? pedida : 'sedes'
+  })
   // "Hay cambios sin guardar": los reportan el detalle de sede (horario y
   // tarifas) y la sección de cobros (parámetros). Los usan los guardias al
   // cambiar de sede y al cambiar de sección.
@@ -1160,7 +1165,8 @@ export default function Configuracion() {
    */
   async function cambiarArea(nueva) {
     if (nueva === area) return
-    const dirty = area === 'cobros' ? sucioCobrosRef.current : sucioRef.current
+    const dirty =
+      area === 'cobros' ? sucioCobrosRef.current : area === 'sedes' ? sucioRef.current : false
     if (dirty) {
       const descartar = await confirmar({
         titulo: '¿Descartar cambios?',
@@ -1174,8 +1180,8 @@ export default function Configuracion() {
     }
     setArea(nueva)
     const siguiente = new URLSearchParams(searchParams)
-    if (nueva === 'cobros') siguiente.set('area', 'cobros')
-    else siguiente.delete('area')
+    if (nueva === 'sedes') siguiente.delete('area')
+    else siguiente.set('area', nueva)
     setSearchParams(siguiente, { replace: true })
   }
 
@@ -1277,6 +1283,7 @@ export default function Configuracion() {
           {[
             { id: 'sedes', etiqueta: 'Sedes y canchas' },
             { id: 'cobros', etiqueta: 'Cobros' },
+            { id: 'profesores', etiqueta: 'Profesores con acceso' },
           ].map((item) => (
             <button
               key={item.id}
@@ -1301,6 +1308,8 @@ export default function Configuracion() {
           <p className="aviso glass">Cargando configuración…</p>
         ) : area === 'cobros' ? (
           <ConfigCobros tenantId={academia} onSucio={reportarSucioCobros} />
+        ) : area === 'profesores' ? (
+          <ConfigProfesores tenantId={academia} />
         ) : (
           <>
             {sedeSel ? (

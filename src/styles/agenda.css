@@ -923,6 +923,16 @@
   color: var(--texto-muted, rgba(255, 255, 255, 0.65));
 }
 
+.cierre__confirmado {
+  margin: 0 0 12px;
+  padding: 10px 14px;
+  border-radius: var(--radio-md, 14px);
+  border: 1px solid rgba(120, 220, 120, 0.35);
+  background: rgba(120, 220, 120, 0.12);
+  font-size: 13px;
+  font-weight: 600;
+}
+
 .cierre__preview {
   display: flex;
   flex-direction: column;
@@ -1091,4 +1101,72 @@
 .plan-credito__lote-meta {
   font-size: 12px;
   color: var(--texto-muted, rgba(255, 255, 255, 0.65));
+}
+
+/* Asistencia del profesor (Fase 7): pantalla móvil */
+
+.asistencia-profesor {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+  padding-bottom: 24px;
+}
+
+.clase-card {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  padding: 14px;
+  border-radius: var(--radio-md, 14px);
+  border: 1px solid rgba(255, 255, 255, 0.14);
+  background: rgba(255, 255, 255, 0.06);
+}
+
+.clase-card__head {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.clase-card__titulo {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  margin: 0;
+  font-size: 16px;
+  font-weight: 700;
+}
+
+.clase-card__sede {
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--texto-muted, rgba(255, 255, 255, 0.65));
+}
+
+.clase-card__cuando {
+  margin: 0;
+  font-size: 13px;
+  color: var(--texto-muted, rgba(255, 255, 255, 0.65));
+}
+
+.clase-card__cerrado {
+  align-self: flex-start;
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--texto-muted, rgba(255, 255, 255, 0.65));
+}
+
+.clase-card__ok {
+  margin: 0;
+  font-size: 12px;
+  font-weight: 600;
+  color: rgba(120, 220, 120, 0.95);
+}
+
+@media (min-width: 640px) {
+  .asistencia-profesor {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(320px, 1fr));
+    align-items: start;
+  }
 }

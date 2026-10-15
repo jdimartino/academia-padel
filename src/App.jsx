@@ -1,10 +1,12 @@
 import { BrowserRouter, Route, Routes } from 'react-router-dom'
+import GuardRol from './components/GuardRol'
 import ProtectedRoute from './components/ProtectedRoute'
 import { AuthProvider } from './context/AuthContext'
 import { AvisosProvider } from './context/AvisosContext'
 import { TasasProvider } from './context/TasasContext'
 import Agenda from './pages/Agenda'
 import Alumnos from './pages/Alumnos'
+import AsistenciaProfesor from './pages/AsistenciaProfesor'
 import Cobros from './pages/Cobros'
 import Configuracion from './pages/Configuracion'
 import Home from './pages/Home'
@@ -56,6 +58,16 @@ export default function App() {
                 element={
                   <ProtectedRoute>
                     <Configuracion />
+                  </ProtectedRoute>
+                }
+              />
+              <Route
+                path="/:academia/asistencia"
+                element={
+                  <ProtectedRoute>
+                    <GuardRol rol="profesor">
+                      <AsistenciaProfesor />
+                    </GuardRol>
                   </ProtectedRoute>
                 }
               />
