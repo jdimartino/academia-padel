@@ -194,8 +194,8 @@
   }
 
   .reportes__lista {
-    width: 260px;
-    flex: 0 0 260px;
+    width: clamp(14rem, 11rem + 7vw, 18rem);
+    flex: 0 0 clamp(14rem, 11rem + 7vw, 18rem);
     position: sticky;
     top: 16px;
   }

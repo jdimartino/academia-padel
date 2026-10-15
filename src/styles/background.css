@@ -19,25 +19,25 @@
 }
 
 .bg-blob--lime {
-  width: 640px;
-  height: 640px;
-  top: -180px;
-  right: -160px;
+  width: min(50vw, 40rem);
+  height: min(50vw, 40rem);
+  top: -10rem;
+  right: -10rem;
   background: radial-gradient(circle, rgba(205, 235, 58, 0.34) 0%, rgba(205, 235, 58, 0) 68%);
 }
 
 .bg-blob--blue {
-  width: 760px;
-  height: 760px;
-  bottom: -260px;
-  left: -220px;
+  width: min(60vw, 48rem);
+  height: min(60vw, 48rem);
+  bottom: -16rem;
+  left: -14rem;
   background: radial-gradient(circle, rgba(60, 120, 255, 0.4) 0%, rgba(60, 120, 255, 0) 68%);
 }
 
 .bg-blob--teal {
-  width: 520px;
-  height: 520px;
+  width: min(42vw, 33rem);
+  height: min(42vw, 33rem);
   top: 42%;
-  left: -140px;
+  left: -9rem;
   background: radial-gradient(circle, rgba(30, 200, 160, 0.3) 0%, rgba(30, 200, 160, 0) 68%);
 }

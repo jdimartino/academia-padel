@@ -82,7 +82,7 @@
    * ~18% y la cancha única conserva el resto; en escritorio el costo es
    * despreciable frente a las canchas de minmax(160px, 1fr).
    */
-  grid-template-columns: 68px repeat(var(--ncanchas), minmax(160px, 1fr));
+  grid-template-columns: 4.25rem repeat(var(--ncanchas), minmax(10rem, 1fr));
   min-width: 100%;
 }
 
@@ -335,7 +335,7 @@
 }
 
 .sheet__titulo {
-  font-size: 22px;
+  font-size: var(--texto-lg);
   font-weight: 800;
 }
 
@@ -483,7 +483,7 @@
 }
 
 .estado {
-  max-width: 420px;
+  max-width: 26.25rem;
   padding: 20px 24px;
   border-radius: var(--radio-panel);
   text-align: center;
@@ -672,8 +672,11 @@
   .shell {
     display: flex;
     align-items: flex-start;
-    gap: 16px;
-    padding: 16px;
+    gap: var(--paso-2);
+    padding: var(--gutter);
+    width: 100%;
+    max-width: var(--ancho-contenido);
+    margin-inline: auto;
   }
 
   .sidebar {
@@ -868,7 +871,7 @@
   }
 
   .main__fecha {
-    font-size: 32px;
+    font-size: var(--texto-xl);
     font-weight: 800;
     line-height: 1.15;
   }
@@ -890,7 +893,7 @@
     right: 12px;
     top: 12px;
     bottom: 12px;
-    width: 360px;
+    width: min(90vw, 24rem);
     max-height: none;
   }
 }
@@ -1212,7 +1215,7 @@
 @media (min-width: 640px) {
   .asistencia-profesor {
     display: grid;
-    grid-template-columns: repeat(auto-fill, minmax(320px, 1fr));
+    grid-template-columns: repeat(auto-fill, minmax(20rem, 1fr));
     align-items: start;
   }
 }

@@ -304,7 +304,7 @@
     bottom: 12px;
     left: auto;
     right: 12px;
-    width: min(440px, calc(100vw - 24px));
+    width: min(90vw, 27.5rem);
     max-height: none;
   }
 }
@@ -497,6 +497,35 @@
 
 .tabla-comp__acciones {
   text-align: right;
+  white-space: nowrap;
+}
+
+/* Contenedor de tabla: el scroll horizontal, si hiciera falta, queda DENTRO de
+ * este wrapper y nunca en la página. */
+.tabla-wrap {
+  width: 100%;
+  max-width: 100%;
+  overflow-x: auto;
+  -webkit-overflow-scrolling: touch;
+}
+
+.tabla-comp td,
+.tabla-comp th {
+  overflow-wrap: anywhere;
+}
+
+/* Números y montos: alineados a la derecha y con cifras tabulares. */
+.tabla-comp__monto-col,
+.celda-monto {
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+}
+
+/* Texto largo: una sola línea con elipsis; el texto completo va en `title`. */
+.tabla-comp__texto {
+  max-width: 22rem;
+  overflow: hidden;
+  text-overflow: ellipsis;
   white-space: nowrap;
 }
 
