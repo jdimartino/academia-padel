@@ -9,6 +9,8 @@ import {
 } from '../firebase/db'
 import { useAuth } from '../context/AuthContext'
 import { useAvisos } from '../context/AvisosContext'
+import useAccion from '../hooks/useAccion'
+import BotonAccion from './BotonAccion'
 
 /** Etiquetas de los roles del modelo. */
 const ROL_LABEL = {
@@ -27,14 +29,14 @@ const ROL_LABEL = {
  */
 export default function ConfigAdministradores({ tenantId }) {
   const { user } = useAuth()
-  const { mostrarExito, mostrarErrorTecnico } = useAvisos()
+  const { avisarError, mostrarErrorTecnico } = useAvisos()
   const [miembros, setMiembros] = useState(null)
   const [error, setError] = useState('')
   const [nombre, setNombre] = useState('')
   const [email, setEmail] = useState('')
   const [password, setPassword] = useState('')
-  const [ocupado, setOcupado] = useState(false)
   const [version, setVersion] = useState(0)
+  const accionCrear = useAccion()
 
   useEffect(() => {
     let activo = true
@@ -54,7 +56,7 @@ export default function ConfigAdministradores({ tenantId }) {
     }
   }, [tenantId, version])
 
-  async function crear(evento) {
+  function crear(evento) {
     evento.preventDefault()
     if (!nombre.trim() || !email.trim()) {
       setError('Escribe el nombre y el email del administrador')
@@ -64,41 +66,41 @@ export default function ConfigAdministradores({ tenantId }) {
       setError('La contraseña temporal necesita al menos 6 caracteres')
       return
     }
-    setOcupado(true)
     setError('')
-    try {
-      await crearAccesoAdmin(
-        db,
-        tenantId,
-        { email, password, nombre },
-        { crearCuenta: crearCuentaAuth, uidActual: user?.uid ?? null },
-      )
-      mostrarExito('Administrador creado. Comparte la contraseña temporal.')
-      setNombre('')
-      setEmail('')
-      setPassword('')
-      setVersion((v) => v + 1)
-    } catch (err) {
-      if (err?.message) setError(err.message)
-      mostrarErrorTecnico('crear-acceso-admin', err)
-    } finally {
-      setOcupado(false)
-    }
+    accionCrear.ejecutar(
+      () =>
+        crearAccesoAdmin(
+          db,
+          tenantId,
+          { email, password, nombre },
+          { crearCuenta: crearCuentaAuth, uidActual: user?.uid ?? null },
+        ),
+      {
+        accion: 'crear-acceso-admin',
+        exito: 'Administrador creado. Comparte la contraseña temporal.',
+        alExito: () => {
+          setNombre('')
+          setEmail('')
+          setPassword('')
+          setVersion((v) => v + 1)
+        },
+        alError: (err) => {
+          if (err?.message) {
+            setError(err.message)
+            avisarError(err.message)
+          } else {
+            mostrarErrorTecnico('crear-acceso-admin', err)
+          }
+        },
+      },
+    )
   }
 
   async function alternar(miembro) {
-    setOcupado(true)
-    try {
-      await cambiarActivoMiembro(db, tenantId, miembro.id, miembro.activo === false, {
-        actualizadoPor: user?.uid ?? null,
-      })
-      mostrarExito(miembro.activo === false ? 'Acceso reactivado' : 'Acceso desactivado')
-      setVersion((v) => v + 1)
-    } catch (err) {
-      mostrarErrorTecnico('cambiar-acceso-admin', err)
-    } finally {
-      setOcupado(false)
-    }
+    await cambiarActivoMiembro(db, tenantId, miembro.id, miembro.activo === false, {
+      actualizadoPor: user?.uid ?? null,
+    })
+    setVersion((v) => v + 1)
   }
 
   const lista = miembros ?? []
@@ -153,9 +155,9 @@ export default function ConfigAdministradores({ tenantId }) {
             />
             <span className="parametros__hint">No se guarda: compártela y que la cambie.</span>
           </label>
-          <button type="submit" className="btn btn--primary" disabled={ocupado}>
-            {ocupado ? 'Creando…' : 'Crear administrador'}
-          </button>
+          <BotonAccion type="submit" control={accionCrear} textoOcupado="Creando…" className="btn btn--primary">
+            Crear administrador
+          </BotonAccion>
         </div>
       </form>
 
@@ -186,14 +188,15 @@ export default function ConfigAdministradores({ tenantId }) {
                   {esUnoMismo ? (
                     <span className="pill-estado">Sesión actual</span>
                   ) : (
-                    <button
-                      type="button"
-                      className="btn btn--secondary"
-                      disabled={ocupado}
+                    <BotonAccion
                       onClick={() => alternar(miembro)}
+                      accion="cambiar-acceso-admin"
+                      exito={miembro.activo === false ? 'Acceso reactivado' : 'Acceso desactivado'}
+                      textoOcupado="Guardando…"
+                      className="btn btn--secondary"
                     >
                       {activo ? 'Desactivar' : 'Reactivar'}
-                    </button>
+                    </BotonAccion>
                   )}
                 </li>
               )

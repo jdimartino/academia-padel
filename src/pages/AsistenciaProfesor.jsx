@@ -1,10 +1,11 @@
 import { useEffect, useState } from 'react'
 import { useParams } from 'react-router-dom'
 import Background from '../components/Background'
+import BotonAccion from '../components/BotonAccion'
 import EstadoMensaje from '../components/EstadoMensaje'
 import { LogoMark } from '../components/Icons'
 import { useAuth } from '../context/AuthContext'
-import { useAvisos } from '../context/AvisosContext'
+import { useCargando } from '../context/CargandoContext'
 import { db } from '../firebase/config'
 import {
   getClasesDeProfesor,
@@ -40,17 +41,17 @@ function marcasIniciales(clase) {
 export default function AsistenciaProfesor() {
   const { academia } = useParams()
   const { user, logout } = useAuth()
-  const { mostrarExito, mostrarErrorTecnico } = useAvisos()
+  const { iniciar: iniciarCarga, terminar: terminarCarga } = useCargando()
   const [acceso, setAcceso] = useState(null)
   const [clases, setClases] = useState(null)
   const [error, setError] = useState('')
   const [marcas, setMarcas] = useState({})
-  const [guardando, setGuardando] = useState(null)
   const [guardadas, setGuardadas] = useState({})
   const [recarga, setRecarga] = useState(0)
 
   useEffect(() => {
     let activo = true
+    iniciarCarga()
     async function cargar() {
       const propio = await getUsuarioProfesor(db, academia, user.uid)
       if (!propio?.profesorId) throw new Error('El acceso no tiene profesor asociado')
@@ -61,15 +62,17 @@ export default function AsistenciaProfesor() {
       setMarcas(Object.fromEntries(lista.map((c) => [c.id, marcasIniciales(c)])))
       setError('')
     }
-    cargar().catch(() => {
-      if (!activo) return
-      setClases([])
-      setError('No se pudieron cargar tus clases. Intenta de nuevo.')
-    })
+    cargar()
+      .catch(() => {
+        if (!activo) return
+        setClases([])
+        setError('No se pudieron cargar tus clases. Intenta de nuevo.')
+      })
+      .finally(terminarCarga)
     return () => {
       activo = false
     }
-  }, [academia, user.uid, recarga])
+  }, [academia, user.uid, recarga, iniciarCarga, terminarCarga])
 
   function marcar(claseId, alumnoId, valor) {
     setMarcas((prev) => ({ ...prev, [claseId]: { ...prev[claseId], [alumnoId]: valor } }))
@@ -77,20 +80,12 @@ export default function AsistenciaProfesor() {
   }
 
   async function guardar(clase) {
-    setGuardando(clase.id)
-    try {
-      await guardarAsistenciaProfesor(db, academia, clase.id, marcas[clase.id] ?? {}, {
-        uid: user.uid,
-        profesorId: acceso?.profesorId,
-      })
-      setGuardadas((prev) => ({ ...prev, [clase.id]: true }))
-      mostrarExito('Asistencia guardada')
-      setRecarga((v) => v + 1)
-    } catch (err) {
-      mostrarErrorTecnico('guardar-asistencia', err)
-    } finally {
-      setGuardando(null)
-    }
+    await guardarAsistenciaProfesor(db, academia, clase.id, marcas[clase.id] ?? {}, {
+      uid: user.uid,
+      profesorId: acceso?.profesorId,
+    })
+    setGuardadas((prev) => ({ ...prev, [clase.id]: true }))
+    setRecarga((v) => v + 1)
   }
 
   if (clases === null && !error) return <EstadoMensaje titulo="Cargando…" />
@@ -105,9 +100,15 @@ export default function AsistenciaProfesor() {
           <LogoMark size={28} />
           <span className="m-marca__texto">Mi asistencia</span>
         </div>
-        <button type="button" className="icon-btn" onClick={logout}>
+        <BotonAccion
+          onClick={() => logout()}
+          accion="cerrar-sesion"
+          sinExito
+          textoOcupado="Saliendo…"
+          className="icon-btn"
+        >
           Salir
-        </button>
+        </BotonAccion>
       </header>
 
       <main className="asistencia-profesor">
@@ -168,14 +169,15 @@ export default function AsistenciaProfesor() {
               </ul>
 
               {abierta ? (
-                <button
-                  type="button"
-                  className="btn btn--primary"
-                  disabled={guardando === clase.id}
+                <BotonAccion
                   onClick={() => guardar(clase)}
+                  accion="guardar-asistencia"
+                  exito="Asistencia guardada"
+                  textoOcupado="Guardando…"
+                  className="btn btn--primary"
                 >
-                  {guardando === clase.id ? 'Guardando…' : 'Guardar asistencia'}
-                </button>
+                  Guardar asistencia
+                </BotonAccion>
               ) : (
                 <p className="aviso">
                   {clase.asistenciaProfesor ? 'Asistencia confirmada' : 'Clase cerrada por la academia'}

@@ -6,8 +6,10 @@ import ConfigCobros from '../components/ConfigCobros'
 import ConfigProfesores from '../components/ConfigProfesores'
 import MenuAcciones from '../components/MenuAcciones'
 import { ChevronDown, PencilIcon, PlusIcon } from '../components/Icons'
+import BotonAccion from '../components/BotonAccion'
 import { useAuth } from '../context/AuthContext'
 import { useAvisos } from '../context/AvisosContext'
+import useAccion from '../hooks/useAccion'
 import { db } from '../firebase/config'
 import {
   cambiarActivaCancha,
@@ -20,7 +22,6 @@ import {
   listarSedes,
   nombreDeCancha,
   nombreDeSede,
-  normalizarNombreCancha,
   reactivarSede,
   renombrarCancha,
   renombrarSede,
@@ -293,7 +294,7 @@ function textoTarifas(tarifas, perfiles) {
  */
 function DetalleSede({ tenantId, sede, canchas, perfiles, onChanged, onSucio, onAlternarSede }) {
   const { user } = useAuth()
-  const { mostrarExito, mostrarErrorTecnico, confirmar } = useAvisos()
+  const { avisarError, mostrarErrorTecnico, confirmar } = useAvisos()
   const esDesktop = useMediaQuery('(min-width: 48rem)')
   const uid = user?.uid ?? null
 
@@ -327,12 +328,17 @@ function DetalleSede({ tenantId, sede, canchas, perfiles, onChanged, onSucio, on
     textoTarifas(sede.tarifas, perfilesActivos),
   )
   const [errorTarifas, setErrorTarifas] = useState('')
-  const [guardandoTarifas, setGuardandoTarifas] = useState(false)
 
   const [tab, setTab] = useState('horario')
   const [diaExpandido, setDiaExpandido] = useState(null)
   const [errorHorario, setErrorHorario] = useState('')
-  const [guardandoHorario, setGuardandoHorario] = useState(false)
+
+  const accionHorario = useAccion()
+  const accionTarifas = useAccion()
+  const accionNombre = useAccion()
+  const accionCancha = useAccion()
+  const accionRenombrarCancha = useAccion()
+  const accionAlternarCancha = useAccion()
 
   const [editandoNombre, setEditandoNombre] = useState(false)
   const [nombreDraft, setNombreDraft] = useState(nombre)
@@ -342,7 +348,6 @@ function DetalleSede({ tenantId, sede, canchas, perfiles, onChanged, onSucio, on
   const [errorNuevaCancha, setErrorNuevaCancha] = useState('')
   const [renombrando, setRenombrando] = useState(null)
   const [errorRenombre, setErrorRenombre] = useState('')
-  const [enviando, setEnviando] = useState(false)
 
   const borrador = useMemo(() => horarioDelEditor(editor), [editor])
   const sucioHorario = useMemo(() => hayCambios(guardado, borrador), [guardado, borrador])
@@ -395,34 +400,22 @@ function DetalleSede({ tenantId, sede, canchas, perfiles, onChanged, onSucio, on
     setDiaExpandido(null)
   }
 
-  async function guardarHorario() {
+  function errorValidacion(mensaje) {
+    const err = new Error(mensaje)
+    err.validacion = true
+    return err
+  }
+
+  async function operacionHorario() {
     const horario = horarioDelEditor(editor)
     try {
       validarHorario(horario)
     } catch {
-      setErrorHorario('Corrige el horario marcado')
-      return
+      throw errorValidacion('Corrige el horario marcado')
     }
-
-    setGuardandoHorario(true)
     setErrorHorario('')
-    try {
-      const resultado = await setSedeHorario(db, tenantId, sede.id, horario, { uid })
-      const normalizado = horarioDeSede({ horario: resultado.horario })
-      setGuardado(normalizado)
-      setEditor(editorDeSede({ horario: normalizado }))
-      mostrarExito(`Horario de ${nombre} guardado`)
-      onChanged()
-    } catch (err) {
-      if (esErrorDeNegocio(err)) {
-        setErrorHorario(err.message)
-      } else {
-        setErrorHorario(MENSAJE_TECNICO_INLINE)
-        mostrarErrorTecnico('guardar-horario', err)
-      }
-    } finally {
-      setGuardandoHorario(false)
-    }
+    const resultado = await setSedeHorario(db, tenantId, sede.id, horario, { uid })
+    return horarioDeSede({ horario: resultado.horario })
   }
 
   function descartarTarifas() {
@@ -430,7 +423,7 @@ function DetalleSede({ tenantId, sede, canchas, perfiles, onChanged, onSucio, on
     setErrorTarifas('')
   }
 
-  async function guardarTarifas() {
+  async function operacionTarifas() {
     // Parse de los textos: vacío = sin tarifa; un texto inválido corta el guardado.
     const mapa = {}
     for (const perfil of perfilesActivos) {
@@ -438,42 +431,25 @@ function DetalleSede({ tenantId, sede, canchas, perfiles, onChanged, onSucio, on
       if (!texto.trim()) continue
       const cents = parsearUSD(texto)
       if (cents === null) {
-        setErrorTarifas(`El precio de ${perfil.nombre} no es un monto válido`)
-        return
+        throw errorValidacion(`El precio de ${perfil.nombre} no es un monto válido`)
       }
       mapa[perfil.id] = cents
     }
-    setGuardandoTarifas(true)
     setErrorTarifas('')
-    try {
-      // Se conservan las tarifas de perfiles que no se muestran (inactivos).
-      const conservadas = Object.fromEntries(
-        Object.entries(sede.tarifas ?? {}).filter(
-          ([id]) => !perfilesActivos.some((perfil) => perfil.id === id),
-        ),
-      )
-      const resultado = await setTarifasSede(
-        db,
-        tenantId,
-        sede.id,
-        { ...conservadas, ...mapa },
-        { uid },
-      )
-      const texto = textoTarifas(resultado.tarifas, perfilesActivos)
-      setTarifasGuardadas(texto)
-      setTarifasDraft(texto)
-      mostrarExito(`Tarifas de ${nombre} guardadas`)
-      onChanged()
-    } catch (err) {
-      if (esErrorDeNegocio(err)) {
-        setErrorTarifas(err.message)
-      } else {
-        setErrorTarifas(MENSAJE_TECNICO_INLINE)
-        mostrarErrorTecnico('guardar-tarifas', err)
-      }
-    } finally {
-      setGuardandoTarifas(false)
-    }
+    // Se conservan las tarifas de perfiles que no se muestran (inactivos).
+    const conservadas = Object.fromEntries(
+      Object.entries(sede.tarifas ?? {}).filter(
+        ([id]) => !perfilesActivos.some((perfil) => perfil.id === id),
+      ),
+    )
+    const resultado = await setTarifasSede(
+      db,
+      tenantId,
+      sede.id,
+      { ...conservadas, ...mapa },
+      { uid },
+    )
+    return textoTarifas(resultado.tarifas, perfilesActivos)
   }
 
   async function cambiarTab(nuevo) {
@@ -519,75 +495,70 @@ function DetalleSede({ tenantId, sede, canchas, perfiles, onChanged, onSucio, on
     setEditandoNombre(true)
   }
 
-  async function guardarNombre(event) {
-    event.preventDefault()
-    setEnviando(true)
-    try {
-      const guardado = await renombrarSede(db, tenantId, sede.id, nombreDraft, { uid })
-      mostrarExito(`Nombre guardado: ${guardado.nombre}`)
-      setEditandoNombre(false)
-      setErrorNombre('')
-      onChanged()
-    } catch (err) {
-      if (esErrorDeNegocio(err)) setErrorNombre(err.message)
-      else mostrarErrorTecnico('renombrar-sede', err)
-    } finally {
-      setEnviando(false)
+  function manejarError(err, setError, accion) {
+    if (esErrorDeNegocio(err)) {
+      setError(err.message)
+      avisarError(err.message)
+    } else {
+      mostrarErrorTecnico(accion, err)
     }
   }
 
-  async function agregarCancha(event) {
+  function guardarNombre(event) {
     event.preventDefault()
-    setEnviando(true)
-    try {
-      await crearCancha(db, tenantId, sede.id, { nombre: nuevoNombreCancha }, { uid })
-      mostrarExito(`${normalizarNombreCancha(nuevoNombreCancha)} agregada`)
-      setNuevoNombreCancha('')
-      setErrorNuevaCancha('')
-      onChanged()
-    } catch (err) {
-      if (esErrorDeNegocio(err)) setErrorNuevaCancha(err.message)
-      else mostrarErrorTecnico('crear-cancha', err)
-    } finally {
-      setEnviando(false)
-    }
+    accionNombre.ejecutar(() => renombrarSede(db, tenantId, sede.id, nombreDraft, { uid }), {
+      accion: 'renombrar-sede',
+      alExito: () => {
+        setEditandoNombre(false)
+        setErrorNombre('')
+        onChanged()
+      },
+      alError: (err) => manejarError(err, setErrorNombre, 'renombrar-sede'),
+    })
   }
 
-  async function guardarNombreCancha(event) {
+  function agregarCancha(event) {
+    event.preventDefault()
+    accionCancha.ejecutar(() => crearCancha(db, tenantId, sede.id, { nombre: nuevoNombreCancha }, { uid }), {
+      accion: 'crear-cancha',
+      alExito: () => {
+        setNuevoNombreCancha('')
+        setErrorNuevaCancha('')
+        onChanged()
+      },
+      alError: (err) => manejarError(err, setErrorNuevaCancha, 'crear-cancha'),
+    })
+  }
+
+  function guardarNombreCancha(event) {
     event.preventDefault()
     if (!renombrando) return
     const cancha = canchas.find((c) => c.id === renombrando.id)
     if (!cancha) return
-    setEnviando(true)
-    try {
-      const guardado = await renombrarCancha(db, tenantId, sede.id, cancha.id, renombrando.valor, {
-        uid,
-      })
-      mostrarExito(`Nombre guardado: ${guardado.nombre}`)
-      setRenombrando(null)
-      setErrorRenombre('')
-      onChanged()
-    } catch (err) {
-      if (esErrorDeNegocio(err)) setErrorRenombre(err.message)
-      else mostrarErrorTecnico('renombrar-cancha', err)
-    } finally {
-      setEnviando(false)
-    }
+    accionRenombrarCancha.ejecutar(
+      () => renombrarCancha(db, tenantId, sede.id, cancha.id, renombrando.valor, { uid }),
+      {
+        accion: 'renombrar-cancha',
+        alExito: () => {
+          setRenombrando(null)
+          setErrorRenombre('')
+          onChanged()
+        },
+        alError: (err) => manejarError(err, setErrorRenombre, 'renombrar-cancha'),
+      },
+    )
   }
 
-  async function alternarCancha(cancha) {
-    const nombreCancha = nombreDeCancha(cancha, cancha.id)
+  function alternarCancha(cancha) {
     const activar = cancha.activa === false
-    setEnviando(true)
-    try {
-      await cambiarActivaCancha(db, tenantId, sede.id, cancha.id, activar, { uid })
-      mostrarExito(`${nombreCancha} ${activar ? 'activada' : 'desactivada'}`)
-      onChanged()
-    } catch (err) {
-      mostrarErrorTecnico(activar ? 'activar-cancha' : 'desactivar-cancha', err)
-    } finally {
-      setEnviando(false)
-    }
+    return accionAlternarCancha.ejecutar(
+      () => cambiarActivaCancha(db, tenantId, sede.id, cancha.id, activar, { uid }),
+      {
+        accion: activar ? 'activar-cancha' : 'desactivar-cancha',
+        alExito: onChanged,
+        alError: (err) => mostrarErrorTecnico(activar ? 'activar-cancha' : 'desactivar-cancha', err),
+      },
+    )
   }
 
   return (
@@ -597,7 +568,7 @@ function DetalleSede({ tenantId, sede, canchas, perfiles, onChanged, onSucio, on
           <FormNombreSede
             valor={nombreDraft}
             error={errorNombre}
-            disabled={enviando}
+            disabled={accionNombre.ocupado}
             onChange={(valor) => {
               setNombreDraft(valor)
               setErrorNombre('')
@@ -821,19 +792,35 @@ function DetalleSede({ tenantId, sede, canchas, perfiles, onChanged, onSucio, on
                 <button
                   type="button"
                   className="btn btn--secondary"
-                  disabled={guardandoHorario}
+                  disabled={accionHorario.ocupado}
                   onClick={descartarHorario}
                 >
                   Descartar
                 </button>
-                <button
-                  type="button"
+                <BotonAccion
+                  onClick={operacionHorario}
+                  accion="guardar-horario"
+                  textoOcupado="Guardando…"
                   className="btn-cta"
-                  disabled={guardandoHorario}
-                  onClick={guardarHorario}
+                  alExito={(normalizado) => {
+                    setGuardado(normalizado)
+                    setEditor(editorDeSede({ horario: normalizado }))
+                    onChanged()
+                  }}
+                  alError={(err) => {
+                    if (err?.validacion) {
+                      setErrorHorario(err.message)
+                    } else if (esErrorDeNegocio(err)) {
+                      setErrorHorario(err.message)
+                      avisarError(err.message)
+                    } else {
+                      setErrorHorario(MENSAJE_TECNICO_INLINE)
+                      mostrarErrorTecnico('guardar-horario', err)
+                    }
+                  }}
                 >
                   Guardar
-                </button>
+                </BotonAccion>
               </div>
             </div>
           ) : null}
@@ -864,7 +851,7 @@ function DetalleSede({ tenantId, sede, canchas, perfiles, onChanged, onSucio, on
                           aria-label={`Nombre de la cancha ${nombreCancha}`}
                           value={renombrando.valor}
                           autoFocus
-                          disabled={enviando}
+                          disabled={accionRenombrarCancha.ocupado}
                           onChange={(event) => {
                             setRenombrando({ id: cancha.id, valor: event.target.value })
                             setErrorRenombre('')
@@ -923,13 +910,13 @@ function DetalleSede({ tenantId, sede, canchas, perfiles, onChanged, onSucio, on
               aria-label="Nombre de la cancha nueva"
               placeholder="Nombre de la cancha nueva"
               value={nuevoNombreCancha}
-              disabled={enviando}
+              disabled={accionCancha.ocupado}
               onChange={(event) => {
                 setNuevoNombreCancha(event.target.value)
                 setErrorNuevaCancha('')
               }}
             />
-            <button type="submit" className="btn btn--secondary" disabled={enviando}>
+            <button type="submit" className="btn btn--secondary" disabled={accionCancha.ocupado}>
               + Agregar
             </button>
             {errorNuevaCancha ? (
@@ -972,7 +959,7 @@ function DetalleSede({ tenantId, sede, canchas, perfiles, onChanged, onSucio, on
                       inputMode="decimal"
                       placeholder="—"
                       value={tarifasDraft[perfil.id] ?? ''}
-                      disabled={guardandoTarifas}
+                      disabled={accionTarifas.ocupado}
                       onChange={(event) => {
                         setErrorTarifas('')
                         setTarifasDraft((prev) => ({ ...prev, [perfil.id]: event.target.value }))
@@ -998,19 +985,35 @@ function DetalleSede({ tenantId, sede, canchas, perfiles, onChanged, onSucio, on
                 <button
                   type="button"
                   className="btn btn--secondary"
-                  disabled={guardandoTarifas}
+                  disabled={accionTarifas.ocupado}
                   onClick={descartarTarifas}
                 >
                   Descartar
                 </button>
-                <button
-                  type="button"
+                <BotonAccion
+                  onClick={operacionTarifas}
+                  accion="guardar-tarifas"
+                  textoOcupado="Guardando…"
                   className="btn-cta"
-                  disabled={guardandoTarifas}
-                  onClick={guardarTarifas}
+                  alExito={(texto) => {
+                    setTarifasGuardadas(texto)
+                    setTarifasDraft(texto)
+                    onChanged()
+                  }}
+                  alError={(err) => {
+                    if (err?.validacion) {
+                      setErrorTarifas(err.message)
+                    } else if (esErrorDeNegocio(err)) {
+                      setErrorTarifas(err.message)
+                      avisarError(err.message)
+                    } else {
+                      setErrorTarifas(MENSAJE_TECNICO_INLINE)
+                      mostrarErrorTecnico('guardar-tarifas', err)
+                    }
+                  }}
                 >
                   Guardar
-                </button>
+                </BotonAccion>
               </div>
             </div>
           ) : errorTarifas ? (
@@ -1034,7 +1037,7 @@ function DetalleSede({ tenantId, sede, canchas, perfiles, onChanged, onSucio, on
               <FormNombreSede
                 valor={nombreDraft}
                 error={errorNombre}
-                disabled={enviando}
+                disabled={accionNombre.ocupado}
                 onChange={(valor) => {
                   setNombreDraft(valor)
                   setErrorNombre('')
@@ -1051,7 +1054,7 @@ function DetalleSede({ tenantId, sede, canchas, perfiles, onChanged, onSucio, on
                 <button
                   type="button"
                   className="btn btn--secondary"
-                  disabled={enviando}
+                  disabled={accionNombre.ocupado}
                   onClick={abrirRenombre}
                 >
                   Renombrar
@@ -1071,7 +1074,6 @@ function DetalleSede({ tenantId, sede, canchas, perfiles, onChanged, onSucio, on
               <button
                 type="button"
                 className="btn btn--secondary"
-                disabled={enviando}
                 onClick={onAlternarSede}
               >
                 {activa ? 'Desactivar sede' : 'Reactivar sede'}
@@ -1103,7 +1105,7 @@ function DetalleSede({ tenantId, sede, canchas, perfiles, onChanged, onSucio, on
 export default function Configuracion() {
   const { academia } = useParams()
   const { user } = useAuth()
-  const { mostrarExito, mostrarErrorTecnico, confirmar } = useAvisos()
+  const { mostrarErrorTecnico, confirmar } = useAvisos()
   const [searchParams, setSearchParams] = useSearchParams()
   // `null` = todavía no cargó.
   const [sedes, setSedes] = useState(null)
@@ -1235,7 +1237,6 @@ export default function Configuracion() {
   async function crearSedeNueva(nombre) {
     try {
       await crearSede(db, academia, { nombre }, { uid })
-      mostrarExito(`Sede agregada: ${normalizarNombreCancha(nombre)}`)
       recargar()
       return ''
     } catch (err) {
@@ -1262,7 +1263,6 @@ export default function Configuracion() {
     try {
       if (reactivar) await reactivarSede(db, academia, sedeSel.id, { uid })
       else await desactivarSede(db, academia, sedeSel.id, { uid })
-      mostrarExito(`${nombre} ${reactivar ? 'activada' : 'desactivada'}`)
       recargar()
     } catch (err) {
       mostrarErrorTecnico(reactivar ? 'activar-sede' : 'desactivar-sede', err)

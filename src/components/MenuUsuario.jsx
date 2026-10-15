@@ -1,5 +1,6 @@
 import { useEffect, useState } from 'react'
 import { useParams } from 'react-router-dom'
+import BotonAccion from './BotonAccion'
 import { useAuth } from '../context/AuthContext'
 import { db } from '../firebase/config'
 import { getMiMembresia } from '../firebase/db'
@@ -22,7 +23,6 @@ function etiquetaRol(rol) {
 export default function MenuUsuario({ rol = undefined }) {
   const { academia } = useParams()
   const { user, logout } = useAuth()
-  const [saliendo, setSaliendo] = useState(false)
   const [rolLeido, setRolLeido] = useState(undefined)
 
   useEffect(() => {
@@ -40,15 +40,6 @@ export default function MenuUsuario({ rol = undefined }) {
     }
   }, [rol, academia, user?.uid])
 
-  async function cerrarSesion() {
-    setSaliendo(true)
-    try {
-      await logout()
-    } finally {
-      setSaliendo(false)
-    }
-  }
-
   const rolMostrado = rol !== undefined ? rol : rolLeido
 
   return (
@@ -61,14 +52,15 @@ export default function MenuUsuario({ rol = undefined }) {
           {user?.email ?? 'Sesión'}
         </span>
       </div>
-      <button
-        type="button"
+      <BotonAccion
+        onClick={() => logout()}
+        accion="cerrar-sesion"
+        sinExito
+        textoOcupado="Cerrando…"
         className="menu-usuario__salir"
-        onClick={cerrarSesion}
-        disabled={saliendo}
       >
-        {saliendo ? 'Cerrando…' : 'Cerrar sesión'}
-      </button>
+        Cerrar sesión
+      </BotonAccion>
     </div>
   )
 }

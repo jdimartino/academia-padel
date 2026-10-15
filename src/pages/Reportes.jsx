@@ -3,7 +3,9 @@ import { useParams } from 'react-router-dom'
 import PageChrome from '../components/PageChrome'
 import ReportView from '../components/ReportView'
 import TasasPanel from '../components/TasasPanel'
+import BotonAccion from '../components/BotonAccion'
 import { useTasas } from '../context/TasasContext'
+import useAccion from '../hooks/useAccion'
 import { db } from '../firebase/config'
 import {
   getProfesores,
@@ -64,7 +66,7 @@ export default function Reportes() {
   })
   const [resultado, setResultado] = useState(null)
   const [error, setError] = useState('')
-  const [cargando, setCargando] = useState(false)
+  const accionAplicar = useAccion()
 
   const informe = informePorId(informeId) ?? INFORMES[0]
 
@@ -146,17 +148,10 @@ export default function Reportes() {
     }
   }, [academia, informe, desde, hasta, sedeId, profesorId, alumnoId, estado, dias, refs])
 
-  // `aplicar` es el disparador desde la UI (barras de filtros): enciende/apaga el
-  // estado de carga. El efecto solo llama a `cargar` para no encender estado de
-  // forma síncrona dentro del efecto.
-  const aplicar = useCallback(async () => {
-    setCargando(true)
-    try {
-      await cargar()
-    } finally {
-      setCargando(false)
-    }
-  }, [cargar])
+  // `aplicar` es el disparador desde la UI (barras de filtros). El Botón que lo
+  // usa enciende el estado de carga; el efecto solo llama a `cargar` para no
+  // encender estado de forma síncrona dentro del efecto.
+  const aplicar = useCallback(() => cargar(), [cargar])
 
   useEffect(() => {
     // Carga inicial: los setState ocurren después del await (no en el cuerpo del
@@ -304,9 +299,15 @@ export default function Reportes() {
                 />
               </label>
             ) : null}
-            <button type="button" className="btn-cta" onClick={aplicar} disabled={cargando}>
-              {cargando ? 'Cargando…' : 'Aplicar'}
-            </button>
+            <BotonAccion
+              control={accionAplicar}
+              onClick={aplicar}
+              inmediato
+              textoOcupado="Cargando…"
+              className="btn-cta"
+            >
+              Aplicar
+            </BotonAccion>
           </div>
 
           {informe.unAlumno && !alumnoId ? (

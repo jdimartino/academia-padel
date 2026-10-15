@@ -19,6 +19,8 @@ import { FRECUENCIAS_PLAN, estadoLote, minutosDisponibles, precioMensualidad } f
 import { formatearUSD, parsearUSD } from '../lib/dinero'
 import { formatearFechaCorta, hoyISO } from '../lib/fechas'
 import { esErrorDeNegocio } from '../lib/avisos'
+import useAccion from '../hooks/useAccion'
+import BotonAccion from './BotonAccion'
 
 /** Opciones de horas incluidas: medias horas de 0.5 a 20 (múltiplos de 30 min). */
 const HORAS_OPCIONES = Array.from({ length: 40 }, (_, i) => (i + 1) / 2)
@@ -60,14 +62,17 @@ function formDePlan(plan) {
  */
 export default function PlanCredito({ tenantId, alumno }) {
   const { user } = useAuth()
-  const { mostrarExito, mostrarErrorTecnico, confirmar } = useAvisos()
+  const { avisarError, mostrarErrorTecnico, confirmar } = useAvisos()
   const uid = user?.uid ?? null
 
   const [datos, setDatos] = useState(null)
   const [error, setError] = useState('')
-  const [ocupado, setOcupado] = useState(false)
   const [editando, setEditando] = useState(null)
   const [version, setVersion] = useState(0)
+  const accionGuardarPlan = useAccion()
+  const accionDesactivar = useAccion()
+  const accionComprar = useAccion()
+  const accionAnular = useAccion()
 
   const esMenor = alumno.tipo === 'menor'
   const recargar = () => setVersion((v) => v + 1)
@@ -130,7 +135,16 @@ export default function PlanCredito({ tenantId, alumno }) {
     setEditando(formDePlan(datos.plan))
   }
 
-  async function guardarPlan(event) {
+  function alFallo(accion, err) {
+    if (esErrorDeNegocio(err)) {
+      setError(err.message)
+      avisarError(err.message)
+    } else {
+      mostrarErrorTecnico(accion, err)
+    }
+  }
+
+  function guardarPlan(event) {
     event.preventDefault()
     const minutos = Math.round(Number(editando.horas) * 60)
     const precioCents = parsearUSD(editando.precioTexto)
@@ -138,28 +152,30 @@ export default function PlanCredito({ tenantId, alumno }) {
       setError('Escribe un precio válido para el plan')
       return
     }
-    setOcupado(true)
     setError('')
-    try {
-      const payload = {
-        nombre: editando.nombre,
-        frecuencia: editando.frecuencia,
-        minutosIncluidos: minutos,
-        precioCents,
-        descuentoHermanos: editando.descuentoHermanos,
-        activo: editando.activo,
-      }
-      if (datos.plan) await actualizarPlanAlumno(db, tenantId, datos.plan.id, payload, { uid })
-      else await crearPlanAlumno(db, tenantId, { alumnoId: alumno.id, ...payload }, { uid })
-      mostrarExito(datos.plan ? 'Plan actualizado' : 'Plan creado')
-      setEditando(null)
-      recargar()
-    } catch (err) {
-      if (esErrorDeNegocio(err)) setError(err.message)
-      else mostrarErrorTecnico('guardar-plan', err)
-    } finally {
-      setOcupado(false)
+    const payload = {
+      nombre: editando.nombre,
+      frecuencia: editando.frecuencia,
+      minutosIncluidos: minutos,
+      precioCents,
+      descuentoHermanos: editando.descuentoHermanos,
+      activo: editando.activo,
     }
+    accionGuardarPlan.ejecutar(
+      () =>
+        datos.plan
+          ? actualizarPlanAlumno(db, tenantId, datos.plan.id, payload, { uid })
+          : crearPlanAlumno(db, tenantId, { alumnoId: alumno.id, ...payload }, { uid }),
+      {
+        accion: 'guardar-plan',
+        exito: datos.plan ? 'Plan actualizado' : 'Plan creado',
+        alExito: () => {
+          setEditando(null)
+          recargar()
+        },
+        alError: (err) => alFallo('guardar-plan', err),
+      },
+    )
   }
 
   async function desactivar() {
@@ -170,16 +186,11 @@ export default function PlanCredito({ tenantId, alumno }) {
       textoConfirmar: 'Desactivar',
     })
     if (!confirmado) return
-    setOcupado(true)
-    try {
-      await desactivarPlanAlumno(db, tenantId, datos.plan.id, { uid })
-      mostrarExito('Plan desactivado')
-      recargar()
-    } catch (err) {
-      mostrarErrorTecnico('desactivar-plan', err)
-    } finally {
-      setOcupado(false)
-    }
+    accionDesactivar.ejecutar(() => desactivarPlanAlumno(db, tenantId, datos.plan.id, { uid }), {
+      accion: 'desactivar-plan',
+      exito: 'Plan desactivado',
+      alExito: recargar,
+    })
   }
 
   async function comprar() {
@@ -193,17 +204,12 @@ export default function PlanCredito({ tenantId, alumno }) {
       textoConfirmar: 'Comprar',
     })
     if (!confirmado) return
-    setOcupado(true)
-    try {
-      await comprarCredito(db, tenantId, alumno.id)
-      mostrarExito('Crédito comprado')
-      recargar()
-    } catch (err) {
-      if (esErrorDeNegocio(err)) setError(err.message)
-      else mostrarErrorTecnico('comprar-credito', err)
-    } finally {
-      setOcupado(false)
-    }
+    accionComprar.ejecutar(() => comprarCredito(db, tenantId, alumno.id), {
+      accion: 'comprar-credito',
+      exito: 'Crédito comprado',
+      alExito: recargar,
+      alError: (err) => alFallo('comprar-credito', err),
+    })
   }
 
   async function anularLote(lote) {
@@ -214,17 +220,12 @@ export default function PlanCredito({ tenantId, alumno }) {
       textoConfirmar: 'Anular',
     })
     if (!confirmado) return
-    setOcupado(true)
-    try {
-      await anularCredito(db, tenantId, lote.id)
-      mostrarExito('Crédito anulado')
-      recargar()
-    } catch (err) {
-      if (esErrorDeNegocio(err)) setError(err.message)
-      else mostrarErrorTecnico('anular-credito', err)
-    } finally {
-      setOcupado(false)
-    }
+    accionAnular.ejecutar(() => anularCredito(db, tenantId, lote.id), {
+      accion: 'anular-credito',
+      exito: 'Crédito anulado',
+      alExito: recargar,
+      alError: (err) => alFallo('anular-credito', err),
+    })
   }
 
   if (!datos) {
@@ -288,15 +289,15 @@ export default function PlanCredito({ tenantId, alumno }) {
           </p>
 
           <div className="plan-credito__acciones">
-            <button type="button" className="btn" disabled={ocupado} onClick={comprar}>
+            <BotonAccion control={accionComprar} onClick={comprar} textoOcupado="Comprando…" className="btn">
               Comprar / Renovar crédito
-            </button>
-            <button type="button" className="btn btn--secondary" disabled={ocupado} onClick={abrirEditar}>
+            </BotonAccion>
+            <button type="button" className="btn btn--secondary" disabled={accionComprar.ocupado} onClick={abrirEditar}>
               Editar plan
             </button>
-            <button type="button" className="btn btn--secondary" disabled={ocupado} onClick={desactivar}>
+            <BotonAccion control={accionDesactivar} onClick={desactivar} textoOcupado="Desactivando…" className="btn btn--secondary">
               Desactivar
-            </button>
+            </BotonAccion>
           </div>
         </>
       ) : (
@@ -369,13 +370,13 @@ export default function PlanCredito({ tenantId, alumno }) {
             <p className="parametros__hint">Precio final: {formatearUSD(precioEfectivo)}</p>
           ) : null}
           <div className="plan-credito__acciones">
-            <button type="button" className="btn-cta" disabled={ocupado} onClick={guardarPlan}>
-              {ocupado ? 'Guardando…' : 'Guardar plan'}
-            </button>
+            <BotonAccion control={accionGuardarPlan} onClick={guardarPlan} textoOcupado="Guardando…" className="btn-cta">
+              Guardar plan
+            </BotonAccion>
             <button
               type="button"
               className="btn btn--secondary"
-              disabled={ocupado}
+              disabled={accionGuardarPlan.ocupado}
               onClick={() => setEditando(null)}
             >
               Cancelar
@@ -405,14 +406,14 @@ export default function PlanCredito({ tenantId, alumno }) {
                 {estado !== 'anulado' ? (lote.cargoPagado ? 'Mensualidad pagada' : 'Mensualidad pendiente') : ''}
               </span>
               {puedeAnular ? (
-                <button
-                  type="button"
-                  className="btn btn--secondary"
-                  disabled={ocupado}
+                <BotonAccion
+                  control={accionAnular}
                   onClick={() => anularLote(lote)}
+                  textoOcupado="Anulando…"
+                  className="btn btn--secondary"
                 >
                   Anular
-                </button>
+                </BotonAccion>
               ) : null}
             </li>
           )

@@ -11,6 +11,8 @@ import {
 } from '../firebase/db'
 import { useAuth } from '../context/AuthContext'
 import { useAvisos } from '../context/AvisosContext'
+import useAccion from '../hooks/useAccion'
+import BotonAccion from './BotonAccion'
 
 /*
  * Sección "Profesores con acceso" de Configuración (Fase 7). El admin crea la
@@ -20,15 +22,15 @@ import { useAvisos } from '../context/AvisosContext'
  */
 export default function ConfigProfesores({ tenantId }) {
   const { user } = useAuth()
-  const { mostrarExito, mostrarErrorTecnico } = useAvisos()
+  const { avisarError, mostrarErrorTecnico } = useAvisos()
   const [profesores, setProfesores] = useState([])
   const [accesos, setAccesos] = useState(null)
   const [error, setError] = useState('')
   const [email, setEmail] = useState('')
   const [password, setPassword] = useState('')
   const [profesorId, setProfesorId] = useState('')
-  const [ocupado, setOcupado] = useState(false)
   const [version, setVersion] = useState(0)
+  const accionCrear = useAccion()
 
   useEffect(() => {
     let activo = true
@@ -57,7 +59,7 @@ export default function ConfigProfesores({ tenantId }) {
     [profesores],
   )
 
-  async function crear(evento) {
+  function crear(evento) {
     evento.preventDefault()
     if (!email.trim() || !profesorId) {
       setError('Elige un profesor y escribe su email')
@@ -67,41 +69,41 @@ export default function ConfigProfesores({ tenantId }) {
       setError('La contraseña temporal necesita al menos 6 caracteres')
       return
     }
-    setOcupado(true)
     setError('')
-    try {
-      await crearAccesoProfesor(
-        db,
-        tenantId,
-        { email, password, profesorId },
-        { crearCuenta: crearCuentaAuthProfesor },
-      )
-      mostrarExito('Acceso creado. Comparte la contraseña temporal.')
-      setEmail('')
-      setPassword('')
-      setProfesorId('')
-      setVersion((v) => v + 1)
-    } catch (err) {
-      if (err?.message) setError(err.message)
-      mostrarErrorTecnico('crear-acceso-profesor', err)
-    } finally {
-      setOcupado(false)
-    }
+    accionCrear.ejecutar(
+      () =>
+        crearAccesoProfesor(
+          db,
+          tenantId,
+          { email, password, profesorId },
+          { crearCuenta: crearCuentaAuthProfesor },
+        ),
+      {
+        accion: 'crear-acceso-profesor',
+        exito: 'Acceso creado. Comparte la contraseña temporal.',
+        alExito: () => {
+          setEmail('')
+          setPassword('')
+          setProfesorId('')
+          setVersion((v) => v + 1)
+        },
+        alError: (err) => {
+          if (err?.message) {
+            setError(err.message)
+            avisarError(err.message)
+          } else {
+            mostrarErrorTecnico('crear-acceso-profesor', err)
+          }
+        },
+      },
+    )
   }
 
   async function alternar(acceso) {
-    setOcupado(true)
-    try {
-      await cambiarActivoProfesor(db, tenantId, acceso.id, acceso.activo === false, {
-        actualizadoPor: user?.uid ?? null,
-      })
-      mostrarExito(acceso.activo === false ? 'Acceso reactivado' : 'Acceso desactivado')
-      setVersion((v) => v + 1)
-    } catch (err) {
-      mostrarErrorTecnico('cambiar-acceso-profesor', err)
-    } finally {
-      setOcupado(false)
-    }
+    await cambiarActivoProfesor(db, tenantId, acceso.id, acceso.activo === false, {
+      actualizadoPor: user?.uid ?? null,
+    })
+    setVersion((v) => v + 1)
   }
 
   const lista = accesos ?? []
@@ -160,9 +162,9 @@ export default function ConfigProfesores({ tenantId }) {
             />
             <span className="parametros__hint">No se guarda: compártela y que la cambie.</span>
           </label>
-          <button type="submit" className="btn btn--primary" disabled={ocupado}>
-            {ocupado ? 'Creando…' : 'Crear acceso'}
-          </button>
+          <BotonAccion type="submit" control={accionCrear} textoOcupado="Creando…" className="btn btn--primary">
+            Crear acceso
+          </BotonAccion>
         </div>
       </form>
 
@@ -180,14 +182,15 @@ export default function ConfigProfesores({ tenantId }) {
                   {nombrePorProfesor[acceso.profesorId] ?? 'Profesor'}
                   <span className="parametros__hint"> {acceso.email}</span>
                 </span>
-                <button
-                  type="button"
-                  className="btn btn--secondary"
-                  disabled={ocupado}
+                <BotonAccion
                   onClick={() => alternar(acceso)}
+                  accion="cambiar-acceso-profesor"
+                  exito={acceso.activo === false ? 'Acceso reactivado' : 'Acceso desactivado'}
+                  textoOcupado="Guardando…"
+                  className="btn btn--secondary"
                 >
                   {acceso.activo === false ? 'Reactivar' : 'Desactivar'}
-                </button>
+                </BotonAccion>
               </li>
             ))}
           </ul>

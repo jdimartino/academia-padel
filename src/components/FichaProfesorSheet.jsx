@@ -1,10 +1,11 @@
 import { useEffect, useRef, useState } from 'react'
 import { useAuth } from '../context/AuthContext'
-import { useAvisos } from '../context/AvisosContext'
 import { db } from '../firebase/config'
 import { actualizarProfesor, crearProfesor, getSedes } from '../firebase/db'
+import useAccion from '../hooks/useAccion'
 import useCierreSeguro from '../hooks/useCierreSeguro'
 import { hayCambios } from '../lib/avisos'
+import BotonAccion from './BotonAccion'
 import { CloseIcon } from './Icons'
 
 const DOCUMENTOS = [
@@ -75,14 +76,13 @@ function validar(form) {
  */
 export default function FichaProfesorSheet({ tenantId, profesor = null, onClose, onSaved }) {
   const { user } = useAuth()
-  const { mostrarErrorTecnico, mostrarExito } = useAvisos()
   const [form, setForm] = useState(() => formDeProfesor(profesor))
   // Foto de los valores iniciales: base para detectar cambios sin guardar.
   const [inicial] = useState(() => formDeProfesor(profesor))
   const [sedes, setSedes] = useState([])
   const [errores, setErrores] = useState({})
-  const [enviando, setEnviando] = useState(false)
   const campos = useRef({})
+  const accionGuardar = useAccion()
 
   // Escape con cambios sin guardar: pregunta antes de cerrar.
   useCierreSeguro({ sucio: hayCambios(inicial, form), onCerrar: onClose })
@@ -126,7 +126,7 @@ export default function FichaProfesorSheet({ tenantId, profesor = null, onClose,
     if (clave) campos.current[clave]?.focus()
   }
 
-  async function enviar(event) {
+  function enviar(event) {
     event.preventDefault()
     const erroresNuevos = validar(form)
     setErrores(erroresNuevos)
@@ -136,35 +136,27 @@ export default function FichaProfesorSheet({ tenantId, profesor = null, onClose,
       return
     }
 
-    setEnviando(true)
-    try {
-      const datos = {
-        nombre: form.nombre.trim(),
-        apellidos: form.apellidos.trim(),
-        telefono: form.telefono.trim() || null,
-        email: form.email.trim() || null,
-        documento:
-          form.documentoTipo && form.documentoNumero.trim()
-            ? { tipo: form.documentoTipo, numero: form.documentoNumero.trim() }
-            : null,
-        sedes: form.sedes,
-        notas: form.notas,
-        activo: form.activo,
-      }
-      const opciones = { uid: user?.uid ?? null }
-      if (profesor) {
-        await actualizarProfesor(db, tenantId, profesor.id, datos, opciones)
-        mostrarExito('Profesor guardado')
-      } else {
-        await crearProfesor(db, tenantId, datos, opciones)
-        mostrarExito('Profesor creado')
-      }
-      onSaved?.()
-    } catch (err) {
-      mostrarErrorTecnico('guardar-profesor', err)
-    } finally {
-      setEnviando(false)
+    const datos = {
+      nombre: form.nombre.trim(),
+      apellidos: form.apellidos.trim(),
+      telefono: form.telefono.trim() || null,
+      email: form.email.trim() || null,
+      documento:
+        form.documentoTipo && form.documentoNumero.trim()
+          ? { tipo: form.documentoTipo, numero: form.documentoNumero.trim() }
+          : null,
+      sedes: form.sedes,
+      notas: form.notas,
+      activo: form.activo,
     }
+    const opciones = { uid: user?.uid ?? null }
+    accionGuardar.ejecutar(
+      () =>
+        profesor
+          ? actualizarProfesor(db, tenantId, profesor.id, datos, opciones)
+          : crearProfesor(db, tenantId, datos, opciones),
+      { accion: 'guardar-profesor', alExito: () => onSaved?.() },
+    )
   }
 
   const errorDe = (campo) => errores[campo]
@@ -346,9 +338,9 @@ export default function FichaProfesorSheet({ tenantId, profesor = null, onClose,
           <span>Activo</span>
         </label>
 
-        <button className="btn" type="submit" disabled={enviando}>
-          {enviando ? 'Guardando…' : profesor ? 'Guardar cambios' : 'Crear profesor'}
-        </button>
+        <BotonAccion type="submit" control={accionGuardar} textoOcupado="Guardando…">
+          {profesor ? 'Guardar cambios' : 'Crear profesor'}
+        </BotonAccion>
         <button type="button" className="btn btn--secondary" onClick={onClose}>
           Cancelar
         </button>

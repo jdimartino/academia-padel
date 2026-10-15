@@ -1,11 +1,13 @@
 import { useCallback, useEffect, useMemo, useState } from 'react'
 import { useParams } from 'react-router-dom'
+import BotonAccion from '../components/BotonAccion'
 import MontoEquivalente from '../components/MontoEquivalente'
 import PageChrome from '../components/PageChrome'
 import TasasPanel from '../components/TasasPanel'
 import { useAuth } from '../context/AuthContext'
-import { useAvisos } from '../context/AvisosContext'
+import { useCargando } from '../context/CargandoContext'
 import { useTasas } from '../context/TasasContext'
+import useAccion from '../hooks/useAccion'
 import { db } from '../firebase/config'
 import {
   listarCargosPendientes,
@@ -38,7 +40,7 @@ const ESTADOS_COBRO = [
 ]
 
 /** Selector de método de pago + confirmación, en línea. */
-function AccionPagado({ onConfirmar, ocupado }) {
+function AccionPagado({ onConfirmar, ocupado, control, accion, exito }) {
   const [abierto, setAbierto] = useState(false)
   const [metodoPago, setMetodoPago] = useState('efectivo')
 
@@ -68,14 +70,16 @@ function AccionPagado({ onConfirmar, ocupado }) {
           </option>
         ))}
       </select>
-      <button
-        type="button"
-        className="btn-icono"
-        disabled={ocupado}
+      <BotonAccion
+        control={control}
         onClick={() => onConfirmar(metodoPago)}
+        accion={accion}
+        exito={exito}
+        textoOcupado="Marcando…"
+        className="btn-icono"
       >
         Confirmar
-      </button>
+      </BotonAccion>
       <button type="button" className="btn-icono" disabled={ocupado} onClick={() => setAbierto(false)}>
         Cancelar
       </button>
@@ -92,8 +96,9 @@ function AccionPagado({ onConfirmar, ocupado }) {
 export default function Cobros() {
   const { academia } = useParams()
   const { user } = useAuth()
-  const { mostrarExito, mostrarErrorTecnico } = useAvisos()
+  const { iniciar: iniciarCarga, terminar: terminarCarga } = useCargando()
   const { tasas } = useTasas()
+  const control = useAccion()
   const uid = user?.uid ?? null
 
   const [sedes, setSedes] = useState([])
@@ -105,7 +110,6 @@ export default function Cobros() {
   const [cargos, setCargos] = useState(null)
   const [pagos, setPagos] = useState(null)
   const [error, setError] = useState('')
-  const [ocupado, setOcupado] = useState(false)
 
   useEffect(() => {
     listarSedes(db, academia)
@@ -120,6 +124,7 @@ export default function Cobros() {
 
   const recargar = useCallback(() => {
     const filtros = { sedeId: sedeId || null, estado, desde, hasta }
+    iniciarCarga()
     return Promise.all([
       listarCargosPendientes(db, academia, filtros),
       listarPagosProfesorPendientes(db, academia, filtros),
@@ -130,36 +135,21 @@ export default function Cobros() {
         setError('')
       })
       .catch((err) => setError(err.message))
-  }, [academia, sedeId, estado, desde, hasta])
+      .finally(terminarCarga)
+  }, [academia, sedeId, estado, desde, hasta, iniciarCarga, terminarCarga])
 
   useEffect(() => {
     recargar()
   }, [recargar])
 
   async function pagarCargo(cargo, metodoPago) {
-    setOcupado(true)
-    try {
-      await marcarCargoPagado(db, academia, cargo.id, { metodoPago }, { uid })
-      mostrarExito('Cargo marcado como pagado')
-      await recargar()
-    } catch (err) {
-      mostrarErrorTecnico('marcar-cargo', err)
-    } finally {
-      setOcupado(false)
-    }
+    await marcarCargoPagado(db, academia, cargo.id, { metodoPago }, { uid })
+    await recargar()
   }
 
   async function pagarProfesor(pago, metodoPago) {
-    setOcupado(true)
-    try {
-      await marcarPagoProfesorPagado(db, academia, pago.id, { metodoPago }, { uid })
-      mostrarExito('Pago al profesor marcado como pagado')
-      await recargar()
-    } catch (err) {
-      mostrarErrorTecnico('marcar-pago-profesor', err)
-    } finally {
-      setOcupado(false)
-    }
+    await marcarPagoProfesorPagado(db, academia, pago.id, { metodoPago }, { uid })
+    await recargar()
   }
 
   const totalCargos = useMemo(
@@ -241,6 +231,7 @@ export default function Cobros() {
               {cargos.length === 0 ? (
                 <p className="parametros__hint">No hay cargos en el rango.</p>
               ) : (
+                <div className="tabla-wrap">
                 <table className="tabla-comp">
                   <thead>
                     <tr>
@@ -277,7 +268,10 @@ export default function Cobros() {
                         <td data-label="Acción" className="tabla-comp__acciones">
                           {esPendiente ? (
                             <AccionPagado
-                              ocupado={ocupado}
+                              control={control}
+                              ocupado={control.ocupado}
+                              accion="marcar-cargo"
+                              exito="Cargo marcado como pagado"
                               onConfirmar={(metodo) => pagarCargo(cargo, metodo)}
                             />
                           ) : (
@@ -290,6 +284,7 @@ export default function Cobros() {
                     ))}
                   </tbody>
                 </table>
+                </div>
               )}
             </section>
 
@@ -303,6 +298,7 @@ export default function Cobros() {
               {pagos.length === 0 ? (
                 <p className="parametros__hint">No hay pagos en el rango.</p>
               ) : (
+                <div className="tabla-wrap">
                 <table className="tabla-comp">
                   <thead>
                     <tr>
@@ -337,7 +333,10 @@ export default function Cobros() {
                         <td data-label="Acción" className="tabla-comp__acciones">
                           {esPendiente ? (
                             <AccionPagado
-                              ocupado={ocupado}
+                              control={control}
+                              ocupado={control.ocupado}
+                              accion="marcar-pago-profesor"
+                              exito="Pago al profesor marcado como pagado"
                               onConfirmar={(metodo) => pagarProfesor(pago, metodo)}
                             />
                           ) : (
@@ -350,6 +349,7 @@ export default function Cobros() {
                     ))}
                   </tbody>
                 </table>
+                </div>
               )}
             </section>
           </div>

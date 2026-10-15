@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { useAuth } from '../context/AuthContext'
-import { useAvisos } from '../context/AvisosContext'
+import useAccion from '../hooks/useAccion'
 import { db } from '../firebase/config'
 import {
   crearClase,
@@ -32,6 +32,7 @@ import { formatearUSD, parsearUSD } from '../lib/dinero'
 import { hayCambios } from '../lib/avisos'
 import { formatearFechaLarga } from '../lib/fechas'
 import useCierreSeguro from '../hooks/useCierreSeguro'
+import BotonAccion from './BotonAccion'
 import { CloseIcon } from './Icons'
 import SelectorAlumnos from './SelectorAlumnos'
 
@@ -142,11 +143,10 @@ export default function NuevaReserva({
   const [ajustadoManual, setAjustadoManual] = useState(Boolean(clase?.cobro?.ajustado))
   // Error de la LECTURA de profesores: se queda en línea (no es una acción).
   const [errorLectura, setErrorLectura] = useState('')
-  const [enviando, setEnviando] = useState(false)
   // Último profesor elegido a mano: el que llega por defecto con la lectura no
   // cuenta como cambio del usuario.
   const profesorElegido = useRef(null)
-  const { mostrarErrorTecnico, mostrarExito } = useAvisos()
+  const accion = useAccion()
 
   /** Valores que definen los cambios sin guardar del formulario. */
   function instantanea() {
@@ -363,7 +363,7 @@ export default function NuevaReserva({
     return lista
   }, [canchaId, fin, inicio, otrasClases, profesor, profesorId, franja, perfil, montoCents])
 
-  const puedeEnviar = Boolean(canchaId && profesorId) && problemas.length === 0 && !enviando
+  const puedeEnviar = Boolean(canchaId && profesorId) && problemas.length === 0
 
   /*
    * Cambios sin guardar: la foto inicial (tomada al abrir) contra los valores
@@ -378,48 +378,40 @@ export default function NuevaReserva({
   // Escape (y el fondo, si lo hubiera) con cambios sin guardar pide confirmación.
   useCierreSeguro({ sucio, onCerrar: onClose })
 
-  async function enviar(event) {
+  function enviar(event) {
     event.preventDefault()
     if (!puedeEnviar) return
-    const accion = esEdicion ? 'reprogramar-clase' : 'reservar-clase'
-    setEnviando(true)
-    try {
-      const datos = {
-        sedeId: sede.id,
-        sedeNombre: sede.nombre,
-        canchaId,
-        profesorId,
-        profesorNombre: nombreCompleto(profesor) || null,
-        fecha,
-        horaInicio,
-        horaFin: aHoraHHmm(fin),
-        cupo,
-        categoria: categoria || null,
-        categoriaGrupo: categoriaGrupo || null,
-        alumnos: alumnosSel.map((alumno) => alumno.id),
-        cobro,
-      }
-      let claseId
-      if (esEdicion) {
-        const resultado = await reprogramarClase(
-          db,
-          tenantId,
-          clase.id,
-          datos,
-          { uid: user?.uid ?? null },
-        )
-        claseId = resultado.claseId
-      } else {
+    accion.ejecutar(
+      async () => {
+        const datos = {
+          sedeId: sede.id,
+          sedeNombre: sede.nombre,
+          canchaId,
+          profesorId,
+          profesorNombre: nombreCompleto(profesor) || null,
+          fecha,
+          horaInicio,
+          horaFin: aHoraHHmm(fin),
+          cupo,
+          categoria: categoria || null,
+          categoriaGrupo: categoriaGrupo || null,
+          alumnos: alumnosSel.map((alumno) => alumno.id),
+          cobro,
+        }
+        if (esEdicion) {
+          const resultado = await reprogramarClase(db, tenantId, clase.id, datos, {
+            uid: user?.uid ?? null,
+          })
+          return resultado.claseId
+        }
         const resultado = await crearClase(db, tenantId, datos, { uid: user?.uid ?? null })
-        claseId = resultado.claseId
-      }
-      mostrarExito(esEdicion ? 'Clase reprogramada' : 'Clase reservada')
-      onCreated(claseId)
-    } catch (err) {
-      mostrarErrorTecnico(accion, err)
-    } finally {
-      setEnviando(false)
-    }
+        return resultado.claseId
+      },
+      {
+        accion: esEdicion ? 'reprogramar-clase' : 'reservar-clase',
+        alExito: (claseId) => onCreated(claseId),
+      },
+    )
   }
 
   return (
@@ -677,9 +669,14 @@ export default function NuevaReserva({
           </div>
         ) : null}
 
-        <button className="btn" type="submit" disabled={!puedeEnviar}>
-          {enviando ? 'Guardando…' : esEdicion ? 'Guardar cambios' : 'Reservar clase'}
-        </button>
+        <BotonAccion
+          type="submit"
+          control={accion}
+          disabled={!puedeEnviar}
+          textoOcupado={esEdicion ? 'Guardando…' : 'Reservando…'}
+        >
+          {esEdicion ? 'Guardar cambios' : 'Reservar clase'}
+        </BotonAccion>
         <button type="button" className="btn btn--secondary" onClick={onClose}>
           Cancelar
         </button>

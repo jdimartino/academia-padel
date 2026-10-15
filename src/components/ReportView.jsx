@@ -1,4 +1,6 @@
-import { useState } from 'react'
+import { useCallback, useState } from 'react'
+import useAccion from '../hooks/useAccion'
+import BotonAccion from './BotonAccion'
 import MontoEquivalente from './MontoEquivalente'
 import { etiquetaDia } from '../lib/agenda'
 import { formatearFechaLarga, formatearFechaHora } from '../lib/fechas'
@@ -42,9 +44,10 @@ export default function ReportView({
   children,
   onRefrescar,
 }) {
-  const [exportando, setExportando] = useState(false)
   // Fecha/hora de generación fijada al montar (no se recalcula en cada render).
   const [generadoEn] = useState(() => formatearFechaHora(new Date()))
+  const accionPdf = useAccion()
+  const accionCompartir = useAccion()
 
   const puedeCompartir = typeof navigator !== 'undefined' && typeof navigator.share === 'function'
   const rango = filtrosTexto
@@ -59,15 +62,31 @@ export default function ReportView({
     descargarTexto(`${nombreArchivo}.csv`, aCSV(columnas, filasCSV))
   }
 
-  async function compartir() {
-    setExportando(true)
-    try {
-      await navigator.share({ title: titulo, text: textoCompartir })
-    } catch {
+  // `window.print()` bloquea; se muestra el estado "Preparando PDF…" durante el
+  // diálogo y se limpia con `afterprint` (con un temporizador de respaldo).
+  const prepararPDF = useCallback(
+    () =>
+      new Promise((resolve) => {
+        let hecho = false
+        let temporizador
+        const terminar = () => {
+          if (hecho) return
+          hecho = true
+          window.removeEventListener('afterprint', terminar)
+          clearTimeout(temporizador)
+          resolve()
+        }
+        window.addEventListener('afterprint', terminar)
+        temporizador = setTimeout(terminar, 1500)
+        setTimeout(() => window.print(), 50)
+      }),
+    [],
+  )
+
+  function compartir() {
+    return navigator.share({ title: titulo, text: textoCompartir }).catch(() => {
       // El usuario canceló o el navegador no pudo: sin ruido.
-    } finally {
-      setExportando(false)
-    }
+    })
   }
 
   function abrirWhatsApp() {
@@ -88,20 +107,33 @@ export default function ReportView({
           </p>
         </div>
         <div className="reporte__acciones">
-          <button type="button" className="btn btn--secondary" onClick={() => window.print()}>
+          <BotonAccion
+            control={accionPdf}
+            onClick={prepararPDF}
+            inmediato
+            sinExito
+            textoOcupado="Preparando PDF…"
+            className="btn btn--secondary"
+          >
             PDF
-          </button>
-          <button type="button" className="btn btn--secondary" onClick={abrirWhatsApp}>
+          </BotonAccion>
+          <BotonAccion onClick={abrirWhatsApp} sinExito className="btn btn--secondary">
             WhatsApp
-          </button>
+          </BotonAccion>
           {puedeCompartir ? (
-            <button type="button" className="btn btn--secondary" disabled={exportando} onClick={compartir}>
+            <BotonAccion
+              control={accionCompartir}
+              onClick={compartir}
+              sinExito
+              textoOcupado="Compartiendo…"
+              className="btn btn--secondary"
+            >
               Compartir
-            </button>
+            </BotonAccion>
           ) : null}
-          <button type="button" className="btn btn--secondary" onClick={exportarCSV}>
+          <BotonAccion onClick={exportarCSV} sinExito className="btn btn--secondary">
             CSV
-          </button>
+          </BotonAccion>
           {onRefrescar ? (
             <button type="button" className="btn-cta" onClick={onRefrescar}>
               Actualizar

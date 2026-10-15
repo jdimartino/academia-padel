@@ -1,9 +1,10 @@
 import { useCallback, useEffect, useState } from 'react'
 import { useAuth } from '../context/AuthContext'
-import { useAvisos } from '../context/AvisosContext'
 import { db } from '../firebase/config'
 import { anularCierre, asignarAlumnos, cancelarClase, getCierreDeClase } from '../firebase/db'
+import useAccion from '../hooks/useAccion'
 import useCierreSeguro from '../hooks/useCierreSeguro'
+import BotonAccion from './BotonAccion'
 import CerrarClase from './CerrarClase'
 import { CloseIcon } from './Icons'
 import { estadoDe, etiquetaCategoriaGrupo, formatHora12, tituloClase } from '../lib/agenda'
@@ -63,7 +64,6 @@ export default function DetailSheet({
   onReprogramar,
 }) {
   const { user } = useAuth()
-  const { mostrarErrorTecnico, mostrarExito } = useAvisos()
   const estado = estadoDe(clase.estado)
   const cancha = canchas.find((c) => c.id === clase.canchaId)
   const cupo = clase.cupo ?? 0
@@ -79,11 +79,10 @@ export default function DetailSheet({
   // La asignación de alumnos solo se permite en una clase `reservada`.
   const puedeAsignar = esAdmin && clase.estado === 'reservada'
 
-  const [ocupado, setOcupado] = useState(false)
   const [confirmando, setConfirmando] = useState(false)
-  const [guardandoAlumnos, setGuardandoAlumnos] = useState(false)
   const [cierre, setCierre] = useState(null)
   const [anulando, setAnulando] = useState(false)
+  const accionAlumnos = useAccion()
 
   const recargarCierre = useCallback(() => {
     getCierreDeClase(db, tenantId, clase.id)
@@ -106,55 +105,28 @@ export default function DetailSheet({
     },
   })
 
-  async function cambiarAlumnos(nueva) {
-    setGuardandoAlumnos(true)
-    try {
-      await asignarAlumnos(db, tenantId, clase.id, nueva.map((alumno) => alumno.id), {
-        uid: user?.uid ?? null,
-      })
-      mostrarExito('Alumnos guardados')
-      onChanged?.()
-    } catch (err) {
-      mostrarErrorTecnico('asignar-alumnos', err)
-    } finally {
-      setGuardandoAlumnos(false)
-    }
+  function cambiarAlumnos(nueva) {
+    accionAlumnos.ejecutar(
+      () =>
+        asignarAlumnos(db, tenantId, clase.id, nueva.map((alumno) => alumno.id), {
+          uid: user?.uid ?? null,
+        }),
+      { accion: 'asignar-alumnos', alExito: () => onChanged?.() },
+    )
   }
 
   function alCerrar() {
-    mostrarExito('Clase cerrada')
     recargarCierre()
     onChanged?.()
   }
 
-  async function anular() {
-    setOcupado(true)
+  function anular() {
     setAnulando(false)
-    try {
-      await anularCierre(db, tenantId, clase.id, { uid: user?.uid ?? null })
-      mostrarExito('Cierre anulado')
-      setCierre(null)
-      onChanged?.()
-    } catch (err) {
-      mostrarErrorTecnico('anular-cierre', err)
-    } finally {
-      setOcupado(false)
-    }
+    return anularCierre(db, tenantId, clase.id, { uid: user?.uid ?? null })
   }
 
-  async function cancelar() {
-    setOcupado(true)
-    try {
-      await cancelarClase(db, tenantId, clase.id, { uid: user?.uid ?? null })
-      mostrarExito('Clase cancelada')
-      onChanged?.()
-      onClose()
-    } catch (err) {
-      mostrarErrorTecnico('cancelar-clase', err)
-      setConfirmando(false)
-    } finally {
-      setOcupado(false)
-    }
+  function cancelar() {
+    return cancelarClase(db, tenantId, clase.id, { uid: user?.uid ?? null })
   }
 
   const conCierre = ESTADOS_CON_CIERRE.includes(clase.estado)
@@ -243,7 +215,7 @@ export default function DetailSheet({
             horaInicio={clase.horaInicio}
             horaFin={clase.horaFin}
           />
-          {guardandoAlumnos ? <p className="aviso">Guardando alumnos…</p> : null}
+          {accionAlumnos.visible ? <p className="aviso">Guardando alumnos…</p> : null}
         </div>
       ) : alumnos.length ? (
         <div className="sheet__slots">
@@ -329,15 +301,19 @@ export default function DetailSheet({
                 ¿Anular el cierre? Los cargos y el pago quedan anulados y la clase vuelve a
                 “reservada” para cerrarla de nuevo.
               </p>
-              <button type="button" className="btn" disabled={ocupado} onClick={anular}>
-                {ocupado ? 'Anulando…' : 'Sí, anular el cierre'}
-              </button>
-              <button
-                type="button"
-                className="btn btn--secondary"
-                disabled={ocupado}
-                onClick={() => setAnulando(false)}
+              <BotonAccion
+                onClick={anular}
+                accion="anular-cierre"
+                exito="Cierre anulado"
+                textoOcupado="Anulando…"
+                alExito={() => {
+                  setCierre(null)
+                  onChanged?.()
+                }}
               >
+                Sí, anular el cierre
+              </BotonAccion>
+              <button type="button" className="btn btn--secondary" onClick={() => setAnulando(false)}>
                 No, volver
               </button>
             </div>
@@ -346,7 +322,7 @@ export default function DetailSheet({
               <button
                 type="button"
                 className="btn btn--secondary"
-                disabled={ocupado || algoPagado}
+                disabled={algoPagado}
                 onClick={() => setAnulando(true)}
               >
                 Anular cierre
@@ -372,13 +348,22 @@ export default function DetailSheet({
             <p className="confirm-box__texto">
               ¿Cancelar esta clase? Se libera el horario y el profesor queda disponible.
             </p>
-            <button type="button" className="btn" disabled={ocupado} onClick={cancelar}>
-              {ocupado ? 'Cancelando…' : 'Sí, cancelar la clase'}
-            </button>
+            <BotonAccion
+              onClick={cancelar}
+              accion="cancelar-clase"
+              sinExito
+              textoOcupado="Cancelando…"
+              alExito={() => {
+                onChanged?.()
+                onClose()
+              }}
+              alError={() => setConfirmando(false)}
+            >
+              Sí, cancelar la clase
+            </BotonAccion>
             <button
               type="button"
               className="btn btn--secondary"
-              disabled={ocupado}
               onClick={() => setConfirmando(false)}
             >
               No, volver
@@ -388,7 +373,6 @@ export default function DetailSheet({
           <button
             type="button"
             className="btn btn--secondary"
-            disabled={ocupado}
             onClick={() => setConfirmando(true)}
           >
             Cancelar clase

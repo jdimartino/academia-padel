@@ -1,6 +1,5 @@
 import { useEffect, useMemo, useState } from 'react'
 import { useAuth } from '../context/AuthContext'
-import { useAvisos } from '../context/AvisosContext'
 import { db } from '../firebase/config'
 import { cerrarClase, getCreditoAlumno } from '../firebase/db'
 import { PARAMETROS_DEFAULT, calcularCierre, previsualizarCreditoAlumno } from '../lib/cobros'
@@ -8,7 +7,7 @@ import { estadoCierreAEstadoProfesor } from '../lib/profesores'
 import { aMinutos, formatHora12 } from '../lib/agenda'
 import { formatearUSD, parsearUSD } from '../lib/dinero'
 import { formatearFechaLarga } from '../lib/fechas'
-import { esErrorDeNegocio } from '../lib/avisos'
+import BotonAccion from './BotonAccion'
 
 const ESTADOS = [
   { valor: 'presente', label: 'Presente' },
@@ -69,7 +68,6 @@ function inicial(clase) {
  */
 export default function CerrarClase({ clase, parametros, tenantId, sedeNombre, canchaNombre, onCerrado }) {
   const { user } = useAuth()
-  const { mostrarErrorTecnico } = useAvisos()
 
   const alumnos = useMemo(
     () =>
@@ -85,9 +83,7 @@ export default function CerrarClase({ clase, parametros, tenantId, sedeNombre, c
   const inicialTexto = clase.cobro ? formatearUSD(clase.cobro.montoCents) : ''
   const [montoTexto, setMontoTexto] = useState(inicialTexto)
   const [motivoAjuste, setMotivoAjuste] = useState(clase.cobro?.motivoAjuste ?? 'otro')
-  const [ocupado, setOcupado] = useState(false)
   const [confirmando, setConfirmando] = useState(false)
-  const [error, setError] = useState('')
   const [minutosCredito, setMinutosCredito] = useState({})
 
   // Crédito disponible de cada alumno (solo lectura, para el preview).
@@ -164,33 +160,20 @@ export default function CerrarClase({ clase, parametros, tenantId, sedeNombre, c
     setAsistencias((prev) => ({ ...prev, [alumnoId]: estado }))
   }
 
+  // Falta el monto obligatorio: se avisa en línea y se bloquea la confirmación.
+  const faltaMonto = requiereMonto && montoCents === null
+
   async function cerrar() {
-    if (requiereMonto && montoCents === null) {
-      setError('Carga un monto para la clase (o apaga "¿Se factura?")')
-      return
+    const datos = { asistencias: registros, seFactura }
+    if (editado || requiereMonto) {
+      datos.montoCents = montoCents ?? 0
+      datos.motivoAjuste = motivoAjuste
     }
-    setOcupado(true)
-    setError('')
-    try {
-      const datos = { asistencias: registros, seFactura }
-      if (editado || requiereMonto) {
-        datos.montoCents = montoCents ?? 0
-        datos.motivoAjuste = motivoAjuste
-      }
-      // Deja el sello de quién confirmó la asistencia desde el móvil, si la
-      // clase la cargó su profesor.
-      if (clase.asistenciaProfesor) datos.confirmadoPorProfesorId = clase.profesorId
-      await cerrarClase(db, tenantId, clase.id, datos, { uid: user?.uid ?? null })
-      onCerrado?.()
-    } catch (err) {
-      if (esErrorDeNegocio(err)) setError(err.message)
-      else {
-        setError('No se pudo cerrar la clase. Inténtalo de nuevo.')
-        mostrarErrorTecnico('cerrar-clase', err)
-      }
-    } finally {
-      setOcupado(false)
-    }
+    // Deja el sello de quién confirmó la asistencia desde el móvil, si la
+    // clase la cargó su profesor.
+    if (clase.asistenciaProfesor) datos.confirmadoPorProfesorId = clase.profesorId
+    await cerrarClase(db, tenantId, clase.id, datos, { uid: user?.uid ?? null })
+    onCerrado?.()
   }
 
   return (
@@ -344,9 +327,9 @@ export default function CerrarClase({ clase, parametros, tenantId, sedeNombre, c
         </div>
       </div>
 
-      {error ? (
+      {faltaMonto ? (
         <p className="form__error" role="alert">
-          {error}
+          Carga un monto para la clase (o apaga "¿Se factura?")
         </p>
       ) : null}
 
@@ -358,15 +341,16 @@ export default function CerrarClase({ clase, parametros, tenantId, sedeNombre, c
             {clase.canchaNombre ?? canchaNombre ?? 'cancha'}) con {clase.profesorNombre ?? 'el profesor'} y{' '}
             {alumnos.length ? alumnos.map((a) => a.nombre).join(', ') : 'sin alumnos'}?
           </p>
-          <button type="button" className="btn" disabled={ocupado} onClick={cerrar}>
-            {ocupado ? 'Cerrando…' : 'Sí, cerrar la clase'}
-          </button>
-          <button
-            type="button"
-            className="btn btn--secondary"
-            disabled={ocupado}
-            onClick={() => setConfirmando(false)}
+          <BotonAccion
+            onClick={cerrar}
+            accion="cerrar-clase"
+            exito="Clase cerrada"
+            textoOcupado="Cerrando clase…"
+            disabled={faltaMonto}
           >
+            Sí, cerrar la clase
+          </BotonAccion>
+          <button type="button" className="btn btn--secondary" onClick={() => setConfirmando(false)}>
             No, volver
           </button>
         </div>
@@ -374,7 +358,7 @@ export default function CerrarClase({ clase, parametros, tenantId, sedeNombre, c
         <button
           type="button"
           className="btn-cta"
-          disabled={ocupado}
+          disabled={faltaMonto}
           onClick={() => setConfirmando(true)}
         >
           Cerrar clase

@@ -1,6 +1,8 @@
 import { useCallback, useEffect, useMemo, useState } from 'react'
 import { useAuth } from '../context/AuthContext'
 import { useAvisos } from '../context/AvisosContext'
+import useAccion from '../hooks/useAccion'
+import BotonAccion from './BotonAccion'
 import { db } from '../firebase/config'
 import {
   actualizarPerfilCobro,
@@ -76,7 +78,7 @@ function resumenPersonas(personas) {
  */
 export default function ConfigCobros({ tenantId, onSucio }) {
   const { user } = useAuth()
-  const { mostrarExito, mostrarErrorTecnico } = useAvisos()
+  const { avisarError, mostrarErrorTecnico } = useAvisos()
   const uid = user?.uid ?? null
 
   const [perfiles, setPerfiles] = useState(null)
@@ -87,7 +89,7 @@ export default function ConfigCobros({ tenantId, onSucio }) {
   const [borrador, setBorrador] = useState(null)
   const [montoTexto, setMontoTexto] = useState('')
   const [errorParametros, setErrorParametros] = useState('')
-  const [guardando, setGuardando] = useState(false)
+  const accionParametros = useAccion()
 
   useEffect(() => {
     let activo = true
@@ -151,19 +153,19 @@ export default function ConfigCobros({ tenantId, onSucio }) {
     [perfiles],
   )
 
-  async function cargarDefaults() {
+  function errorValidacion(mensaje) {
+    const err = new Error(mensaje)
+    err.validacion = true
+    return err
+  }
+
+  async function operacionDefaults() {
     setErrorPerfiles('')
-    try {
-      for (const perfil of faltanDefault) {
-        const { id, ...datos } = perfil
-        await crearPerfilCobro(db, tenantId, datos, { uid, perfilId: id })
-      }
-      mostrarExito('Perfiles por defecto cargados')
-      recargarPerfiles()
-    } catch (err) {
-      if (esErrorDeNegocio(err)) setErrorPerfiles(err.message)
-      else mostrarErrorTecnico('cargar-perfiles', err)
+    for (const perfil of faltanDefault) {
+      const { id, ...datos } = perfil
+      await crearPerfilCobro(db, tenantId, datos, { uid, perfilId: id })
     }
+    return true
   }
 
   function editarParametros(cambios) {
@@ -171,30 +173,14 @@ export default function ConfigCobros({ tenantId, onSucio }) {
     setBorrador((prev) => ({ ...prev, ...cambios }))
   }
 
-  async function guardarParametros() {
+  async function operacionParametros() {
     const montoCents = parsearUSD(montoTexto)
     if (montoCents === null) {
-      setErrorParametros('El pago del profesor no es un monto válido')
-      return
+      throw errorValidacion('El pago del profesor no es un monto válido')
     }
-    const payload = { ...borrador, pagoProfesor: { ...borrador.pagoProfesor, montoCents } }
-    setGuardando(true)
     setErrorParametros('')
-    try {
-      const normalizado = await setParametros(db, tenantId, payload, { uid })
-      setGuardados(normalizado)
-      setBorrador(normalizado)
-      setMontoTexto(formatearUSD(normalizado.pagoProfesor.montoCents))
-      mostrarExito('Parámetros guardados')
-    } catch (err) {
-      if (esErrorDeNegocio(err)) setErrorParametros(err.message)
-      else {
-        setErrorParametros(MENSAJE_TECNICO_INLINE)
-        mostrarErrorTecnico('guardar-parametros', err)
-      }
-    } finally {
-      setGuardando(false)
-    }
+    const payload = { ...borrador, pagoProfesor: { ...borrador.pagoProfesor, montoCents } }
+    return setParametros(db, tenantId, payload, { uid })
   }
 
   function descartarParametros() {
@@ -223,9 +209,23 @@ export default function ConfigCobros({ tenantId, onSucio }) {
         <div className="lista-sedes__cab">
           <h2 className="lista-sedes__titulo">Perfiles de cobro</h2>
           {faltanDefault.length ? (
-            <button type="button" className="btn btn--secondary" onClick={cargarDefaults}>
+            <BotonAccion
+              onClick={operacionDefaults}
+              accion="cargar-perfiles"
+              textoOcupado="Cargando…"
+              className="btn btn--secondary"
+              alExito={recargarPerfiles}
+              alError={(err) => {
+                if (esErrorDeNegocio(err)) {
+                  setErrorPerfiles(err.message)
+                  avisarError(err.message)
+                } else {
+                  mostrarErrorTecnico('cargar-perfiles', err)
+                }
+              }}
+            >
               Cargar por defecto
-            </button>
+            </BotonAccion>
           ) : null}
         </div>
 
@@ -518,14 +518,35 @@ export default function ConfigCobros({ tenantId, onSucio }) {
               <button
                 type="button"
                 className="btn btn--secondary"
-                disabled={guardando}
+                disabled={accionParametros.ocupado}
                 onClick={descartarParametros}
               >
                 Descartar
               </button>
-              <button type="button" className="btn-cta" disabled={guardando} onClick={guardarParametros}>
+              <BotonAccion
+                onClick={operacionParametros}
+                accion="guardar-parametros"
+                textoOcupado="Guardando…"
+                className="btn-cta"
+                alExito={(normalizado) => {
+                  setGuardados(normalizado)
+                  setBorrador(normalizado)
+                  setMontoTexto(formatearUSD(normalizado.pagoProfesor.montoCents))
+                }}
+                alError={(err) => {
+                  if (err?.validacion) {
+                    setErrorParametros(err.message)
+                  } else if (esErrorDeNegocio(err)) {
+                    setErrorParametros(err.message)
+                    avisarError(err.message)
+                  } else {
+                    setErrorParametros(MENSAJE_TECNICO_INLINE)
+                    mostrarErrorTecnico('guardar-parametros', err)
+                  }
+                }}
+              >
                 Guardar
-              </button>
+              </BotonAccion>
             </div>
           </div>
         ) : errorParametros ? (
@@ -540,41 +561,49 @@ export default function ConfigCobros({ tenantId, onSucio }) {
 
 /** Una fila de perfil: nombre, resumen, estado y menú de acciones. */
 function FilaPerfil({ tenantId, perfil, uid, onChanged }) {
-  const { mostrarExito, mostrarErrorTecnico, confirmar } = useAvisos()
+  const { avisarError, mostrarErrorTecnico, confirmar } = useAvisos()
   const [editando, setEditando] = useState(null)
   const [error, setError] = useState('')
-  const [guardando, setGuardando] = useState(false)
   const activo = perfil.activo !== false
+  const accionGuardar = useAccion()
+  const accionAlternar = useAccion()
 
   function abrirEdicion() {
     setError('')
     setEditando({ nombre: perfil.nombre, personas: perfil.personas, modo: perfil.modo })
   }
 
-  async function guardar(event) {
+  function guardar(event) {
     event.preventDefault()
-    setGuardando(true)
-    try {
-      await actualizarPerfilCobro(
-        db,
-        tenantId,
-        perfil.id,
-        {
-          nombre: editando.nombre,
-          personas: editando.personas,
-          modo: editando.modo,
+    accionGuardar.ejecutar(
+      () =>
+        actualizarPerfilCobro(
+          db,
+          tenantId,
+          perfil.id,
+          {
+            nombre: editando.nombre,
+            personas: editando.personas,
+            modo: editando.modo,
+          },
+          { uid },
+        ),
+      {
+        accion: 'guardar-perfil',
+        alExito: () => {
+          setEditando(null)
+          onChanged()
         },
-        { uid },
-      )
-      mostrarExito('Perfil guardado')
-      setEditando(null)
-      onChanged()
-    } catch (err) {
-      if (esErrorDeNegocio(err)) setError(err.message)
-      else mostrarErrorTecnico('guardar-perfil', err)
-    } finally {
-      setGuardando(false)
-    }
+        alError: (err) => {
+          if (esErrorDeNegocio(err)) {
+            setError(err.message)
+            avisarError(err.message)
+          } else {
+            mostrarErrorTecnico('guardar-perfil', err)
+          }
+        },
+      },
+    )
   }
 
   async function alternar() {
@@ -587,16 +616,14 @@ function FilaPerfil({ tenantId, perfil, uid, onChanged }) {
       })
       if (!confirmado) return
     }
-    setGuardando(true)
-    try {
-      await cambiarActivaPerfilCobro(db, tenantId, perfil.id, !activo, { uid })
-      mostrarExito(`${perfil.nombre} ${activo ? 'desactivado' : 'reactivado'}`)
-      onChanged()
-    } catch (err) {
-      mostrarErrorTecnico(activo ? 'desactivar-perfil' : 'reactivar-perfil', err)
-    } finally {
-      setGuardando(false)
-    }
+    accionAlternar.ejecutar(
+      () => cambiarActivaPerfilCobro(db, tenantId, perfil.id, !activo, { uid }),
+      {
+        accion: activo ? 'desactivar-perfil' : 'reactivar-perfil',
+        alExito: onChanged,
+        alError: (err) => mostrarErrorTecnico(activo ? 'desactivar-perfil' : 'reactivar-perfil', err),
+      },
+    )
   }
 
   if (editando) {
@@ -609,7 +636,7 @@ function FilaPerfil({ tenantId, perfil, uid, onChanged }) {
             value={editando.nombre}
             maxLength={LIMITE_NOMBRE_PERFIL}
             autoFocus
-            disabled={guardando}
+            disabled={accionGuardar.ocupado}
             onChange={(e) => {
               setEditando({ ...editando, nombre: e.target.value })
               setError('')
@@ -628,7 +655,7 @@ function FilaPerfil({ tenantId, perfil, uid, onChanged }) {
               <select
                 className="form__input form__input--compacto"
                 value={editando.personas ?? ''}
-                disabled={guardando}
+                disabled={accionGuardar.ocupado}
                 onChange={(e) =>
                   setEditando({
                     ...editando,
@@ -649,7 +676,7 @@ function FilaPerfil({ tenantId, perfil, uid, onChanged }) {
               <select
                 className="form__input form__input--compacto"
                 value={editando.modo}
-                disabled={guardando}
+                disabled={accionGuardar.ocupado}
                 onChange={(e) => setEditando({ ...editando, modo: e.target.value })}
               >
                 {MODOS_COBRO.map((valor) => (
@@ -666,9 +693,9 @@ function FilaPerfil({ tenantId, perfil, uid, onChanged }) {
             </p>
           ) : null}
           <div className="perfil-form__acciones">
-            <button type="submit" className="btn" disabled={guardando}>
-              {guardando ? 'Guardando…' : 'Guardar'}
-            </button>
+            <BotonAccion type="submit" control={accionGuardar} className="btn">
+              Guardar
+            </BotonAccion>
             <button type="button" className="btn btn--secondary" onClick={() => setEditando(null)}>
               Cancelar
             </button>
@@ -706,13 +733,13 @@ function FilaPerfil({ tenantId, perfil, uid, onChanged }) {
 
 /** Alta de un perfil en línea: nombre, personas y modo. */
 function AltaPerfil({ tenantId, uid, onCreated }) {
-  const { mostrarExito, mostrarErrorTecnico } = useAvisos()
+  const { avisarError, mostrarErrorTecnico } = useAvisos()
   const [abierto, setAbierto] = useState(false)
   const [nombre, setNombre] = useState('')
   const [personas, setPersonas] = useState('')
   const [modo, setModo] = useState('total')
   const [error, setError] = useState('')
-  const [guardando, setGuardando] = useState(false)
+  const accionCrear = useAccion()
 
   function cerrar() {
     setAbierto(false)
@@ -722,25 +749,32 @@ function AltaPerfil({ tenantId, uid, onCreated }) {
     setError('')
   }
 
-  async function enviar(event) {
+  function enviar(event) {
     event.preventDefault()
-    setGuardando(true)
-    try {
-      await crearPerfilCobro(
-        db,
-        tenantId,
-        { nombre, personas: personas === '' ? null : Number(personas), modo },
-        { uid },
-      )
-      mostrarExito(`Perfil agregado: ${nombre}`)
-      cerrar()
-      onCreated()
-    } catch (err) {
-      if (esErrorDeNegocio(err)) setError(err.message)
-      else mostrarErrorTecnico('crear-perfil', err)
-    } finally {
-      setGuardando(false)
-    }
+    accionCrear.ejecutar(
+      () =>
+        crearPerfilCobro(
+          db,
+          tenantId,
+          { nombre, personas: personas === '' ? null : Number(personas), modo },
+          { uid },
+        ),
+      {
+        accion: 'crear-perfil',
+        alExito: () => {
+          cerrar()
+          onCreated()
+        },
+        alError: (err) => {
+          if (esErrorDeNegocio(err)) {
+            setError(err.message)
+            avisarError(err.message)
+          } else {
+            mostrarErrorTecnico('crear-perfil', err)
+          }
+        },
+      },
+    )
   }
 
   if (!abierto) {
@@ -759,7 +793,7 @@ function AltaPerfil({ tenantId, uid, onCreated }) {
         placeholder="Nombre del perfil nuevo"
         value={nombre}
         autoFocus
-        disabled={guardando}
+        disabled={accionCrear.ocupado}
         onChange={(e) => {
           setNombre(e.target.value)
           setError('')
@@ -777,7 +811,7 @@ function AltaPerfil({ tenantId, uid, onCreated }) {
           <select
             className="form__input form__input--compacto"
             value={personas}
-            disabled={guardando}
+            disabled={accionCrear.ocupado}
             onChange={(e) => setPersonas(e.target.value)}
           >
             <option value="">Cualquiera</option>
@@ -793,7 +827,7 @@ function AltaPerfil({ tenantId, uid, onCreated }) {
           <select
             className="form__input form__input--compacto"
             value={modo}
-            disabled={guardando}
+            disabled={accionCrear.ocupado}
             onChange={(e) => setModo(e.target.value)}
           >
             {MODOS_COBRO.map((valor) => (
@@ -810,9 +844,9 @@ function AltaPerfil({ tenantId, uid, onCreated }) {
         </p>
       ) : null}
       <div className="perfil-form__acciones">
-        <button type="submit" className="btn" disabled={guardando}>
-          {guardando ? 'Guardando…' : 'Agregar'}
-        </button>
+        <BotonAccion type="submit" control={accionCrear} className="btn">
+          Agregar
+        </BotonAccion>
         <button type="button" className="btn btn--secondary" onClick={cerrar}>
           Cancelar
         </button>

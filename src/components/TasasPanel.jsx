@@ -1,8 +1,17 @@
 import { useState } from 'react'
+import BotonAccion from './BotonAccion'
 import { useAvisos } from '../context/AvisosContext'
 import { useTasas } from '../context/TasasContext'
+import useAccion from '../hooks/useAccion'
 import { formatearFechaLarga, formatearFechaHora } from '../lib/fechas'
 import { etiquetaFuente, formatearBs, formatearEur, momentoDeTasa } from '../lib/tasas'
+
+/** Error esperado cuando la API de tasas no responde (aviso corto al usuario). */
+function errorTasaNoDisponible(mensaje) {
+  const error = new Error(mensaje)
+  error.name = 'TasaNoDisponibleError'
+  return error
+}
 
 /** EUR por USD implícito en las dos tasas (Bs/USD ÷ Bs/EUR). */
 function eurosPorDolar(tasas) {
@@ -17,12 +26,11 @@ function eurosPorDolar(tasas) {
  */
 export default function TasasPanel({ permiteEditar = false }) {
   const { tasas, cargando, fuente, vencida, guardarManual, restaurarAutomatica, refrescar } = useTasas()
-  const { mostrarExito, mostrarError, mostrarErrorTecnico } = useAvisos()
+  const { avisarError } = useAvisos()
   const [bsUsd, setBsUsd] = useState('')
   const [bsEur, setBsEur] = useState('')
-  const [guardando, setGuardando] = useState(false)
-  const [actualizando, setActualizando] = useState(false)
   const [tasaVista, setTasaVista] = useState(null)
+  const accionGuardar = useAccion()
 
   // Sincroniza los inputs cuando llega o cambia la tasa (ajuste en render, sin
   // efecto): conserva lo que el admin está tipeando hasta que la tasa cambie.
@@ -32,50 +40,34 @@ export default function TasasPanel({ permiteEditar = false }) {
     setBsEur(String(tasas.bsPorEur))
   }
 
-  async function guardar(evento) {
+  function guardar(evento) {
     evento.preventDefault()
     const usd = Number(String(bsUsd).replace(',', '.'))
     const eur = Number(String(bsEur).replace(',', '.'))
     if (!(usd > 0) || !(eur > 0)) {
-      mostrarError('Las tasas deben ser números mayores a 0.')
+      avisarError('Las tasas deben ser números mayores a 0.')
       return
     }
-    setGuardando(true)
-    try {
-      await guardarManual(usd, eur)
-      mostrarExito('Tasa manual guardada')
-    } catch (err) {
-      mostrarErrorTecnico('guardar-tasa', err)
-    } finally {
-      setGuardando(false)
-    }
+    accionGuardar.ejecutar(() => guardarManual(usd, eur), { accion: 'guardar-tasa' })
   }
 
   async function restaurar() {
-    setGuardando(true)
-    try {
-      const normalizado = await restaurarAutomatica()
-      if (normalizado) mostrarExito('Tasa automática restaurada')
-      else mostrarError('La API de tasas no respondió. Se conserva la tasa actual.')
-    } catch (err) {
-      mostrarErrorTecnico('restaurar-tasa', err)
-    } finally {
-      setGuardando(false)
+    const normalizado = await restaurarAutomatica()
+    if (!normalizado) {
+      throw errorTasaNoDisponible('La API de tasas no respondió. Se conserva la tasa actual.')
     }
   }
 
   /*
    * "Actualizar": fuerza una consulta fresca saltando el caché (por si la tasa
    * del día cambió). Si la API/red falla, se conserva la tasa que ya se ve y se
-   * muestra un error corto.
+   * muestra un error corto. Es una acción larga conocida: el spinner aparece al
+   * instante.
    */
   async function actualizar() {
-    setActualizando(true)
-    try {
-      const ok = await refrescar()
-      if (!ok) mostrarError('No se pudo actualizar la tasa. Se mantiene la actual.')
-    } finally {
-      setActualizando(false)
+    const ok = await refrescar()
+    if (!ok) {
+      throw errorTasaNoDisponible('No se pudo actualizar la tasa. Se mantiene la actual.')
     }
   }
 
@@ -118,14 +110,18 @@ export default function TasasPanel({ permiteEditar = false }) {
         ) : (
           <span className="tasas-strip__meta">Sin tasa disponible · montos en USD</span>
         )}
-        <button
-          type="button"
-          className="btn btn--secondary tasas-strip__btn"
-          disabled={actualizando || cargando}
+        <BotonAccion
           onClick={actualizar}
+          accion="actualizar-tasa"
+          sinExito
+          inmediato
+          textoOcupado="Actualizando tasa…"
+          className="btn btn--secondary tasas-strip__btn"
+          disabled={cargando && !tasas}
+          alError={(err) => avisarError(err.message)}
         >
-          {actualizando ? 'Actualizando…' : 'Actualizar'}
-        </button>
+          Actualizar
+        </BotonAccion>
       </section>
     )
   }
@@ -189,17 +185,19 @@ export default function TasasPanel({ permiteEditar = false }) {
             />
           </label>
           <div className="tasas__acciones">
-            <button type="submit" className="btn-cta" disabled={guardando}>
+            <BotonAccion type="submit" control={accionGuardar} textoOcupado="Guardando…" className="btn-cta">
               Guardar manual
-            </button>
-            <button
-              type="button"
-              className="btn btn--secondary"
-              disabled={guardando}
+            </BotonAccion>
+            <BotonAccion
               onClick={restaurar}
+              accion="restaurar-tasa"
+              sinExito
+              textoOcupado="Restaurando…"
+              className="btn btn--secondary"
+              alError={(err) => avisarError(err.message)}
             >
               Usar automática
-            </button>
+            </BotonAccion>
           </div>
           <span className="parametros__hint">
             La tasa manual se guarda para esta academia y no se pisa con la de la API.

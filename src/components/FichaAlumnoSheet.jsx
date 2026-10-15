@@ -1,12 +1,13 @@
 import { useRef, useState } from 'react'
 import { useAuth } from '../context/AuthContext'
-import { useAvisos } from '../context/AvisosContext'
 import { db } from '../firebase/config'
 import { actualizarAlumno, crearAlumno } from '../firebase/db'
+import useAccion from '../hooks/useAccion'
 import useCierreSeguro from '../hooks/useCierreSeguro'
 import { CATEGORIAS, etiquetaCategoria } from '../lib/agenda'
 import { hayCambios } from '../lib/avisos'
 import { hoyISO } from '../lib/fechas'
+import BotonAccion from './BotonAccion'
 import PlanCredito from './PlanCredito'
 import { CloseIcon } from './Icons'
 
@@ -115,13 +116,12 @@ function validar(form) {
  */
 export default function FichaAlumnoSheet({ tenantId, alumno = null, onClose, onSaved }) {
   const { user } = useAuth()
-  const { mostrarErrorTecnico, mostrarExito } = useAvisos()
   const [form, setForm] = useState(() => formDeAlumno(alumno))
   // Foto de los valores iniciales: base para detectar cambios sin guardar.
   const [inicial] = useState(() => formDeAlumno(alumno))
   const [errores, setErrores] = useState({})
-  const [enviando, setEnviando] = useState(false)
   const campos = useRef({})
+  const accionGuardar = useAccion()
 
   // Escape con cambios sin guardar: pregunta antes de cerrar.
   useCierreSeguro({ sucio: hayCambios(inicial, form), onCerrar: onClose })
@@ -146,7 +146,7 @@ export default function FichaAlumnoSheet({ tenantId, alumno = null, onClose, onS
     if (clave) campos.current[clave]?.focus()
   }
 
-  async function enviar(event) {
+  function enviar(event) {
     event.preventDefault()
     const erroresNuevos = validar(form)
     setErrores(erroresNuevos)
@@ -156,8 +156,7 @@ export default function FichaAlumnoSheet({ tenantId, alumno = null, onClose, onS
       return
     }
 
-    setEnviando(true)
-    try {
+    {
       const datos = {
         nombre: form.nombre.trim(),
         apellidos: form.apellidos.trim(),
@@ -190,18 +189,13 @@ export default function FichaAlumnoSheet({ tenantId, alumno = null, onClose, onS
         }
       }
       const opciones = { uid: user?.uid ?? null }
-      if (alumno) {
-        await actualizarAlumno(db, tenantId, alumno.id, datos, opciones)
-        mostrarExito('Alumno guardado')
-      } else {
-        await crearAlumno(db, tenantId, datos, opciones)
-        mostrarExito('Alumno creado')
-      }
-      onSaved?.()
-    } catch (err) {
-      mostrarErrorTecnico('guardar-alumno', err)
-    } finally {
-      setEnviando(false)
+      accionGuardar.ejecutar(
+        () =>
+          alumno
+            ? actualizarAlumno(db, tenantId, alumno.id, datos, opciones)
+            : crearAlumno(db, tenantId, datos, opciones),
+        { accion: 'guardar-alumno', alExito: () => onSaved?.() },
+      )
     }
   }
 
@@ -504,9 +498,9 @@ export default function FichaAlumnoSheet({ tenantId, alumno = null, onClose, onS
           <span>Activo</span>
         </label>
 
-        <button className="btn" type="submit" disabled={enviando}>
-          {enviando ? 'Guardando…' : alumno ? 'Guardar cambios' : 'Crear alumno'}
-        </button>
+        <BotonAccion type="submit" control={accionGuardar} textoOcupado="Guardando…">
+          {alumno ? 'Guardar cambios' : 'Crear alumno'}
+        </BotonAccion>
         <button type="button" className="btn btn--secondary" onClick={onClose}>
           Cancelar
         </button>

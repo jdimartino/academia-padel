@@ -1,7 +1,9 @@
 import { useState } from 'react'
 import { useLocation, useNavigate } from 'react-router-dom'
+import BotonAccion from '../components/BotonAccion'
 import { useAuth } from '../context/AuthContext'
 import { useAvisos } from '../context/AvisosContext'
+import useAccion from '../hooks/useAccion'
 
 /*
  * Mensajes propios para los códigos de Auth conocidos: son errores esperados y
@@ -19,26 +21,25 @@ const MESSAGES = {
 
 export default function Login() {
   const { login } = useAuth()
-  const { mostrarError, mostrarErrorTecnico } = useAvisos()
+  const { avisarError, mostrarErrorTecnico } = useAvisos()
   const navigate = useNavigate()
   const location = useLocation()
   const [email, setEmail] = useState('')
   const [password, setPassword] = useState('')
-  const [submitting, setSubmitting] = useState(false)
+  const accion = useAccion()
 
-  async function handleSubmit(event) {
+  function handleSubmit(event) {
     event.preventDefault()
-    setSubmitting(true)
-    try {
-      await login(email, password)
-      navigate(location.state?.from ?? '/', { replace: true })
-    } catch (err) {
-      const mensaje = MESSAGES[err?.code]
-      if (mensaje) mostrarError(mensaje)
-      else mostrarErrorTecnico('iniciar-sesion', err)
-    } finally {
-      setSubmitting(false)
-    }
+    accion.ejecutar(() => login(email, password), {
+      accion: 'iniciar-sesion',
+      sinExito: true,
+      alExito: () => navigate(location.state?.from ?? '/', { replace: true }),
+      alError: (err) => {
+        const mensaje = MESSAGES[err?.code]
+        if (mensaje) avisarError(mensaje)
+        else mostrarErrorTecnico('iniciar-sesion', err)
+      },
+    })
   }
 
   return (
@@ -79,9 +80,9 @@ export default function Login() {
           />
         </div>
 
-        <button className="btn" type="submit" disabled={submitting}>
-          {submitting ? 'Entrando…' : 'Iniciar sesión'}
-        </button>
+        <BotonAccion type="submit" control={accion} textoOcupado="Entrando…">
+          Iniciar sesión
+        </BotonAccion>
       </form>
     </main>
   )
