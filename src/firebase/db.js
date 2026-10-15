@@ -86,6 +86,7 @@ import {
   vencimientoValido,
 } from '../lib/cobros.js'
 import { LIMITE_MONTO_CENTS, LIMITE_TARIFA_CENTS, centsValidos } from '../lib/dinero.js'
+import { normalizarPorAlumnoProfesor } from '../lib/profesores.js'
 import { sumarDias } from '../lib/fechas.js'
 import { FUENTES_TASA, LIMITE_BS_POR_UNIDAD } from '../lib/tasas.js'
 
@@ -770,6 +771,8 @@ const refCredito = (db, tenantId, creditoId) =>
   doc(db, 'academias', tenantId, 'creditos', creditoId)
 const refMovimientoCredito = (db, tenantId, movimientoId) =>
   doc(db, 'academias', tenantId, 'movimientosCredito', movimientoId)
+const refUsuario = (db, tenantId, uid) => doc(db, 'academias', tenantId, 'usuarios', uid)
+const coleccionUsuarios = (db, tenantId) => collection(db, 'academias', tenantId, 'usuarios')
 
 /* --------------------------------------------------------------------- */
 /* Lecturas                                                               */
@@ -1706,6 +1709,169 @@ export async function getProfesores(db, tenantId, opciones = {}) {
 }
 
 /* --------------------------------------------------------------------- */
+/* Acceso de profesores (Fase 7)                                           */
+/* --------------------------------------------------------------------- */
+
+/*
+ * Un PROFESOR es una ficha (`profesores/{profesorId}`) y, además, puede tener
+ * ACCESO a la app. Ese acceso vive en `usuarios/{uid}` (roles de login), NO en
+ * `miembros`, que sigue siendo la fuente del administrador. El admin crea la
+ * cuenta de Auth con `crearCuenta` (instancia secundaria, ver authProfesor.js),
+ * la contraseña temporal nunca se guarda, y acá solo se escribe el vínculo
+ * `usuario → profesor`. Las reglas validan que `profesorId` exista.
+ */
+
+/** Tope de usuarios de profesor que se listan de una vez. */
+export const LIMITE_USUARIOS_PROFESOR = 200
+
+/** Tope de clases que se listan para un profesor. */
+export const LIMITE_CLASES_PROFESOR = 100
+
+/** Lee el documento de acceso de un uid (profesor). 1 lectura. */
+export async function getUsuarioProfesor(db, tenantId, uid) {
+  const snap = await getDoc(refUsuario(db, tenantId, uid))
+  return snap.exists() ? { id: snap.id, ...snap.data() } : null
+}
+
+/**
+ * Accesos de PROFESOR del usuario a través de las academias: es el
+ * descubrimiento del arranque de sesión cuando no hay `miembros` (los profesores
+ * no tienen membresía). Acotado por `uid` + `activo` + limit. Las reglas solo
+ * dejan leer los documentos propios y activos.
+ */
+export async function getMisAccesosProfesor(db, uid, opciones = {}) {
+  const { limite = 20 } = opciones
+  const pedido = Number.isFinite(limite) ? Math.floor(limite) : 20
+  const q = query(
+    collectionGroup(db, 'usuarios'),
+    where('uid', '==', uid),
+    where('activo', '==', true),
+    limit(Math.min(Math.max(pedido, 1), 50)),
+  )
+  const snap = await getDocs(q)
+  return snap.docs.map((d) => ({ id: d.id, tenantId: d.ref.parent.parent.id, ...d.data() }))
+}
+
+/** Lista los accesos de profesor del tenant. Acotado por tenant + limit. */
+export async function listarUsuariosProfesor(db, tenantId, opciones = {}) {
+  const { limite = LIMITE_USUARIOS_PROFESOR } = opciones
+  const pedido = Number.isFinite(limite) ? Math.floor(limite) : LIMITE_USUARIOS_PROFESOR
+  const tope = Math.min(Math.max(pedido, 1), LIMITE_USUARIOS_PROFESOR)
+  const q = query(coleccionUsuarios(db, tenantId), limit(tope))
+  const snap = await getDocs(q)
+  return snap.docs.map((d) => ({ id: d.id, ...d.data() }))
+}
+
+/**
+ * Crea el acceso de un profesor: primero la cuenta de Auth (con la función
+ * `crearCuenta` inyectada, que resuelve `{ uid }`) y después el documento
+ * `usuarios/{uid}`. Devuelve el uid. La contraseña NO se escribe en Firestore ni
+ * se loguea; sin `crearCuenta` se falla para no dejar cuentas a medias.
+ */
+export async function crearAccesoProfesor(db, tenantId, datos = {}, opciones = {}) {
+  const { now = new Date(), crearCuenta } = opciones
+  const email = String(datos.email ?? '').trim().toLowerCase()
+  const password = datos.password
+  const profesorId = String(datos.profesorId ?? '').trim()
+  if (!email) throw new FichaInvalidaError('El acceso necesita un email')
+  if (!profesorId) throw new FichaInvalidaError('El acceso necesita un profesor')
+  if (typeof crearCuenta !== 'function') {
+    throw new FichaInvalidaError('Falta el creador de cuentas de profesor')
+  }
+  const { uid: uidProfesor } = await crearCuenta({ email, password })
+  if (!uidProfesor) throw new FichaInvalidaError('La cuenta de profesor no devolvió un uid')
+  await setDoc(refUsuario(db, tenantId, uidProfesor), {
+    uid: uidProfesor,
+    rol: 'profesor',
+    profesorId,
+    email,
+    activo: true,
+    creadoEn: Timestamp.fromDate(now),
+  })
+  return { uid: uidProfesor }
+}
+
+/** Activa o desactiva el acceso de un profesor (soft delete). */
+export async function cambiarActivoProfesor(db, tenantId, uid, activo, opciones = {}) {
+  const { actualizadoPor = null, now = new Date() } = opciones
+  await updateDoc(refUsuario(db, tenantId, uid), {
+    activo: Boolean(activo),
+    actualizadoPor,
+    actualizadoEn: Timestamp.fromDate(now),
+  })
+  return { uid, activo: Boolean(activo) }
+}
+
+/**
+ * Clases de un profesor desde `desde` (por defecto HOY local) hacia adelante,
+ * ordenadas por fecha y hora. Acotado por tenant + profesor + rango + limit.
+ * Usa el índice `clases: profesorId + fecha` de firestore.indexes.json.
+ */
+export async function getClasesDeProfesor(db, tenantId, profesorId, opciones = {}) {
+  const {
+    desde = fechaHoyLocal(),
+    hasta = null,
+    limite = LIMITE_CLASES_PROFESOR,
+  } = opciones
+  if (!profesorId) throw new ClaseInvalidaError('Falta el profesor')
+  const pedido = Number.isFinite(limite) ? Math.floor(limite) : LIMITE_CLASES_PROFESOR
+  const tope = Math.min(Math.max(pedido, 1), LIMITE_CLASES_PROFESOR)
+  const filtros = [where('profesorId', '==', profesorId), where('fecha', '>=', desde)]
+  if (hasta) filtros.push(where('fecha', '<=', hasta))
+  const q = query(
+    collection(db, 'academias', tenantId, 'clases'),
+    ...filtros,
+    orderBy('fecha'),
+    limit(tope),
+  )
+  const snap = await getDocs(q)
+  return snap.docs
+    .map((d) => ({ id: d.id, ...d.data() }))
+    .sort(
+      (a, b) =>
+        String(a.fecha ?? '').localeCompare(String(b.fecha ?? '')) ||
+        String(a.horaInicio ?? '').localeCompare(String(b.horaInicio ?? '')),
+    )
+}
+
+/**
+ * Guarda la asistencia que carga un profesor en una clase ABIERTA (`reservada`).
+ * Escribe SOLO `asistenciaProfesor` (las reglas lo exigen: `affectedKeys` acotado
+ * a ese campo). Valida contra los alumnos reales de la clase con el helper puro
+ * y reenvuelve su error como error de negocio.
+ */
+export async function guardarAsistenciaProfesor(db, tenantId, claseId, porAlumno, opciones = {}) {
+  const { uid = null, profesorId = null, now = new Date() } = opciones
+  if (!uid) throw new ClaseInvalidaError('Falta el usuario que registra la asistencia')
+  const claseRef = refClase(db, tenantId, claseId)
+  const snap = await getDoc(claseRef)
+  if (!snap.exists()) throw new ClaseInvalidaError(`La clase ${claseId} no existe`)
+  const d = snap.data()
+  if (profesorId && d.profesorId !== profesorId) {
+    throw new ClaseInvalidaError('La clase no pertenece a este profesor')
+  }
+  if (d.estado !== 'reservada') {
+    throw new ClaseInvalidaError(
+      `Solo se registra la asistencia de una clase abierta (estado "${d.estado}")`,
+    )
+  }
+  let normalizado
+  try {
+    normalizado = normalizarPorAlumnoProfesor(porAlumno, d.alumnos ?? [])
+  } catch (error) {
+    throw new ClaseInvalidaError(error.message)
+  }
+  await updateDoc(claseRef, {
+    asistenciaProfesor: {
+      porAlumno: normalizado,
+      registradoPor: uid,
+      registradoEn: Timestamp.fromDate(now),
+    },
+  })
+  return { claseId }
+}
+
+/* --------------------------------------------------------------------- */
 /* Fichas: alumnos y profesores                                            */
 /* --------------------------------------------------------------------- */
 
@@ -2221,6 +2387,7 @@ export async function crearClase(db, tenantId, datos, opciones = {}) {
       // Nombres tomados de los documentos, no del cliente.
       sedeNombre: snapSede.data().nombre ?? null,
       canchaId: datos.canchaId,
+      canchaNombre: nombreDeCancha({ id: datos.canchaId, ...snapCancha.data() }, datos.canchaId),
       profesorId: datos.profesorId,
       profesorNombre: nombreCompleto(snapProfesor.data()),
       fecha: datos.fecha,
@@ -2473,6 +2640,10 @@ export async function reprogramarClase(db, tenantId, claseId, nuevoCambio = {}, 
     if (cobro !== undefined) cambios.cobro = cobro
     // Los nombres SIEMPRE salen del documento, no del cliente.
     cambios.sedeNombre = snapSede.data().nombre ?? null
+    cambios.canchaNombre = nombreDeCancha(
+      { id: futura.canchaId, ...snapCancha.data() },
+      futura.canchaId,
+    )
     cambios.profesorNombre = nombreCompleto(snapProfesor.data())
     if (asignacion) {
       cambios.alumnos = asignacion.alumnos
@@ -2692,6 +2863,10 @@ export async function cerrarClase(db, tenantId, claseId, datos = {}, opciones = 
   const seFactura = datos.seFactura !== false
   const montoManual = datos.montoCents ?? null
   const motivoAjuste = datos.motivoAjuste ?? null
+  // Origen de la asistencia: si un profesor la había cargado antes del cierre,
+  // queda registrado quién la confirmó. Es solo un sello informativo: NO cambia
+  // el cálculo de cargos ni del pago al profesor.
+  const confirmadoPorProfesorId = datos.confirmadoPorProfesorId ?? null
   if (montoManual !== null && !centsValidos(montoManual, LIMITE_MONTO_CENTS)) {
     throw new CobroInvalidoError(
       `El monto de la clase debe ser un entero de centavos entre 0 y ${LIMITE_MONTO_CENTS}`,
@@ -2941,6 +3116,7 @@ export async function cerrarClase(db, tenantId, claseId, datos = {}, opciones = 
       estado: estadoFinal,
       facturada: Boolean(seFactura),
       cobro,
+      ...(confirmadoPorProfesorId ? { confirmadoPorProfesorId } : {}),
       actualizadoPor: uid,
       actualizadoEn: Timestamp.fromDate(ahora),
     })

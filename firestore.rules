@@ -46,6 +46,67 @@ service cloud.firestore {
       return rol(tenantId) == 'administrador';
     }
 
+    // --- Acceso de profesores (Fase 7) -----------------------------------
+    // El acceso de un PROFESOR vive en `usuarios/{uid}` (roles de login). Es
+    // INDEPENDIENTE de `miembros`: mi `miembros` sigue siendo la fuente del
+    // administrador. Un profesor con `activo == true` puede LEER solo sus
+    // clases y cargarles la asistencia mientras están ABIERTAS (`reservada`).
+    function usuarioPath(tenantId, uid) {
+      return /databases/$(database)/documents/academias/$(tenantId)/usuarios/$(uid);
+    }
+
+    function esProfesorActivo(tenantId) {
+      return signedIn()
+        && exists(usuarioPath(tenantId, request.auth.uid))
+        && get(usuarioPath(tenantId, request.auth.uid)).data.activo == true;
+    }
+
+    function profesorIdDelUsuario(tenantId) {
+      return get(usuarioPath(tenantId, request.auth.uid)).data.profesorId;
+    }
+
+    // Documento de acceso de un profesor: campos exactos del modelo y
+    // `profesorId` apuntando a una ficha de profesor que EXISTE.
+    function usuarioProfesorValido(data) {
+      return data.keys().hasOnly([
+            'uid',
+            'rol',
+            'profesorId',
+            'email',
+            'activo',
+            'creadoEn',
+            'actualizadoPor',
+            'actualizadoEn'
+          ])
+        && data.uid is string
+        && data.rol == 'profesor'
+        && data.profesorId is string
+        && data.email is string
+        && data.activo is bool
+        && (!data.keys().hasAny(['creadoEn']) || data.creadoEn == null || data.creadoEn is timestamp)
+        && (!data.keys().hasAny(['actualizadoPor'])
+            || data.actualizadoPor == null
+            || data.actualizadoPor is string)
+        && (!data.keys().hasAny(['actualizadoEn'])
+            || data.actualizadoEn == null
+            || data.actualizadoEn is timestamp);
+    }
+
+    // La asistencia que carga un profesor: forma exacta, `registradoPor` igual a
+    // quien escribe y `registradoEn` timestamp. Los VALORES de `porAlumno` NO se
+    // pueden validar en las reglas (no hay iteración con predicado sobre un
+    // mapa): acá solo se acota el tamaño y, en la capa de datos, se valida el
+    // enum contra los alumnos reales de la clase.
+    function asistenciaProfesorValida(asistencia) {
+      return asistencia.keys().hasOnly(['porAlumno', 'registradoPor', 'registradoEn'])
+        && asistencia.size() == 3
+        && asistencia.porAlumno is map
+        && asistencia.porAlumno.size() >= 1
+        && asistencia.porAlumno.size() <= 4
+        && asistencia.registradoPor == request.auth.uid
+        && asistencia.registradoEn is timestamp;
+    }
+
     // --- Configuración de sedes y canchas ---------------------------------
     // El horario de una sede es POR DÍA DE LA SEMANA: un mapa con exactamente
     // las claves '0' (lunes) … '6' (domingo) donde cada día es `null` (cerrado)
@@ -450,6 +511,19 @@ service cloud.firestore {
         allow write: if esAdmin(tenantId);
       }
 
+      // Acceso de profesores (Fase 7). El admin crea/desactiva el vínculo hacia
+      // una ficha de profesor que debe existir; un profesor solo puede LEER su
+      // propio documento (arranque de sesión), nunca listarlos ni escribirlos:
+      // así no hay escalada de privilegios. No se borra (se desactiva).
+      match /usuarios/{uid} {
+        allow get: if esAdmin(tenantId) || request.auth.uid == uid;
+        allow list: if esAdmin(tenantId);
+        allow create, update: if esAdmin(tenantId)
+          && usuarioProfesorValido(request.resource.data)
+          && exists(/databases/$(database)/documents/academias/$(tenantId)/profesores/$(request.resource.data.profesorId));
+        allow delete: if false;
+      }
+
       match /sedes/{sedeId} {
         allow read: if esAdmin(tenantId);
         // El admin es el único que escribe. Nombre obligatorio (mismas reglas
@@ -484,10 +558,20 @@ service cloud.firestore {
       // montos enteros >= 0 (el resto del contenido de la clase lo valida la
       // capa de datos, que es la única que escribe acá).
       match /clases/{claseId} {
-        allow read: if esAdmin(tenantId);
+        // El admin ve todas las clases del tenant; un profesor activo ve SOLO
+        // las suyas (`profesorId` == el de su documento de acceso).
+        allow read: if esAdmin(tenantId)
+          || (esProfesorActivo(tenantId) && resource.data.profesorId == profesorIdDelUsuario(tenantId));
         allow create, update: if esAdmin(tenantId)
           && categoriaGrupoValida(request.resource.data)
           && cobroValido(cobroDe(request.resource.data));
+        // Un profesor activo solo carga la `asistenciaProfesor` de sus propias
+        // clases ABIERTAS (`reservada`) y sin tocar ningún otro campo.
+        allow update: if esProfesorActivo(tenantId)
+          && resource.data.profesorId == profesorIdDelUsuario(tenantId)
+          && resource.data.estado == 'reservada'
+          && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['asistenciaProfesor'])
+          && asistenciaProfesorValida(request.resource.data.asistenciaProfesor);
         allow delete: if esAdmin(tenantId);
       }
 
@@ -583,6 +667,16 @@ service cloud.firestore {
     // que el cliente filtre por su propio uid.
     match /{path=**}/miembros/{uid} {
       allow list: if signedIn() && resource.data.uid == request.auth.uid;
+    }
+
+    // Descubrimiento del acceso de un PROFESOR al iniciar sesión:
+    // collectionGroup('usuarios').where('uid','==',uid). Solo puede leer sus
+    // propios documentos de acceso y solo si están activos; así un profesor no
+    // ve el acceso de otro ni accede a ninguna colección de administrador.
+    match /{path=**}/usuarios/{uid} {
+      allow list: if signedIn()
+        && resource.data.uid == request.auth.uid
+        && resource.data.activo == true;
     }
 
     // Todo lo que no esté explícitamente permitido arriba queda bloqueado.

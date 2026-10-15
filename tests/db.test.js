@@ -86,6 +86,13 @@ import {
   validarParametros,
   validarTarifas,
   validarTasas,
+  cambiarActivoProfesor,
+  crearAccesoProfesor,
+  getClasesDeProfesor,
+  getMisAccesosProfesor,
+  getUsuarioProfesor,
+  guardarAsistenciaProfesor,
+  listarUsuariosProfesor,
 } from '../src/firebase/db.js'
 import { PARAMETROS_DEFAULT } from '../src/lib/cobros.js'
 
@@ -93,6 +100,8 @@ const PROJECT_ID = 'academia-padel-jdm'
 const T1 = 't1'
 const ADMIN = 'uid-admin-t1'
 const ALUMNO = 'uid-alumno-t1'
+/** Profesor con ACCESO (Fase 7): su doc vive en `usuarios/{uid}`, no en `miembros`. */
+const PROFE = 'uid-prof-t1'
 /*
  * Fecha de ensayo FUTURA: el "ahora" inyectado de las reservas queda fijo una
  * hora antes de las 18:00 locales (Caracas) de ese día, así la regla "no se
@@ -128,6 +137,7 @@ function semana(porDia = {}, abierto = FRANJA_DEFAULT) {
 let env
 let adminDb
 let alumnoDb
+let profeDb
 
 /** Clase base de ensayo: 18:00-19:00 (una hora en punto, 1 h) con a1. */
 function clase(extra = {}) {
@@ -215,6 +225,16 @@ async function sembrarBase(context) {
     busquedaApellido: 'inactiva nadia',
     activo: false,
   })
+
+  // Acceso de profesor (Fase 7): doc en `usuarios`, vinculado a la ficha p1.
+  await db.doc(`academias/${T1}/usuarios/${PROFE}`).set({
+    uid: PROFE,
+    rol: 'profesor',
+    profesorId: 'p1',
+    email: 'profe@t1.test',
+    activo: true,
+    creadoEn: null,
+  })
 }
 
 before(async () => {
@@ -225,6 +245,7 @@ before(async () => {
   await env.withSecurityRulesDisabled(sembrarBase)
   adminDb = env.authenticatedContext(ADMIN).firestore()
   alumnoDb = env.authenticatedContext(ALUMNO).firestore()
+  profeDb = env.authenticatedContext(PROFE).firestore()
 })
 
 after(async () => {
@@ -3762,5 +3783,256 @@ describe('[F6] tasas BCV (config/tasas)', () => {
   it('solo el admin puede escribir la tasa (las reglas bloquean al alumno)', async () => {
     await assert.rejects(() => setTasas(alumnoDb, T1, TASAS, { uid: ALUMNO }))
     await assert.rejects(() => getTasas(alumnoDb, T1))
+  })
+})
+
+describe('[F7] acceso de profesores y asistencia del profesor', () => {
+  const cobro = {
+    perfilCobroId: 'cuatro',
+    modo: 'total',
+    tarifaHoraCents: 5500,
+    montoEstandarCents: 5500,
+    montoCents: 5500,
+    ajustado: false,
+    motivoAjuste: null,
+  }
+  const presentes = (ids) => ids.map((alumnoId) => ({ alumnoId, estado: 'presente' }))
+
+  it('getUsuarioProfesor lee el acceso y listarUsuariosProfesor lo lista', async () => {
+    const usuario = await getUsuarioProfesor(adminDb, T1, PROFE)
+    assert.equal(usuario.profesorId, 'p1')
+    assert.equal(usuario.activo, true)
+    assert.equal(await getUsuarioProfesor(adminDb, T1, 'nadie'), null)
+
+    const lista = await listarUsuariosProfesor(adminDb, T1)
+    assert.deepEqual(
+      lista.map((u) => u.id),
+      [PROFE],
+    )
+  })
+
+  it('crearAccesoProfesor usa la función inyectada y escribe usuarios/{uid}', async () => {
+    const llamadas = []
+    const fake = async ({ email, password }) => {
+      llamadas.push({ email, password })
+      return { uid: 'uid-nuevo' }
+    }
+    const { uid } = await crearAccesoProfesor(
+      adminDb,
+      T1,
+      { email: 'Nuevo@X.test', password: 'secreta123', profesorId: 'p2' },
+      { crearCuenta: fake },
+    )
+    assert.equal(uid, 'uid-nuevo')
+    assert.deepEqual(llamadas, [{ email: 'nuevo@x.test', password: 'secreta123' }])
+
+    const usuario = await getUsuarioProfesor(adminDb, T1, 'uid-nuevo')
+    assert.equal(usuario.uid, 'uid-nuevo')
+    assert.equal(usuario.rol, 'profesor')
+    assert.equal(usuario.profesorId, 'p2')
+    assert.equal(usuario.email, 'nuevo@x.test')
+    assert.equal(usuario.activo, true)
+    assert.ok(usuario.creadoEn != null)
+  })
+
+  it('getMisAccesosProfesor descubre el tenant por uid (solo activos)', async () => {
+    // Con el cliente del propio profesor (las reglas exigen uid == auth.uid y activo).
+    const propios = await getMisAccesosProfesor(profeDb, PROFE)
+    assert.deepEqual(
+      propios.map((a) => ({ tenantId: a.tenantId, profesorId: a.profesorId })),
+      [{ tenantId: T1, profesorId: 'p1' }],
+    )
+    // Un uid ajeno choca con la regla (uid != auth.uid): la consulta se rechaza.
+    await assert.rejects(() => getMisAccesosProfesor(profeDb, 'otro-uid'))
+  })
+
+  it('crearAccesoProfesor no escribe nada si falta el creador de cuentas o el email', async () => {
+    await assert.rejects(
+      () => crearAccesoProfesor(adminDb, T1, { email: 'x@y.test', profesorId: 'p1' }),
+      FichaInvalidaError,
+    )
+    await assert.rejects(
+      () => crearAccesoProfesor(adminDb, T1, { profesorId: 'p1' }, { crearCuenta: async () => ({ uid: 'z' }) }),
+      FichaInvalidaError,
+    )
+    assert.deepEqual(await listarUsuariosProfesor(adminDb, T1), [
+      { id: PROFE, uid: PROFE, rol: 'profesor', profesorId: 'p1', email: 'profe@t1.test', activo: true, creadoEn: null },
+    ])
+  })
+
+  it('cambiarActivoProfesor desactiva y reactiva (soft delete)', async () => {
+    await cambiarActivoProfesor(adminDb, T1, PROFE, false, { actualizadoPor: ADMIN })
+    assert.equal((await getUsuarioProfesor(adminDb, T1, PROFE)).activo, false)
+    await cambiarActivoProfesor(adminDb, T1, PROFE, true, { actualizadoPor: ADMIN })
+    assert.equal((await getUsuarioProfesor(adminDb, T1, PROFE)).activo, true)
+  })
+
+  it('getClasesDeProfesor devuelve solo las clases del profesor desde `desde`', async () => {
+    const { claseId: mia } = await reservar()
+    const { claseId: ajena } = await reservar({
+      canchaId: 'c2',
+      profesorId: 'p2',
+      horaInicio: '20:00',
+      horaFin: '21:00',
+    })
+    const clases = await getClasesDeProfesor(adminDb, T1, 'p1', { desde: FECHA })
+    assert.deepEqual(
+      clases.map((c) => c.id),
+      [mia],
+    )
+    assert.ok(!clases.some((c) => c.id === ajena))
+  })
+
+  it('el profesor lee sus propias clases con su cliente (reglas) y no las ajenas', async () => {
+    const { claseId } = await reservar()
+    const propias = await getClasesDeProfesor(profeDb, T1, 'p1', { desde: FECHA })
+    assert.ok(propias.some((c) => c.id === claseId))
+
+    const { claseId: ajena } = await reservar({
+      canchaId: 'c2',
+      profesorId: 'p2',
+      horaInicio: '20:00',
+      horaFin: '21:00',
+    })
+    await assert.rejects(() => getClase(profeDb, T1, ajena))
+  })
+
+  it('guardarAsistenciaProfesor escribe solo asistenciaProfesor', async () => {
+    const { claseId } = await reservar({ alumnos: ['a1', 'a2'] })
+    await guardarAsistenciaProfesor(
+      profeDb,
+      T1,
+      claseId,
+      { a1: 'presente', a2: 'ausente_con_aviso' },
+      { uid: PROFE, profesorId: 'p1' },
+    )
+    const clase = await getClase(adminDb, T1, claseId)
+    assert.deepEqual(clase.asistenciaProfesor.porAlumno, {
+      a1: 'presente',
+      a2: 'ausente_con_aviso',
+    })
+    assert.equal(clase.asistenciaProfesor.registradoPor, PROFE)
+    assert.ok(clase.asistenciaProfesor.registradoEn != null)
+    assert.equal(clase.estado, 'reservada')
+  })
+
+  it('guardarAsistenciaProfesor rechaza un estado fuera del enum y no escribe', async () => {
+    const { claseId } = await reservar({ alumnos: ['a1'] })
+    await assert.rejects(
+      () =>
+        guardarAsistenciaProfesor(
+          profeDb,
+          T1,
+          claseId,
+          { a1: 'ausente_avisada' },
+          { uid: PROFE, profesorId: 'p1' },
+        ),
+      ClaseInvalidaError,
+    )
+    assert.equal((await getClase(adminDb, T1, claseId)).asistenciaProfesor, undefined)
+  })
+
+  it('guardarAsistenciaProfesor exige una entrada por cada alumno asignado', async () => {
+    const { claseId } = await reservar({ alumnos: ['a1', 'a2'] })
+    await assert.rejects(
+      () =>
+        guardarAsistenciaProfesor(
+          profeDb,
+          T1,
+          claseId,
+          { a1: 'presente' },
+          { uid: PROFE, profesorId: 'p1' },
+        ),
+      ClaseInvalidaError,
+    )
+  })
+
+  it('guardarAsistenciaProfesor rechaza una clase ya cerrada', async () => {
+    const { claseId } = await reservar({ alumnos: ['a1'], cobro })
+    await cerrarClase(
+      adminDb,
+      T1,
+      claseId,
+      { asistencias: presentes(['a1']) },
+      { uid: ADMIN, ahora: DESPUES_DEL_FIN },
+    )
+    await assert.rejects(
+      () =>
+        guardarAsistenciaProfesor(
+          profeDb,
+          T1,
+          claseId,
+          { a1: 'presente' },
+          { uid: PROFE, profesorId: 'p1' },
+        ),
+      ClaseInvalidaError,
+    )
+  })
+
+  it('guardarAsistenciaProfesor rechaza una clase de otro profesor', async () => {
+    const { claseId } = await reservar({ canchaId: 'c2', profesorId: 'p2' })
+    // Con el cliente del admin se llega a la guardia de la capa de datos (con el
+    // cliente del profesor las reglas ya negarían la lectura previa).
+    await assert.rejects(
+      () =>
+        guardarAsistenciaProfesor(
+          adminDb,
+          T1,
+          claseId,
+          { a1: 'presente' },
+          { uid: PROFE, profesorId: 'p1' },
+        ),
+      ClaseInvalidaError,
+    )
+  })
+
+  it('un profesor inactivo no puede guardar (las reglas bloquean)', async () => {
+    const { claseId } = await reservar({ alumnos: ['a1'] })
+    await cambiarActivoProfesor(adminDb, T1, PROFE, false, { actualizadoPor: ADMIN })
+    await assert.rejects(() =>
+      guardarAsistenciaProfesor(
+        profeDb,
+        T1,
+        claseId,
+        { a1: 'presente' },
+        { uid: PROFE, profesorId: 'p1' },
+      ),
+    )
+  })
+
+  it('cerrarClase registra confirmadoPorProfesorId sin tocar el cobro', async () => {
+    const { claseId } = await reservar({ alumnos: ['a1'], cobro })
+    await guardarAsistenciaProfesor(
+      profeDb,
+      T1,
+      claseId,
+      { a1: 'presente' },
+      { uid: PROFE, profesorId: 'p1' },
+    )
+    await cerrarClase(
+      adminDb,
+      T1,
+      claseId,
+      { asistencias: presentes(['a1']), confirmadoPorProfesorId: 'p1' },
+      { uid: ADMIN, ahora: DESPUES_DEL_FIN },
+    )
+    const clase = await getClase(adminDb, T1, claseId)
+    assert.equal(clase.confirmadoPorProfesorId, 'p1')
+    assert.deepEqual(clase.asistenciaProfesor.porAlumno, { a1: 'presente' })
+    const { cargos } = await getCierreDeClase(adminDb, T1, claseId)
+    assert.equal(cargos.length, 1)
+    assert.equal(cargos[0].montoCents, 5500)
+  })
+
+  it('cerrarClase sin confirmadoPorProfesorId no escribe el sello', async () => {
+    const { claseId } = await reservar({ alumnos: ['a1'], cobro })
+    await cerrarClase(
+      adminDb,
+      T1,
+      claseId,
+      { asistencias: presentes(['a1']) },
+      { uid: ADMIN, ahora: DESPUES_DEL_FIN },
+    )
+    assert.equal((await getClase(adminDb, T1, claseId)).confirmadoPorProfesorId, undefined)
   })
 })

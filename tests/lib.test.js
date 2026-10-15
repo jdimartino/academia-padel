@@ -99,6 +99,13 @@ import {
   usdCentsABS,
   usdCentsAEur,
 } from '../src/lib/tasas.js'
+import {
+  ESTADOS_ASISTENCIA_PROFESOR,
+  estadoCierreAEstadoProfesor,
+  estadoProfesorAEstadoCierre,
+  estadoProfesorValido,
+  normalizarPorAlumnoProfesor,
+} from '../src/lib/profesores.js'
 
 /** Franja de un día en minutos, como la guarda una sede. */
 const dia = (aperturaHoras, cierreHoras) => ({
@@ -1759,5 +1766,58 @@ describe('tasas BCV: parseo, conversión, formato, vencimiento y caché', () => 
     assert.equal(leerTasasCache(null, ahora), null)
     assert.equal(guardarTasasCache(null, tasas), false)
     assert.equal(leerTasasCache({ getItem: () => '{{' }), null)
+  })
+})
+
+describe('acceso de profesores (Fase 7)', () => {
+  it('el enum del profesor tiene sus tres estados', () => {
+    assert.deepEqual(
+      [...ESTADOS_ASISTENCIA_PROFESOR],
+      ['presente', 'ausente_con_aviso', 'ausente_sin_aviso'],
+    )
+    assert.equal(estadoProfesorValido('presente'), true)
+    assert.equal(estadoProfesorValido('ausente_con_aviso'), true)
+    assert.equal(estadoProfesorValido('ausente_avisada'), false)
+    assert.equal(estadoProfesorValido('otro'), false)
+  })
+
+  it('mapea el estado del profesor al del cierre y de vuelta', () => {
+    assert.equal(estadoProfesorAEstadoCierre('presente'), 'presente')
+    assert.equal(estadoProfesorAEstadoCierre('ausente_con_aviso'), 'ausente_avisada')
+    assert.equal(estadoProfesorAEstadoCierre('ausente_sin_aviso'), 'ausente_sin_aviso')
+    assert.equal(estadoProfesorAEstadoCierre('desconocido'), null)
+    assert.equal(estadoCierreAEstadoProfesor('ausente_avisada'), 'ausente_con_aviso')
+    assert.equal(estadoCierreAEstadoProfesor('presente'), 'presente')
+    assert.equal(estadoCierreAEstadoProfesor('ausente_sin_aviso'), 'ausente_sin_aviso')
+    assert.equal(estadoCierreAEstadoProfesor('desconocido'), null)
+  })
+
+  it('normaliza un porAlumno completo y en el orden de los alumnos', () => {
+    const normalizado = normalizarPorAlumnoProfesor(
+      { a2: 'ausente_con_aviso', a1: 'presente', a3: 'ausente_sin_aviso' },
+      ['a1', 'a2', 'a3'],
+    )
+    assert.deepEqual(Object.keys(normalizado), ['a1', 'a2', 'a3'])
+  })
+
+  it('rechaza un porAlumno que no es objeto, incompleto o con alumnos de más', () => {
+    assert.throws(() => normalizarPorAlumnoProfesor(null, ['a1']), /objeto por alumno/)
+    assert.throws(() => normalizarPorAlumnoProfesor([], ['a1']), /objeto por alumno/)
+    assert.throws(() => normalizarPorAlumnoProfesor({ a1: 'presente' }, []), /alumnos asignados/)
+    assert.throws(
+      () => normalizarPorAlumnoProfesor({ a1: 'presente' }, ['a1', 'a2']),
+      /una entrada por cada alumno/,
+    )
+    assert.throws(
+      () => normalizarPorAlumnoProfesor({ a1: 'presente', z9: 'presente' }, ['a1']),
+      /no están en la clase/,
+    )
+  })
+
+  it('rechaza un estado que no pertenece al enum del profesor', () => {
+    assert.throws(
+      () => normalizarPorAlumnoProfesor({ a1: 'ausente_avisada' }, ['a1']),
+      /Estado de asistencia inválido/,
+    )
   })
 })

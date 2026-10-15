@@ -52,6 +52,12 @@ const UID = {
   inactivoT1: 'uid-inactivo-t1',
   dual: 'uid-dual',
   adminT2: 'uid-admin-t2',
+  // Profesores con ACCESO (Fase 7): su doc vive en `usuarios`, vinculado a una
+  // ficha de profesor. profeOtro tiene su propio profesorId (p2) para probar el
+  // rechazo de clases ajenas; profeInactivo tiene el acceso desactivado.
+  profeAcceso: 'uid-profe-acceso',
+  profeOtro: 'uid-profe-otro',
+  profeInactivo: 'uid-profe-inactivo',
   // Autenticado, pero sin documento de membresía en ningún tenant.
   sinMembresia: 'uid-sin-membresia',
 }
@@ -133,6 +139,11 @@ before(async () => {
       activo: true,
       sedes: ['traki'],
     })
+    await setDoc(doc(db, 'academias', T1, 'profesores', 'p2'), {
+      nombre: 'Paola Profesora',
+      activo: true,
+      sedes: ['traki'],
+    })
 
     await setDoc(doc(db, 'academias', T1, 'alumnos', 'a1'), {
       tipo: 'adulto',
@@ -178,6 +189,36 @@ before(async () => {
 
     await setDoc(doc(db, 'academias', T1, 'clases', 'c1'), clase())
     await setDoc(doc(db, 'academias', T2, 'clases', 'c9'), clase())
+
+    // Acceso de profesores (Fase 7): doc en `usuarios` (independiente de
+    // `miembros`), vinculado a una ficha de profesor. Dos clases del profesor p1
+    // (c1 abierta, c3 cerrada) y una del p2 (c2).
+    await setDoc(doc(db, 'academias', T1, 'usuarios', UID.profeAcceso), {
+      uid: UID.profeAcceso,
+      rol: 'profesor',
+      profesorId: 'p1',
+      email: 'profe-acceso@t1.test',
+      activo: true,
+      creadoEn: null,
+    })
+    await setDoc(doc(db, 'academias', T1, 'usuarios', UID.profeOtro), {
+      uid: UID.profeOtro,
+      rol: 'profesor',
+      profesorId: 'p2',
+      email: 'profe-otro@t1.test',
+      activo: true,
+      creadoEn: null,
+    })
+    await setDoc(doc(db, 'academias', T1, 'usuarios', UID.profeInactivo), {
+      uid: UID.profeInactivo,
+      rol: 'profesor',
+      profesorId: 'p1',
+      email: 'profe-inactivo@t1.test',
+      activo: false,
+      creadoEn: null,
+    })
+    await setDoc(doc(db, 'academias', T1, 'clases', 'c2'), clase({ profesorId: 'p2' }))
+    await setDoc(doc(db, 'academias', T1, 'clases', 'c3'), clase({ estado: 'pendiente_cobro' }))
   })
 })
 
@@ -1244,5 +1285,347 @@ describe('[F5] parámetros de mensualidades', () => {
         creditoRequierePago: 'si',
       }),
     )
+  })
+})
+
+describe('[F7] usuarios: solo el admin crea y el profesor lee el suyo', () => {
+  const usuarioRef = (uid) => doc(as(UID.adminT1), 'academias', T1, 'usuarios', uid)
+
+  it('el admin CREA un acceso de profesor válido → ALLOW', async () => {
+    await assertSucceeds(
+      setDoc(usuarioRef('uid-nuevo-1'), {
+        uid: 'uid-nuevo-1',
+        rol: 'profesor',
+        profesorId: 'p1',
+        email: 'nuevo1@t1.test',
+        activo: true,
+        creadoEn: null,
+      }),
+    )
+  })
+
+  it('el admin CREA un acceso con rol administrador → DENY', async () => {
+    await assertFails(
+      setDoc(usuarioRef('uid-nuevo-2'), {
+        uid: 'uid-nuevo-2',
+        rol: 'administrador',
+        profesorId: 'p1',
+        email: 'nuevo2@t1.test',
+        activo: true,
+        creadoEn: null,
+      }),
+    )
+  })
+
+  it('el admin CREA un acceso con profesorId inexistente → DENY', async () => {
+    await assertFails(
+      setDoc(usuarioRef('uid-nuevo-3'), {
+        uid: 'uid-nuevo-3',
+        rol: 'profesor',
+        profesorId: 'p-desconocido',
+        email: 'nuevo3@t1.test',
+        activo: true,
+        creadoEn: null,
+      }),
+    )
+  })
+
+  it('el admin CREA un acceso sin profesorId → DENY', async () => {
+    await assertFails(
+      setDoc(usuarioRef('uid-nuevo-4'), {
+        uid: 'uid-nuevo-4',
+        rol: 'profesor',
+        email: 'nuevo4@t1.test',
+        activo: true,
+        creadoEn: null,
+      }),
+    )
+  })
+
+  it('el admin ACTUALIZA un acceso (activo:false) → ALLOW', async () => {
+    await assertSucceeds(
+      setDoc(doc(as(UID.adminT1), 'academias', T1, 'usuarios', 'uid-activable'), {
+        uid: 'uid-activable',
+        rol: 'profesor',
+        profesorId: 'p1',
+        email: 'activable@t1.test',
+        activo: true,
+        creadoEn: null,
+      }),
+    )
+    await assertSucceeds(
+      updateDoc(doc(as(UID.adminT1), 'academias', T1, 'usuarios', 'uid-activable'), {
+        activo: false,
+      }),
+    )
+  })
+
+  it('el profesor LEE su propio acceso → ALLOW', async () => {
+    await assertSucceeds(
+      getDoc(doc(as(UID.profeAcceso), 'academias', T1, 'usuarios', UID.profeAcceso)),
+    )
+  })
+
+  it('el profesor LEE el acceso de OTRO → DENY', async () => {
+    await assertFails(
+      getDoc(doc(as(UID.profeAcceso), 'academias', T1, 'usuarios', UID.profeOtro)),
+    )
+  })
+
+  it('el profesor LISTA los accesos → DENY', async () => {
+    await assertFails(
+      getDocs(collection(as(UID.profeAcceso), 'academias', T1, 'usuarios')),
+    )
+  })
+
+  it('el profesor CREA su propio acceso → DENY (escalada de privilegios)', async () => {
+    await assertFails(
+      setDoc(doc(as(UID.profeAcceso), 'academias', T1, 'usuarios', UID.profeAcceso), {
+        uid: UID.profeAcceso,
+        rol: 'profesor',
+        profesorId: 'p1',
+        email: 'profe-acceso@t1.test',
+        activo: true,
+        creadoEn: null,
+      }),
+    )
+  })
+
+  it('el profesor cambia su propio rol en su acceso → DENY', async () => {
+    await assertFails(
+      updateDoc(doc(as(UID.profeAcceso), 'academias', T1, 'usuarios', UID.profeAcceso), {
+        rol: 'administrador',
+      }),
+    )
+  })
+
+  it('BORRAR un acceso de profesor → DENY (se desactiva)', async () => {
+    await assertFails(
+      deleteDoc(doc(as(UID.adminT1), 'academias', T1, 'usuarios', UID.profeInactivo)),
+    )
+  })
+})
+
+describe('[F7] descubrimiento del acceso del profesor al iniciar sesión', () => {
+  it('el profesor consulta usuarios por su uid (collectionGroup) → ALLOW', async () => {
+    await assertSucceeds(
+      getDocs(
+        query(
+          collectionGroup(as(UID.profeAcceso), 'usuarios'),
+          where('uid', '==', UID.profeAcceso),
+          where('activo', '==', true),
+        ),
+      ),
+    )
+  })
+
+  it('el profesor consulta usuarios de OTRO uid → DENY', async () => {
+    await assertFails(
+      getDocs(
+        query(
+          collectionGroup(as(UID.profeAcceso), 'usuarios'),
+          where('uid', '==', UID.profeOtro),
+          where('activo', '==', true),
+        ),
+      ),
+    )
+  })
+
+  it('el profesor INACTIVO no descubre su propio acceso (consulta vacía)', async () => {
+    // La consulta filtra `activo == true`; el documento del profesor inactivo no
+    // la satisface, así que la consulta no devuelve nada (no hay acceso).
+    const snap = await assertSucceeds(
+      getDocs(
+        query(
+          collectionGroup(as(UID.profeInactivo), 'usuarios'),
+          where('uid', '==', UID.profeInactivo),
+          where('activo', '==', true),
+        ),
+      ),
+    )
+    assert.equal(snap.size, 0)
+  })
+
+  it('un profesor sin `miembros` no puede leer ninguna colección de administrador', async () => {
+    // Es lo que habilita el modelo: el profesor existe SOLO en `usuarios`, así
+    // que ninguna lectura de administrador le resulta accesible.
+    await assertFails(getDoc(doc(as(UID.profeAcceso), 'academias', T1, 'alumnos', 'a1')))
+    await assertFails(getDoc(doc(as(UID.profeAcceso), 'academias', T1, 'miembros', UID.adminT1)))
+    await assertFails(
+      getDocs(collection(as(UID.profeAcceso), 'academias', T1, 'cargos')),
+    )
+    await assertFails(
+      getDocs(collection(as(UID.profeAcceso), 'academias', T1, 'pagosProfesor')),
+    )
+    await assertFails(getDoc(doc(as(UID.profeAcceso), 'academias', T1, 'config', 'parametros')))
+  })
+})
+
+describe('[F7] clases del profesor: lectura solo de las propias', () => {
+  // Clases propias de este bloque: no dependen de c1, que otro test deja
+  // cerrada. p1 = profesor del acceso; p2 = otro profesor.
+  const CLASE_P1 = 'f7-lectura-propia'
+  const CLASE_P2 = 'f7-lectura-ajena'
+
+  before(async () => {
+    await setDoc(doc(as(UID.adminT1), 'academias', T1, 'clases', CLASE_P1), clase())
+    await setDoc(
+      doc(as(UID.adminT1), 'academias', T1, 'clases', CLASE_P2),
+      clase({ profesorId: 'p2' }),
+    )
+  })
+
+  it('el profesor activo LEE su propia clase → ALLOW', async () => {
+    await assertSucceeds(getDoc(doc(as(UID.profeAcceso), 'academias', T1, 'clases', CLASE_P1)))
+  })
+
+  it('el profesor activo LEE una clase ajena → DENY', async () => {
+    await assertFails(getDoc(doc(as(UID.profeAcceso), 'academias', T1, 'clases', CLASE_P2)))
+  })
+
+  it('el profesor activo LISTA todas las clases → DENY (incluye una ajena)', async () => {
+    await assertFails(getDocs(collection(as(UID.profeAcceso), 'academias', T1, 'clases')))
+  })
+
+  it('el profesor activo LISTA sus clases (where profesorId == p1) → ALLOW', async () => {
+    await assertSucceeds(
+      getDocs(
+        query(
+          collection(as(UID.profeAcceso), 'academias', T1, 'clases'),
+          where('profesorId', '==', 'p1'),
+        ),
+      ),
+    )
+  })
+
+  it('el profesor INACTIVO LEE su clase → DENY', async () => {
+    await assertFails(getDoc(doc(as(UID.profeInactivo), 'academias', T1, 'clases', CLASE_P1)))
+  })
+
+  it('el profesor INACTIVO LISTA sus clases → DENY', async () => {
+    await assertFails(
+      getDocs(
+        query(
+          collection(as(UID.profeInactivo), 'academias', T1, 'clases'),
+          where('profesorId', '==', 'p1'),
+        ),
+      ),
+    )
+  })
+})
+
+describe('[F7] asistencia del profesor: solo en sus clases abiertas y solo ese campo', () => {
+  // Clases propias y aisladas: una ABIERTA del p1, una CERRADA del p1 y una del
+  // p2. Así ningún otro test altera el estado que estos necesitan.
+  const ABIERTA = 'f7-asist-abierta'
+  const CERRADA = 'f7-asist-cerrada'
+  const AJENA = 'f7-asist-ajena'
+
+  before(async () => {
+    await setDoc(doc(as(UID.adminT1), 'academias', T1, 'clases', ABIERTA), clase())
+    await setDoc(
+      doc(as(UID.adminT1), 'academias', T1, 'clases', CERRADA),
+      clase({ estado: 'pendiente_cobro' }),
+    )
+    await setDoc(
+      doc(as(UID.adminT1), 'academias', T1, 'clases', AJENA),
+      clase({ profesorId: 'p2' }),
+    )
+  })
+
+  const asistenciaValida = (extra = {}) => ({
+    porAlumno: { a1: 'presente' },
+    registradoPor: UID.profeAcceso,
+    registradoEn: new Date(),
+    ...extra,
+  })
+  const abierta = () => doc(as(UID.profeAcceso), 'academias', T1, 'clases', ABIERTA)
+
+  it('el profesor activo carga asistencia válida en su clase abierta → ALLOW', async () => {
+    await assertSucceeds(updateDoc(abierta(), { asistenciaProfesor: asistenciaValida() }))
+  })
+
+  it('registradoPor distinto del uid que escribe → DENY', async () => {
+    await assertFails(
+      updateDoc(abierta(), {
+        asistenciaProfesor: asistenciaValida({ registradoPor: UID.adminT1 }),
+      }),
+    )
+  })
+
+  it('registradoEn que no es timestamp → DENY', async () => {
+    await assertFails(
+      updateDoc(abierta(), {
+        asistenciaProfesor: asistenciaValida({ registradoEn: 'ayer' }),
+      }),
+    )
+  })
+
+  it('una clave de más dentro de asistenciaProfesor → DENY', async () => {
+    await assertFails(
+      updateDoc(abierta(), {
+        asistenciaProfesor: asistenciaValida({ nota: 'x' }),
+      }),
+    )
+  })
+
+  it('porAlumno con más de 4 alumnos → DENY', async () => {
+    await assertFails(
+      updateDoc(abierta(), {
+        asistenciaProfesor: asistenciaValida({
+          porAlumno: { a1: 'presente', a2: 'presente', a3: 'presente', a4: 'presente', a5: 'presente' },
+        }),
+      }),
+    )
+  })
+
+  it('porAlumno vacío → DENY', async () => {
+    await assertFails(
+      updateDoc(abierta(), {
+        asistenciaProfesor: asistenciaValida({ porAlumno: {} }),
+      }),
+    )
+  })
+
+  it('cambiar la asistencia y OTRO campo a la vez → DENY', async () => {
+    await assertFails(updateDoc(abierta(), { asistenciaProfesor: asistenciaValida(), cupo: 8 }))
+  })
+
+  it('cambiar solo otro campo de la clase → DENY', async () => {
+    await assertFails(updateDoc(abierta(), { cupo: 8 }))
+  })
+
+  it('cargar asistencia en una clase AJENA → DENY', async () => {
+    await assertFails(
+      updateDoc(doc(as(UID.profeAcceso), 'academias', T1, 'clases', AJENA), {
+        asistenciaProfesor: asistenciaValida(),
+      }),
+    )
+  })
+
+  it('cargar asistencia en una clase ya CERRADA → DENY', async () => {
+    await assertFails(
+      updateDoc(doc(as(UID.profeAcceso), 'academias', T1, 'clases', CERRADA), {
+        asistenciaProfesor: asistenciaValida(),
+      }),
+    )
+  })
+
+  it('un profesor INACTIVO no puede cargar asistencia → DENY', async () => {
+    await assertFails(
+      updateDoc(doc(as(UID.profeInactivo), 'academias', T1, 'clases', ABIERTA), {
+        asistenciaProfesor: asistenciaValida({ registradoPor: UID.profeInactivo }),
+      }),
+    )
+  })
+
+  it('el profesor CREA una clase → DENY', async () => {
+    await assertFails(
+      setDoc(doc(as(UID.profeAcceso), 'academias', T1, 'clases', 'c-profe-nueva'), clase()),
+    )
+  })
+
+  it('el profesor BORRA una clase → DENY', async () => {
+    await assertFails(deleteDoc(doc(as(UID.profeAcceso), 'academias', T1, 'clases', ABIERTA)))
   })
 })

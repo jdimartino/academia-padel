@@ -6,6 +6,14 @@
       "fields": [{ "fieldPath": "uid", "order": "ASCENDING" }]
     },
     {
+      "collectionGroup": "usuarios",
+      "queryScope": "COLLECTION_GROUP",
+      "fields": [
+        { "fieldPath": "uid", "order": "ASCENDING" },
+        { "fieldPath": "activo", "order": "ASCENDING" }
+      ]
+    },
+    {
       "collectionGroup": "clases",
       "queryScope": "COLLECTION",
       "fields": [
