@@ -187,10 +187,10 @@ Estas no se resuelven en Fase 0 y no deben inventarse:
    las reglas o se pasa a custom claims (requiere Functions/Admin SDK)?
 8. **Entorno de test:** ¿se agrega `@firebase/rules-unit-testing` para tests de
    reglas automatizados? Es una dependencia nueva; requiere aprobación.
-9. **Provisioning de usuarios sin Functions:** en producción, ¿cómo crea la
-   academia cuentas de alumnos/profesores y les asigna rol? Con Functions sería
-   trivial; sin ellas hay que usar Admin SDK local o el truco de app secundaria.
-   **Sin definir.**
+9. **Provisioning de usuarios sin Functions:** el **profesor** se resolvió en la
+   Fase 7 con el truco de **app secundaria** (`src/firebase/authProfesor.js`) y un
+   documento `usuarios/{uid}` (el admin crea la cuenta sin perder su sesión). El
+   resto (cuentas de **alumnos/representantes** y sus roles) sigue **sin definir**.
 
 ---
 

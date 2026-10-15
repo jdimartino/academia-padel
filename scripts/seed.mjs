@@ -158,6 +158,7 @@ async function crearClaseEnSeed(datos) {
     sedeId: datos.sedeId,
     sedeNombre: datos.sedeNombre ?? null,
     canchaId: datos.canchaId,
+    canchaNombre: datos.canchaNombre ?? null,
     profesorId: datos.profesorId,
     profesorNombre: datos.profesorNombre ?? null,
     fecha: datos.fecha,
@@ -181,12 +182,14 @@ async function crearClaseEnSeed(datos) {
 }
 
 /*
- * Usuarios de Auth del tenant de ensayo. Por ahora SOLO el administrador tiene
- * acceso. profe@, alumno@ y representante@ se conservan como usuarios
- * NEGATIVOS: tienen membresía con su rol, pero las reglas les niegan toda
- * lectura/escritura salvo su propia membresía. Profesor y alumno son fichas
- * (records), no cuentas: ya no se enlazan con `profesorId`/`alumnoId` en la
- * membresía.
+ * Usuarios de Auth del tenant de ensayo. El administrador tiene acceso vía
+ * `miembros` (rol administrador). El profesor es distinto (Fase 7): NO tiene
+ * membresía; su acceso vive SOLO en `usuarios/{uid}` (con el `profesorId` de su
+ * ficha) y lo descubre al iniciar sesión con una consulta de grupo por `uid`.
+ * alumno@ y representante@ se conservan como usuarios NEGATIVOS: tienen
+ * membresía con su rol, pero las reglas les niegan toda lectura/escritura salvo
+ * su propia membresía. Alumno y representante son fichas (records), no cuentas:
+ * no se enlazan con `alumnoId` en la membresía.
  */
 const USUARIOS = [
   { email: 'admin@ensayo.test', password: 'ensayo1234', nombre: 'Ana Administradora', rol: 'administrador' },
@@ -830,6 +833,7 @@ async function main() {
     sedeId: 'traki',
     sedeNombre: 'Traki',
     canchaId: 'c2',
+    canchaNombre: 'Cancha 2',
     profesorId: 'p1',
     profesorNombre: nombreCompleto(PROFESORES_POR_ID.p1),
     fecha: ayerAbierto,
@@ -858,6 +862,7 @@ async function main() {
     sedeId: 'traki',
     sedeNombre: 'Traki',
     canchaId: 'c1',
+    canchaNombre: 'Cancha 1',
     profesorId: 'p1',
     profesorNombre: nombreCompleto(PROFESORES_POR_ID.p1),
     fecha: mananaAbierto,
@@ -886,6 +891,7 @@ async function main() {
     sedeId: 'traki',
     sedeNombre: 'Traki',
     canchaId: 'c1',
+    canchaNombre: 'Cancha 1',
     profesorId: 'p1',
     profesorNombre: nombreCompleto(PROFESORES_POR_ID.p1),
     fecha: ayerAbierto,
@@ -921,6 +927,7 @@ async function main() {
     sedeId: 'traki',
     sedeNombre: 'Traki',
     canchaId: 'c2',
+    canchaNombre: 'Cancha 2',
     profesorId: 'p1',
     profesorNombre: nombreCompleto(PROFESORES_POR_ID.p1),
     fecha: mananaAbierto,
@@ -1119,6 +1126,7 @@ async function main() {
     sedeId: 'traki',
     sedeNombre: 'Traki',
     canchaId: 'c3',
+    canchaNombre: 'Cancha 3',
     profesorId: 'p1',
     profesorNombre: nombreCompleto(PROFESORES_POR_ID.p1),
     fecha: ayerAbierto,
@@ -1168,22 +1176,40 @@ async function main() {
   for (const usuario of USUARIOS) {
     const uid = await crearUsuario(usuario)
     ids[usuario.email] = uid
-    await setDoc(`${tenant}/miembros/${uid}`, {
-      uid,
-      rol: usuario.rol,
-      activo: true,
-      nombre: usuario.nombre,
-      creadoEn: new Date(),
-    })
+    if (usuario.rol === 'profesor') {
+      // Profesor con acceso: SOLO en `usuarios`, ligado a su ficha de profesor.
+      const ficha = PROFESORES.find((p) => p.email === usuario.email)
+      await setDoc(`${tenant}/usuarios/${uid}`, {
+        uid,
+        rol: 'profesor',
+        profesorId: ficha?.id ?? null,
+        email: usuario.email,
+        activo: true,
+        creadoEn: new Date(),
+      })
+    } else {
+      await setDoc(`${tenant}/miembros/${uid}`, {
+        uid,
+        rol: usuario.rol,
+        activo: true,
+        nombre: usuario.nombre,
+        creadoEn: new Date(),
+      })
+    }
   }
-  console.log(`· ${USUARIOS.length} usuarios y membresías`)
+  console.log(`· ${USUARIOS.length} usuarios (membresías de admin/alumno/representante + acceso de profesor)`)
 
   console.log('\nListo. Usuarios de ensayo (contraseña "ensayo1234"):')
   for (const usuario of USUARIOS) {
-    const acceso = usuario.rol === 'administrador' ? 'acceso' : 'sin acceso (ficha)'
+    const acceso =
+      usuario.rol === 'administrador'
+        ? 'acceso (agenda)'
+        : usuario.rol === 'profesor'
+          ? 'acceso (asistencia)'
+          : 'sin acceso (ficha)'
     console.log(`  ${usuario.rol.padEnd(14)} ${usuario.email.padEnd(22)} ${acceso}`)
   }
-  console.log('\nSolo el administrador opera la agenda. Emulator UI: http://127.0.0.1:4000')
+  console.log('\nEl admin opera la agenda; el profesor solo carga la asistencia. Emulator UI: http://127.0.0.1:4000')
 }
 
 main().catch((error) => {

@@ -45,34 +45,39 @@ Estas decisiones quedaron cerradas. No se re-debaten sin evidencia nueva.
 | 6 | **"Recepción" no es un rol nuevo**: es un administrador con permisos reducidos. | El enum de roles **no** crece: sigue siendo `administrador` \| `profesor` \| `alumno_adulto` \| `alumno_menor`. **El reparto exacto de permisos entre administración y recepción queda SIN DEFINIR.** |
 | 7 | **Las reglas se quedan con `get()`** contra el documento de membresía. | Cada operación paga ~1 lectura adicional por la regla. Se acepta. Migrar a custom claims se pospone hasta que existan Functions/Admin SDK. |
 | 8 | **`@firebase/rules-unit-testing` como devDependency.** | Los permisos por tenant y por rol se prueban de verdad contra el emulador, no a ojo. |
-| 9 | **El aprovisionamiento de usuarios en producción queda SIN DEFINIR.** | El primer administrador de cada academia se crea a mano. Cómo crear el resto de cuentas (alumnos, profesores) sin Functions, también sin definir. |
+| 9 | **Aprovisionamiento del PROFESOR sin Functions** (Fase 7). El primer administrador se crea a mano; el admin crea las cuentas de profesor desde la app con una instancia secundaria de Auth y un documento `usuarios`. | El resto de cuentas (alumnos, representantes) sigue SIN DEFINIR. |
 
 Además, en esta sesión se decidió el mecanismo de **reserva sin solapamientos**
 (IDs deterministas + transacción). Ver §4.1.
 
 ### 0.1 Quién puede hacer qué (acceso por ahora)
 
-**Decisión vigente: solo la academia administradora inicia sesión.** Todo lo
-demás son fichas de datos, no cuentas de acceso. Los roles del enum siguen
-existiendo para el futuro, pero hoy `profesor`, `alumno_adulto`, `alumno_menor`
-y representante están **sin acceso por ahora**. Recepción queda **SIN DEFINIR**.
+**Decisión vigente: el administrador y el profesor inician sesión.** El resto
+son fichas de datos, no cuentas de acceso. El admin entra por `miembros`; el
+profesor, por `usuarios` (Fase 7) y solo a la pantalla de asistencia de sus
+clases. `alumno_adulto`, `alumno_menor` y representante están **sin acceso por
+ahora**. Recepción queda **SIN DEFINIR**.
 
 | Quién | ¿Inicia sesión? | Puede leer | Puede escribir |
 | --- | --- | --- | --- |
-| `administrador` | Sí | Todo su tenant (sedes, canchas, profesores, alumnos, clases, bloques, planes, cargos, pagos, notas de crédito, liquidaciones, miembros) | Todo su tenant |
-| `profesor` | **No** (ficha) | Sólo su propia membresía (descubrimiento de tenants). Nada más | Nada |
+| `administrador` | Sí (`miembros`) | Todo su tenant (sedes, canchas, profesores, alumnos, clases, bloques, planes, cargos, pagos, notas de crédito, liquidaciones, miembros, usuarios) | Todo su tenant |
+| `profesor` | Sí (`usuarios`, Fase 7) | **Solo sus propias clases** (`profesorId` == el de su acceso), su propio documento `usuarios` y su propia membresía si la tuviera. Nada de cobros, fichas de alumnos, parámetros ni otras colecciones de administrador | **Solo `asistenciaProfesor`** en sus clases ABIERTAS (`reservada`), sin tocar ningún otro campo |
 | `alumno_adulto` | **No** (ficha) | Sólo su propia membresía | Nada |
 | `alumno_menor` / representante | **No** (ficha) | Sólo su propia membresía | Nada |
 | Recepción | **SIN DEFINIR** — no se crea | — | — |
 
 El administrador abre clases (reserva), reprograma, cancela, registra asistencia
-y cierra la clase, y más adelante marca el cobro como pagado. Los alumnos (o el
-representante, en menores) **recibirán reportes de clase por email o Telegram**: no
-inician sesión, y el envío es una capacidad futura sin implementar (§8).
+y cierra la clase, y más adelante marca el cobro como pagado. El profesor
+**solo** carga la asistencia desde el móvil; el cierre (cobro y pago al
+profesor) sigue siendo del admin. Los alumnos (o el representante, en menores)
+**recibirán reportes de clase por email o Telegram**: no inician sesión, y el
+envío es una capacidad futura sin implementar (§8).
 
-La única lectura permitida a un no-admin es su propia membresía (arranque de
-sesión y descubrimiento de tenants). Con eso la app muestra el aviso "Esta
-cuenta no tiene acceso a esta academia" y **no vuelve a leer nada**.
+La única lectura permitida a un no-admin sin acceso es su propia membresía
+(arranque de sesión y descubrimiento de tenants). Con eso la app muestra el
+aviso "Esta cuenta no tiene acceso a esta academia" y **no vuelve a leer nada**.
+Un profesor **no tiene membresía**: descubre su academia con
+`collectionGroup('usuarios')` (ver §1).
 
 ---
 
@@ -100,17 +105,15 @@ todo el sistema** (las reglas lo leen).
 | Campo | Tipo | Nota |
 | --- | --- | --- |
 | `uid` | string | Igual a `request.auth.uid` (para el collection group) |
-| `rol` | string | `administrador` \| `profesor` \| `alumno_adulto` \| `alumno_menor`. **Hoy solo `administrador` tiene acceso**; el resto queda "sin acceso por ahora". **Decisión 6: no se agrega un rol "recepción"** — recepción es un `administrador` con permisos reducidos (*reparto exacto sin definir*). |
+| `rol` | string | `administrador` \| `alumno_adulto` \| `alumno_menor`. **Hoy solo `administrador` tiene acceso real**; alumno adulto/menor y representante quedan "sin acceso" (usuarios negativos de prueba). El **profesor NO tiene membresía**: su acceso vive en `usuarios/{uid}` (Fase 7). **Decisión 6: no se agrega un rol "recepción"** — recepción es un `administrador` con permisos reducidos (*reparto exacto sin definir*). |
 | `activo` | bool | |
 | `nombre` | string | Denormalizado, para mostrar sin leer el perfil |
 | `creadoEn` | Timestamp | |
 
 > **Campos eliminados (login obsoleto):** `profesorId` y `alumnoId` en la
-> membresía ya no se usan. Se pensaban para enlazar una cuenta con su ficha,
-> pero como profesor y alumno **no inician sesión**, ese enlace es muerto. La
-> ficha se referencia por id desde las clases (`profesorId`, `alumnos[]`), no
-> desde la membresía. Si en el futuro se diera acceso a algún rol, se
-> reincorporaría el vínculo explícitamente.
+> membresía ya no se usan. La ficha se referencia por id desde las clases
+> (`profesorId`, `alumnos[]`), no desde la membresía. El único vínculo
+> `cuenta → ficha` vigente es el de profesor, y vive en `usuarios` (Fase 7).
 
 **Descubrimiento al iniciar sesión** (una sola consulta acotada):
 
@@ -123,6 +126,43 @@ reglas sean por subárbol y no haga falta `where('tenantId','==',...)` en cada
 consulta. Como contrapartida, el descubrimiento de tenants requiere un
 *collection group query* (una sola lectura acotada). El `uid` está duplicado
 como campo justamente para poder hacer ese collection group.
+
+### `academias/{tenantId}/usuarios/{uid}` (documento, Fase 7)
+
+Acceso de login de un **profesor**. Es **independiente de `miembros`**:
+`miembros` sigue siendo la fuente del administrador y el profesor NO aparece
+ahí. El documento enlaza la cuenta de Auth con la ficha de profesor y habilita
+la asistencia desde el móvil. El admin lo crea/desactiva; el profesor solo lee
+el suyo.
+
+| Campo | Tipo | Nota |
+| --- | --- | --- |
+| `uid` | string | Igual a `request.auth.uid` (y al id del documento; para el collection group) |
+| `rol` | string | Siempre `profesor` (el único rol de esta colección) |
+| `profesorId` | string | Debe apuntar a una ficha `profesores/{profesorId}` que EXISTA (lo valida la regla) |
+| `email` | string | Copia del email de Auth |
+| `activo` | bool | Desactivar = quitar el acceso sin borrar la cuenta |
+| `creadoEn` | Timestamp | |
+| `actualizadoPor` | string \| null | uid del admin que cambió `activo` |
+| `actualizadoEn` | Timestamp \| null | |
+
+**Descubrimiento del profesor al iniciar sesión** (una sola consulta acotada,
+sin `miembros`):
+
+```js
+collectionGroup('usuarios').where('uid', '==', uid).where('activo', '==', true)
+```
+
+La regla comodín `match /{path=**}/usuarios/{uid}` solo permite listar el
+documento PROPIO y activo. Un profesor **no puede** leer las colecciones de
+administrador (alumnos, cobros, parámetros, etc.) porque no tiene `miembros`.
+
+**Aprovisionamiento sin Functions:** el admin crea la cuenta de Auth con una
+**instancia secundaria** de Firebase (`src/firebase/authProfesor.js`), de modo
+que su propia sesión no se reemplaza. La contraseña temporal **nunca** se
+guarda ni se loguea; el admin la comparte y el profesor la cambia. La cuenta de
+Auth y el documento `usuarios` se crean juntos desde
+`crearAccesoProfesor` (la capa de datos inyecta el `crearCuenta`).
 
 ---
 
@@ -272,6 +312,7 @@ sin solapamientos.
 | --- | --- | --- |
 | `sedeId` | string | |
 | `canchaId` | string | |
+| `canchaNombre` | string \| null | Denormalizado (Fase 7). Lo escriben `crearClase`/`reprogramarClase` desde la ficha de la cancha. Necesario porque el profesor **no puede leer** `sedes`/`canchas`. |
 | `profesorId` | string | |
 | `fecha` | string | `"YYYY-MM-DD"` |
 | `horaInicio` | string | `"HH:mm"` |
@@ -284,6 +325,8 @@ sin solapamientos.
 | `alumnos` | string[] | IDs de alumnos asignados. `crearClase`, `reprogramarClase` y `asignarAlumnos` los validan (existen, activos, sin duplicados, dentro del `cupo`). |
 | `cobro` | map \| null | **Fase 3. SNAPSHOT** del precio acordado al reservar: `{perfilCobroId, modo, tarifaHoraCents, montoEstandarCents, montoCents, ajustado, motivoAjuste}` (montos en centavos). `montoCents` es el que se cobra; `montoEstandarCents` el sugerido por la tarifa y `ajustado` marca si se cambió a mano (con `motivoAjuste` ∈ `descuento`\|`cortesia`\|`acuerdo`\|`otro`). Cambios posteriores de tarifas **no** lo tocan. `null` = clase sin precio. Lo valida `validarCobro` en `crearClase`/`reprogramarClase` y `cobroValido` en firestore.rules |
 | `asistencias` | map[] | `[{alumnoId, estado, motivo, registradoPor, registradoEn}]`. `estado` ∈ `presente` \| `ausente_avisada` \| `ausente_sin_aviso`; `motivo` opcional. |
+| `asistenciaProfesor` | map \| null | **Fase 7. Asistencia que carga el profesor** desde el móvil en una clase ABIERTA: `{porAlumno: {alumnoId: estado}, registradoPor, registradoEn}`. `estado` ∈ `presente` \| `ausente_con_aviso` \| `ausente_sin_aviso` (enum PROPIO). Las reglas solo validan forma (mapa acotado, `registradoPor` == uid, timestamp); los VALORES del enum no se pueden validar en reglas y se validan en `db.js` + `src/lib/profesores.js`. Al cerrar, `cerrarClase` precarga `asistencias` desde acá (mapeando `ausente_con_aviso` → `ausente_avisada`) y sella `confirmadoPorProfesorId`. |
+| `confirmadoPorProfesorId` | string \| null | **Fase 7.** `profesorId` que confirmó la asistencia desde el móvil, escrito por `cerrarClase` cuando la clase la cargó su profesor. |
 | `estado` | string | `reservada` → `pendiente_cobro` → `cobrada`; también `cancelada`. `cerrarClase` (Fase 4) deja la clase en `pendiente_cobro`. `ejecutada` sigue existiendo en el enum pero ningún flujo la escribe. |
 | `facturada` | bool | **Fase 4.** `true` si el cierre generó cobro (o quedó como cortesía facturada); `false` si se cerró con `seFactura: false` (fuerza mayor). `anularCierre` la pone en `false`. |
 | `sedeNombre` | string | Denormalizado |
@@ -950,6 +993,8 @@ pre-lectura y el commit, se cae limpiamente al cargo normal.
 Declarados en `firestore.indexes.json`. Mínimos para las consultas previstas:
 
 - `miembros` (collection group) por `uid` asc → descubrimiento de tenants.
+- `usuarios` (collection group) por `uid` asc + `activo` asc → descubrimiento
+  del acceso del profesor (Fase 7).
 - `clases`: `sedeId` + `fecha` + `horaInicio` (agenda por sede).
 - `clases`: `profesorId` + `fecha` (agenda por profesor).
 - `clases`: `estado` + `fecha`.
@@ -1011,8 +1056,8 @@ publicarse.
   el MVP no los sube).
 - Liquidación de profesores (cálculo) y su periodicidad.
 - Saldo cacheado vs calculado.
-- Aprovisionamiento de usuarios y asignación de roles sin Cloud Functions
-  (decisión 9: el primer admin se crea a mano).
+- Aprovisionamiento del resto de cuentas (alumnos, representantes) y asignación
+  de roles sin Cloud Functions (decisión 9: el admin y los profesores ya están).
 - Reglas de negocio de las series fijas (¿cuántas hacia adelante se generan?,
   ¿qué pasa al editar una serie?, ¿cómo se reservan los bloques de toda la
   serie?). Las clases `fija` con `serieId` existen en el modelo pero **no se
