@@ -358,3 +358,83 @@
 .bloque--sin-cerrar {
   box-shadow: var(--bloque-sombra), inset 0 0 0 2px rgba(255, 122, 26, 0.9);
 }
+
+/* ============================================================
+   Bloque de cuenta (email + cerrar sesión), al pie de la nav
+   ============================================================ */
+
+.menu-usuario {
+  margin-top: auto;
+  padding-top: 12px;
+  border-top: 1px solid rgba(255, 255, 255, 0.16);
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.menu-usuario__info {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+}
+
+.menu-usuario__rol {
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: var(--texto-muted);
+}
+
+.menu-usuario__email {
+  font-size: 13px;
+  font-weight: 600;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.menu-usuario__salir {
+  min-height: 44px;
+  padding: 8px 14px;
+  border-radius: 12px;
+  border: 1px solid rgba(255, 255, 255, 0.24);
+  background: rgba(255, 255, 255, 0.06);
+  color: var(--texto);
+  font-weight: 600;
+}
+
+.menu-usuario__salir:disabled {
+  opacity: 0.6;
+}
+
+/* ============================================================
+   Fila de administrador (Configuración → Administradores)
+   ============================================================ */
+
+.admin-item__texto {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+}
+
+.admin-item__nombre {
+  font-weight: 600;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* ============================================================
+   Listado de fichas en desktop: grilla de tarjetas (mobile-first)
+   ============================================================ */
+
+@media (min-width: 64rem) {
+  .fichas__lista {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    align-items: start;
+  }
+}
