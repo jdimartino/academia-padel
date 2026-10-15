@@ -65,6 +65,43 @@ export default function TasasPanel({ permiteEditar = false }) {
 
   const eur = eurosPorDolar(tasas)
 
+  /*
+   * Vista COMPACTA (pantallas que solo muestran la tasa, como Cobros): una sola
+   * franja horizontal con los dos valores, la fecha/fuente y el aviso de tasa
+   * desactualizada. La versión editable de Configuración conserva el panel
+   * completo con su formulario.
+   */
+  if (!permiteEditar) {
+    return (
+      <section className="tasas-strip glass" aria-label="Tasas BCV">
+        <span className="tasas-strip__titulo">Tasa BCV</span>
+        {cargando && !tasas ? (
+          <span className="tasas-strip__meta">Consultando…</span>
+        ) : tasas ? (
+          <>
+            <span className="tasas-strip__valor">
+              1 USD = <strong>{formatearBs(tasas.bsPorUsd)}</strong>
+            </span>
+            <span className="tasas-strip__valor">
+              1 USD = <strong>{formatearEur(eur)}</strong>
+            </span>
+            <span className="tasas-strip__meta">
+              {tasas.fecha ? `${formatearFechaLarga(tasas.fecha)} · ` : ''}
+              {etiquetaFuente(fuente ?? tasas.fuente)}
+            </span>
+            {vencida ? (
+              <span className="tasas__badge" role="status">
+                Desactualizada
+              </span>
+            ) : null}
+          </>
+        ) : (
+          <span className="tasas-strip__meta">Sin tasa disponible · montos en USD</span>
+        )}
+      </section>
+    )
+  }
+
   return (
     <section className="detalle glass tasas" aria-label="Tasas BCV">
       <div className="lista-sedes__cab">

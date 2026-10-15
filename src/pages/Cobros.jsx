@@ -184,7 +184,7 @@ export default function Cobros() {
         {cargando ? (
           <p className="aviso">Cargando cobros…</p>
         ) : (
-          <>
+          <div className="cobros-pendientes">
             <section className="cobros__bloque">
               <h2 className="lista-sedes__titulo">
                 Cargos de alumnos{' '}
@@ -244,7 +244,7 @@ export default function Cobros() {
                 </ul>
               )}
             </section>
-          </>
+          </div>
         )}
       </div>
     </PageChrome>
