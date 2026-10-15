@@ -773,6 +773,8 @@ const refMovimientoCredito = (db, tenantId, movimientoId) =>
   doc(db, 'academias', tenantId, 'movimientosCredito', movimientoId)
 const refUsuario = (db, tenantId, uid) => doc(db, 'academias', tenantId, 'usuarios', uid)
 const coleccionUsuarios = (db, tenantId) => collection(db, 'academias', tenantId, 'usuarios')
+const refMiembro = (db, tenantId, uid) => doc(db, 'academias', tenantId, 'miembros', uid)
+const coleccionMiembros = (db, tenantId) => collection(db, 'academias', tenantId, 'miembros')
 
 /* --------------------------------------------------------------------- */
 /* Lecturas                                                               */
@@ -1795,6 +1797,82 @@ export async function crearAccesoProfesor(db, tenantId, datos = {}, opciones = {
 export async function cambiarActivoProfesor(db, tenantId, uid, activo, opciones = {}) {
   const { actualizadoPor = null, now = new Date() } = opciones
   await updateDoc(refUsuario(db, tenantId, uid), {
+    activo: Boolean(activo),
+    actualizadoPor,
+    actualizadoEn: Timestamp.fromDate(now),
+  })
+  return { uid, activo: Boolean(activo) }
+}
+
+/* --------------------------------------------------------------------- */
+/* Administradores (miembros)                                              */
+/* --------------------------------------------------------------------- */
+
+/** Tope de miembros que se listan en la pantalla de administradores. */
+export const LIMITE_MIEMBROS = 200
+
+/** Lee la membresía de un uid. 1 lectura. */
+export async function getMiembro(db, tenantId, uid) {
+  const snap = await getDoc(refMiembro(db, tenantId, uid))
+  return snap.exists() ? { id: snap.id, ...snap.data() } : null
+}
+
+/**
+ * Lista los miembros del tenant (administradores y demás roles con membresía).
+ * Acotado por tenant + limit. Ordena en el cliente por nombre.
+ */
+export async function listarMiembros(db, tenantId, opciones = {}) {
+  const { limite = LIMITE_MIEMBROS } = opciones
+  const pedido = Number.isFinite(limite) ? Math.floor(limite) : LIMITE_MIEMBROS
+  const tope = Math.min(Math.max(pedido, 1), LIMITE_MIEMBROS)
+  const q = query(coleccionMiembros(db, tenantId), limit(tope))
+  const snap = await getDocs(q)
+  return snap.docs
+    .map((d) => ({ id: d.id, ...d.data() }))
+    .sort((a, b) =>
+      String(a.nombre ?? '').localeCompare(String(b.nombre ?? ''), 'es'),
+    )
+}
+
+/**
+ * Crea un administrador: primero la cuenta de Auth (con `crearCuenta` inyectado,
+ * que resuelve `{ uid }`) y después su membresía `miembros/{uid}` con rol
+ * `administrador`. Devuelve el uid. La contraseña NO se escribe en Firestore ni
+ * se loguea; sin `crearCuenta` se falla para no dejar cuentas a medias.
+ *
+ * Nunca se crea a sí mismo: la regla exige que quien escribe sea admin y que el
+ * uid no sea el suyo; acá además se rechaza escribir la propia membresía.
+ */
+export async function crearAccesoAdmin(db, tenantId, datos = {}, opciones = {}) {
+  const { now = new Date(), crearCuenta, uidActual = null } = opciones
+  const email = String(datos.email ?? '').trim().toLowerCase()
+  const password = datos.password
+  const nombre = String(datos.nombre ?? '').trim()
+  if (!nombre) throw new FichaInvalidaError('El administrador necesita un nombre')
+  if (!email) throw new FichaInvalidaError('El administrador necesita un email')
+  if (typeof crearCuenta !== 'function') {
+    throw new FichaInvalidaError('Falta el creador de cuentas de administrador')
+  }
+  const { uid } = await crearCuenta({ email, password })
+  if (!uid) throw new FichaInvalidaError('La cuenta de administrador no devolvió un uid')
+  if (uidActual && uid === uidActual) {
+    throw new FichaInvalidaError('No puedes crear tu propio acceso como administrador')
+  }
+  await setDoc(refMiembro(db, tenantId, uid), {
+    uid,
+    rol: 'administrador',
+    activo: true,
+    nombre,
+    email,
+    creadoEn: Timestamp.fromDate(now),
+  })
+  return { uid }
+}
+
+/** Activa o desactiva la membresía de un miembro (soft delete). */
+export async function cambiarActivoMiembro(db, tenantId, uid, activo, opciones = {}) {
+  const { actualizadoPor = null, now = new Date() } = opciones
+  await updateDoc(refMiembro(db, tenantId, uid), {
     activo: Boolean(activo),
     actualizadoPor,
     actualizadoEn: Timestamp.fromDate(now),

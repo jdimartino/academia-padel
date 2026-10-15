@@ -46,6 +46,36 @@ service cloud.firestore {
       return rol(tenantId) == 'administrador';
     }
 
+    // Miembro del tenant: une un usuario de Auth con su rol. La forma se valida
+    // acá; el rol `profesor` se conserva por compatibilidad, pero el acceso real
+    // de un profesor vive en `usuarios` (§Fase 7). `email` es opcional (copia del
+    // email de Auth, útil para listar administradores sin leer Auth).
+    function membresiaValida(data, uid) {
+      return data.keys().hasOnly([
+            'uid',
+            'rol',
+            'activo',
+            'nombre',
+            'email',
+            'creadoEn',
+            'actualizadoPor',
+            'actualizadoEn'
+          ])
+        && data.uid is string
+        && data.uid == uid
+        && data.rol in ['administrador', 'profesor', 'alumno_adulto', 'alumno_menor']
+        && data.activo is bool
+        && (!data.keys().hasAny(['nombre']) || data.nombre is string)
+        && (!data.keys().hasAny(['email']) || data.email == null || data.email is string)
+        && (!data.keys().hasAny(['creadoEn']) || data.creadoEn == null || data.creadoEn is timestamp)
+        && (!data.keys().hasAny(['actualizadoPor'])
+            || data.actualizadoPor == null
+            || data.actualizadoPor is string)
+        && (!data.keys().hasAny(['actualizadoEn'])
+            || data.actualizadoEn == null
+            || data.actualizadoEn is timestamp);
+    }
+
     // --- Acceso de profesores (Fase 7) -----------------------------------
     // El acceso de un PROFESOR vive en `usuarios/{uid}` (roles de login). Es
     // INDEPENDIENTE de `miembros`: mi `miembros` sigue siendo la fuente del
@@ -505,10 +535,19 @@ service cloud.firestore {
       // activa (necesario para el arranque de sesión y el descubrimiento). Es
       // la única lectura de un no-admin. Listar todas las membresías del tenant
       // es solo para admin.
+      // Membresías: el admin administra a los DEMÁS. Nunca puede escribir su
+      // propia membresía (no se auto-desactiva ni se auto-degrada, así no se
+      // queda sin administradores), y la forma del documento se valida. Un
+      // profesor o un alumno jamás tocan estas membresías: siguen siendo
+      // usuarios negativos.
       match /miembros/{uid} {
         allow get: if esAdmin(tenantId) || request.auth.uid == uid;
         allow list: if esAdmin(tenantId) || resource.data.uid == request.auth.uid;
-        allow write: if esAdmin(tenantId);
+        allow create, update: if esAdmin(tenantId)
+          && request.auth.uid != uid
+          && membresiaValida(request.resource.data, uid);
+        // Se conserva el borrado del admin (no se auto-borra), igual que antes.
+        allow delete: if esAdmin(tenantId) && request.auth.uid != uid;
       }
 
       // Acceso de profesores (Fase 7). El admin crea/desactiva el vínculo hacia

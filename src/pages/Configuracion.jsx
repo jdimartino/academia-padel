@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { useParams, useSearchParams } from 'react-router-dom'
 import PageChrome from '../components/PageChrome'
+import ConfigAdministradores from '../components/ConfigAdministradores'
 import ConfigCobros from '../components/ConfigCobros'
 import ConfigProfesores from '../components/ConfigProfesores'
 import MenuAcciones from '../components/MenuAcciones'
@@ -1115,7 +1116,9 @@ export default function Configuracion() {
   // para que un reload la conserve.
   const [area, setArea] = useState(() => {
     const pedida = searchParams.get('area')
-    return pedida === 'cobros' || pedida === 'profesores' ? pedida : 'sedes'
+    return pedida === 'cobros' || pedida === 'profesores' || pedida === 'administradores'
+      ? pedida
+      : 'sedes'
   })
   // "Hay cambios sin guardar": los reportan el detalle de sede (horario y
   // tarifas) y la sección de cobros (parámetros). Los usan los guardias al
@@ -1284,6 +1287,7 @@ export default function Configuracion() {
             { id: 'sedes', etiqueta: 'Sedes y canchas' },
             { id: 'cobros', etiqueta: 'Cobros' },
             { id: 'profesores', etiqueta: 'Profesores con acceso' },
+            { id: 'administradores', etiqueta: 'Administradores' },
           ].map((item) => (
             <button
               key={item.id}
@@ -1310,6 +1314,8 @@ export default function Configuracion() {
           <ConfigCobros tenantId={academia} onSucio={reportarSucioCobros} />
         ) : area === 'profesores' ? (
           <ConfigProfesores tenantId={academia} />
+        ) : area === 'administradores' ? (
+          <ConfigAdministradores tenantId={academia} />
         ) : (
           <>
             {sedeSel ? (

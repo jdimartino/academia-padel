@@ -1,11 +1,11 @@
 /*
- * Creación de la cuenta de Auth de un profesor (Fase 7).
+ * Creación de la cuenta de Auth de un usuario (profesor o administrador).
  *
  * El admin es quien crea la cuenta. Si usáramos la instancia de Auth principal,
  * `createUserWithEmailAndPassword` reemplazaría la sesión del admin por la del
- * profesor. Por eso se levanta una instancia de Firebase SECUNDARIA (nombre
- * único) con su propio Auth: se crea la cuenta ahí, se cierra esa sesión y se
- * borra la app secundaria. La sesión del admin nunca se toca.
+ * usuario nuevo. Por eso se levanta una instancia de Firebase SECUNDARIA
+ * (nombre único) con su propio Auth: se crea la cuenta ahí, se cierra esa
+ * sesión y se borra la app secundaria. La sesión del admin nunca se toca.
  *
  * Nunca se registra ni se persiste la contraseña temporal: viaja una sola vez
  * del formulario a `createUserWithEmailAndPassword`.
@@ -24,10 +24,13 @@ let contador = 0
  * Crea una cuenta de Auth con email/contraseña en una app secundaria y devuelve
  * su uid. La cuenta queda creada; la sesión secundaria se cierra y la app se
  * destruye siempre (incluso si algo falla). La contraseña NO se loguea.
+ *
+ * Es genérica: se reusa tanto para el acceso de un profesor como para el de un
+ * administrador.
  */
-export async function crearCuentaAuthProfesor({ email, password }) {
+export async function crearCuentaAuth({ email, password }) {
   contador += 1
-  const nombre = `profesor-${Date.now()}-${contador}`
+  const nombre = `acceso-${Date.now()}-${contador}`
   const appSecundaria = initializeApp(firebaseConfig, nombre)
   const authSecundaria = getAuth(appSecundaria)
   conectarEmuladorAuth(authSecundaria)
@@ -44,4 +47,7 @@ export async function crearCuentaAuthProfesor({ email, password }) {
   }
 }
 
-export default crearCuentaAuthProfesor
+/** Alias histórico: la creación de la cuenta de un profesor es la misma genérica. */
+export const crearCuentaAuthProfesor = crearCuentaAuth
+
+export default crearCuentaAuth
