@@ -9,7 +9,7 @@ import { CloseIcon } from './Icons'
  * que perder, así que el cierre seguro es directo (sin confirmación).
  * Sin window.confirm/alert.
  */
-export default function MenuMovil({ onClose }) {
+export default function MenuMovil({ onClose, rol = null }) {
   useCierreSeguro({ sucio: false, onCerrar: onClose })
 
   return (
@@ -26,8 +26,8 @@ export default function MenuMovil({ onClose }) {
             <CloseIcon />
           </button>
         </div>
-        <AppNav onNavigate={onClose} />
-        <MenuUsuario />
+        <AppNav onNavigate={onClose} rol={rol} />
+        <MenuUsuario rol={rol} />
       </nav>
     </div>
   )

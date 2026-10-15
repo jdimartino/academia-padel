@@ -1,0 +1,267 @@
+/*
+ * Reportes (Parte B): layout de la pantalla (lista de informes + contenido),
+ * la vista compartida (ReportView) y la hoja de impresión (PDF).
+ * Mobile-first: una columna; a partir de 1024px, lista y contenido en dos
+ * columnas. Sin anchos fijos: flex/grid y unidades fluidas.
+ */
+
+.reportes {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  min-width: 0;
+}
+
+.reportes__lista {
+  padding: 12px;
+  border-radius: var(--radio);
+}
+
+.reportes__grupo + .reportes__grupo {
+  margin-top: 12px;
+}
+
+.reportes__grupo-titulo {
+  margin: 0 0 8px;
+  font-size: 0.72rem;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--texto-suave);
+}
+
+.reportes__items {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.reportes__item {
+  width: 100%;
+  min-height: 40px;
+  text-align: left;
+  padding: 8px 10px;
+  border: 1px solid transparent;
+  border-radius: var(--radio-sm, 8px);
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  cursor: pointer;
+}
+
+.reportes__item:hover {
+  background: var(--superficie-2, rgba(255, 255, 255, 0.06));
+}
+
+.reportes__item.is-sel {
+  background: var(--superficie-2, rgba(255, 255, 255, 0.1));
+  border-color: var(--acento, #6ee7b7);
+}
+
+.reportes__contenido {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  min-width: 0;
+}
+
+.reportes__filtros {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-end;
+  gap: 10px;
+  padding: 10px 12px;
+  border-radius: var(--radio);
+}
+
+.reportes__filtros .btn-cta {
+  min-height: 38px;
+}
+
+/* --- Vista compartida del informe --- */
+
+.reporte {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  min-width: 0;
+}
+
+.reporte__cab {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: space-between;
+  align-items: flex-start;
+  gap: 12px;
+  padding: 14px 16px;
+  border-radius: var(--radio);
+}
+
+.reporte__academia {
+  margin: 0;
+  font-size: 0.72rem;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  color: var(--texto-suave);
+}
+
+.reporte__titulo {
+  margin: 2px 0 0;
+  font-size: 1.15rem;
+}
+
+.reporte__descripcion {
+  margin: 4px 0 0;
+  color: var(--texto-suave);
+  font-size: 0.85rem;
+}
+
+.reporte__meta {
+  margin: 6px 0 0;
+  font-size: 0.78rem;
+  color: var(--texto-suave);
+}
+
+.reporte__acciones {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.reporte__acciones .btn,
+.reporte__acciones .btn-cta {
+  min-height: 38px;
+}
+
+.reporte__resumen {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+  gap: 10px;
+}
+
+.reporte__tarjeta {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  padding: 12px 14px;
+  border-radius: var(--radio);
+}
+
+.reporte__tarjeta-label {
+  font-size: 0.72rem;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: var(--texto-suave);
+}
+
+.reporte__tarjeta-valor {
+  font-size: 1.1rem;
+  font-weight: 600;
+}
+
+.reporte__tabla-wrap {
+  overflow-x: auto;
+  border-radius: var(--radio);
+}
+
+.reporte__tabla {
+  width: 100%;
+  min-width: 520px;
+}
+
+.reporte__tabla tfoot td {
+  font-weight: 600;
+  border-top: 1px solid var(--borde, rgba(255, 255, 255, 0.14));
+}
+
+.reporte__total {
+  text-align: right;
+}
+
+.reporte__total-label {
+  text-transform: uppercase;
+  font-size: 0.72rem;
+  letter-spacing: 0.06em;
+  color: var(--texto-suave);
+}
+
+@media (min-width: 1024px) {
+  .reportes {
+    flex-direction: row;
+    align-items: flex-start;
+  }
+
+  .reportes__lista {
+    width: 260px;
+    flex: 0 0 260px;
+    position: sticky;
+    top: 16px;
+  }
+
+  .reportes__contenido {
+    flex: 1 1 auto;
+  }
+}
+
+/* --- Impresión (PDF): solo el informe, sin navegación ni botones --- */
+
+@media print {
+  .sidebar,
+  .nav-app,
+  .main__header,
+  .p-header,
+  .menu-overlay,
+  .reportes__lista,
+  .reportes__filtros,
+  .tasas-strip,
+  .reporte__acciones,
+  .avisos {
+    display: none !important;
+  }
+
+  .app,
+  .shell,
+  .main,
+  .reportes,
+  .reportes__contenido,
+  .reporte {
+    display: block !important;
+    width: 100% !important;
+    max-width: none !important;
+    background: #fff !important;
+    color: #000 !important;
+    box-shadow: none !important;
+    padding: 0 !important;
+    margin: 0 !important;
+  }
+
+  .reporte__cab,
+  .reporte__tarjeta,
+  .reporte__tabla-wrap,
+  .glass,
+  .glass-strong {
+    background: #fff !important;
+    color: #000 !important;
+    border: 1px solid #ccc !important;
+    box-shadow: none !important;
+    backdrop-filter: none !important;
+  }
+
+  .reporte__titulo,
+  .reporte__tarjeta-valor,
+  .reporte__tabla,
+  .tabla-comp th,
+  .tabla-comp td {
+    color: #000 !important;
+  }
+
+  .reporte__tabla tr {
+    break-inside: avoid;
+  }
+
+  .reporte__tabla thead {
+    display: table-header-group;
+  }
+}

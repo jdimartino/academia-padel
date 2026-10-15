@@ -1,4 +1,5 @@
 import { BrowserRouter, Route, Routes } from 'react-router-dom'
+import GuardAdmin from './components/GuardAdmin'
 import GuardRol from './components/GuardRol'
 import ProtectedRoute from './components/ProtectedRoute'
 import { AuthProvider } from './context/AuthContext'
@@ -12,6 +13,7 @@ import Configuracion from './pages/Configuracion'
 import Home from './pages/Home'
 import Login from './pages/Login'
 import Profesores from './pages/Profesores'
+import Reportes from './pages/Reportes'
 
 export default function App() {
   return (
@@ -58,6 +60,16 @@ export default function App() {
                 element={
                   <ProtectedRoute>
                     <Configuracion />
+                  </ProtectedRoute>
+                }
+              />
+              <Route
+                path="/:academia/reportes"
+                element={
+                  <ProtectedRoute>
+                    <GuardAdmin>
+                      <Reportes />
+                    </GuardAdmin>
                   </ProtectedRoute>
                 }
               />
