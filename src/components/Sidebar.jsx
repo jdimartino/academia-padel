@@ -21,6 +21,7 @@ export default function Sidebar({
   onCambiarMes,
   puedeReservar,
   onNuevaReserva,
+  rol,
 }) {
   return (
     <aside className="sidebar glass">
@@ -29,7 +30,7 @@ export default function Sidebar({
         <span className="sidebar__titulo">Academia Pádel</span>
       </div>
 
-      <AppNav />
+      <AppNav rol={rol} />
 
       {puedeReservar ? (
         <button type="button" className="btn-cta" onClick={onNuevaReserva}>
@@ -76,7 +77,7 @@ export default function Sidebar({
         </ul>
       </div>
 
-      <MenuUsuario />
+      <MenuUsuario rol={rol} />
     </aside>
   )
 }

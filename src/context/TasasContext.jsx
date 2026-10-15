@@ -48,14 +48,14 @@ export function TasasProvider({ children }) {
   const [fuente, setFuente] = useState(null)
   const [cargando, setCargando] = useState(false)
 
-  const cargar = useCallback(async (tid, { forzar = false } = {}) => {
+  const cargar = useCallback(async (tid, { forzar = false, conservar = false } = {}) => {
     // Cede el control antes de tocar el estado para no setearlo de forma
     // síncrona dentro del efecto que dispara la carga.
     await Promise.resolve()
     if (!tid) {
       setTasas(null)
       setFuente(null)
-      return
+      return false
     }
     const storage = almacen()
 
@@ -65,7 +65,7 @@ export function TasasProvider({ children }) {
       if (cache) {
         setTasas(cache)
         setFuente(cache.fuente ?? null)
-        return
+        return true
       }
     }
 
@@ -82,7 +82,7 @@ export function TasasProvider({ children }) {
       if (guardada?.fuente === 'manual' && tasasValidas(guardada)) {
         setTasas(guardada)
         setFuente('manual')
-        return
+        return true
       }
 
       // 3) API (fetch inyectado; null si no está disponible o falla).
@@ -98,7 +98,7 @@ export function TasasProvider({ children }) {
         } catch {
           /* sin permiso (no admin) o sin red: la tasa igual se muestra */
         }
-        return
+        return true
       }
 
       // 4) Caché vencida (aunque haya pasado el TTL).
@@ -106,18 +106,23 @@ export function TasasProvider({ children }) {
       if (vencida) {
         setTasas(vencida)
         setFuente(vencida.fuente ?? null)
-        return
+        return true
       }
 
       // 5) Última tasa conocida en Firestore.
       if (guardada && tasasValidas(guardada)) {
         setTasas(guardada)
         setFuente(guardada.fuente ?? null)
-        return
+        return true
       }
 
-      setTasas(null)
-      setFuente(null)
+      // Sin nada: se limpia, salvo que se pida CONSERVAR la tasa actual (un
+      // "Actualizar" que falló no debe borrar el valor que ya se mostraba).
+      if (!conservar) {
+        setTasas(null)
+        setFuente(null)
+      }
+      return false
     } finally {
       setCargando(false)
     }
@@ -165,6 +170,7 @@ export function TasasProvider({ children }) {
       vencida,
       tenantId,
       recargar: () => cargar(tenantId, { forzar: true }),
+      refrescar: () => cargar(tenantId, { forzar: true, conservar: true }),
       guardarManual,
       restaurarAutomatica,
     }),

@@ -110,3 +110,17 @@ export function nombreMes(iso) {
   const mes = MESES[fecha.getMonth()]
   return `${mes.charAt(0).toUpperCase()}${mes.slice(1)} ${fecha.getFullYear()}`
 }
+
+/**
+ * Fecha y hora local "3 oct 2026, 14:05". Acepta un Date o milisegundos; null
+ * si la entrada no es una fecha válida.
+ */
+export function formatearFechaHora(fecha) {
+  const d = fecha instanceof Date ? fecha : new Date(fecha)
+  if (Number.isNaN(d.getTime())) return ''
+  const dia = d.getDate()
+  const mes = MESES[d.getMonth()].slice(0, 3)
+  const hora = String(d.getHours()).padStart(2, '0')
+  const min = String(d.getMinutes()).padStart(2, '0')
+  return `${dia} ${mes} ${d.getFullYear()}, ${hora}:${min}`
+}

@@ -54,8 +54,8 @@ export default function PageChrome({ titulo, children }) {
               <LogoMark />
               <span className="sidebar__titulo">Academia Pádel</span>
             </div>
-            <AppNav />
-            <MenuUsuario />
+            <AppNav rol={estado.rol} />
+            <MenuUsuario rol={estado.rol} />
           </aside>
           <main className="main">
             <header className="main__header">
@@ -84,7 +84,7 @@ export default function PageChrome({ titulo, children }) {
         </button>
       </header>
       {children}
-      {menu ? <MenuMovil onClose={() => setMenu(false)} /> : null}
+      {menu ? <MenuMovil rol={estado.rol} onClose={() => setMenu(false)} /> : null}
     </div>
   )
 }

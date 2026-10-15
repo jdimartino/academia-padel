@@ -1,8 +1,8 @@
 import { useState } from 'react'
 import { useAvisos } from '../context/AvisosContext'
 import { useTasas } from '../context/TasasContext'
-import { formatearFechaLarga } from '../lib/fechas'
-import { etiquetaFuente, formatearBs, formatearEur } from '../lib/tasas'
+import { formatearFechaLarga, formatearFechaHora } from '../lib/fechas'
+import { etiquetaFuente, formatearBs, formatearEur, momentoDeTasa } from '../lib/tasas'
 
 /** EUR por USD implícito en las dos tasas (Bs/USD ÷ Bs/EUR). */
 function eurosPorDolar(tasas) {
@@ -16,11 +16,12 @@ function eurosPorDolar(tasas) {
  * admin) suma el override manual y el botón de volver a la automática.
  */
 export default function TasasPanel({ permiteEditar = false }) {
-  const { tasas, cargando, fuente, vencida, guardarManual, restaurarAutomatica } = useTasas()
+  const { tasas, cargando, fuente, vencida, guardarManual, restaurarAutomatica, refrescar } = useTasas()
   const { mostrarExito, mostrarError, mostrarErrorTecnico } = useAvisos()
   const [bsUsd, setBsUsd] = useState('')
   const [bsEur, setBsEur] = useState('')
   const [guardando, setGuardando] = useState(false)
+  const [actualizando, setActualizando] = useState(false)
   const [tasaVista, setTasaVista] = useState(null)
 
   // Sincroniza los inputs cuando llega o cambia la tasa (ajuste en render, sin
@@ -63,13 +64,32 @@ export default function TasasPanel({ permiteEditar = false }) {
     }
   }
 
+  /*
+   * "Actualizar": fuerza una consulta fresca saltando el caché (por si la tasa
+   * del día cambió). Si la API/red falla, se conserva la tasa que ya se ve y se
+   * muestra un error corto.
+   */
+  async function actualizar() {
+    setActualizando(true)
+    try {
+      const ok = await refrescar()
+      if (!ok) mostrarError('No se pudo actualizar la tasa. Se mantiene la actual.')
+    } finally {
+      setActualizando(false)
+    }
+  }
+
   const eur = eurosPorDolar(tasas)
+  const momento = momentoDeTasa(tasas)
+  // Fecha del valor BCV y, si se conoce, la hora en que se obtuvo la tasa.
+  const fechaTexto = tasas?.fecha ? formatearFechaLarga(tasas.fecha) : null
+  const horaTexto = momento ? formatearFechaHora(momento).split(', ')[1] ?? null : null
 
   /*
-   * Vista COMPACTA (pantallas que solo muestran la tasa, como Cobros): una sola
-   * franja horizontal con los dos valores, la fecha/fuente y el aviso de tasa
-   * desactualizada. La versión editable de Configuración conserva el panel
-   * completo con su formulario.
+   * Vista COMPACTA (pantallas que solo muestran la tasa, como Cobros y Reportes):
+   * una sola franja horizontal con los dos valores, fecha + hora + fuente, el
+   * aviso de tasa desactualizada y el botón "Actualizar". La versión editable de
+   * Configuración conserva el panel completo con su formulario.
    */
   if (!permiteEditar) {
     return (
@@ -86,7 +106,7 @@ export default function TasasPanel({ permiteEditar = false }) {
               1 USD = <strong>{formatearEur(eur)}</strong>
             </span>
             <span className="tasas-strip__meta">
-              {tasas.fecha ? `${formatearFechaLarga(tasas.fecha)} · ` : ''}
+              {fechaTexto ? `${fechaTexto}${horaTexto ? ` · ${horaTexto}` : ''} · ` : ''}
               {etiquetaFuente(fuente ?? tasas.fuente)}
             </span>
             {vencida ? (
@@ -98,6 +118,14 @@ export default function TasasPanel({ permiteEditar = false }) {
         ) : (
           <span className="tasas-strip__meta">Sin tasa disponible · montos en USD</span>
         )}
+        <button
+          type="button"
+          className="btn btn--secondary tasas-strip__btn"
+          disabled={actualizando || cargando}
+          onClick={actualizar}
+        >
+          {actualizando ? 'Actualizando…' : 'Actualizar'}
+        </button>
       </section>
     )
   }
@@ -126,7 +154,7 @@ export default function TasasPanel({ permiteEditar = false }) {
             <span className="tasas__monto">{formatearEur(eur)}</span>
           </div>
           <p className="tasas__meta">
-            {tasas.fecha ? `Actualizada ${formatearFechaLarga(tasas.fecha)} · ` : ''}
+            {fechaTexto ? `Actualizada ${fechaTexto}${horaTexto ? ` · ${horaTexto}` : ''} · ` : ''}
             Fuente: {etiquetaFuente(fuente ?? tasas.fuente)}
           </p>
         </div>

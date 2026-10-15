@@ -1142,6 +1142,13 @@
   color: var(--texto-muted, rgba(255, 255, 255, 0.65));
 }
 
+.tasas-strip__btn {
+  flex: 0 0 auto;
+  min-height: 36px;
+  padding: 4px 14px;
+  font-size: 13px;
+}
+
 @media (min-width: 48rem) {
   .tasas-strip__meta {
     margin-left: auto;
@@ -1162,4 +1169,67 @@
   .cobros-pendientes {
     grid-template-columns: repeat(2, minmax(0, 1fr));
   }
+}
+
+/* ------------------------------------------------------------------ */
+/* Cobros: barra única de filtros y cabeceras de sección               */
+/* ------------------------------------------------------------------ */
+
+.cobros__toolbar {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 12px;
+  align-items: flex-end;
+  padding: 12px 14px;
+  border-radius: var(--radio-md, 14px);
+}
+
+.cobros__campo {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  flex: 1 1 140px;
+  min-width: 0;
+}
+
+.cobros__campo-label {
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: var(--texto-muted, rgba(255, 255, 255, 0.65));
+}
+
+.cobros__cab {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 12px;
+  margin-bottom: 8px;
+}
+
+.cobros__titulo {
+  margin: 0;
+  font-size: 15px;
+  font-weight: 700;
+}
+
+.cobros__cab .cobros__total {
+  margin-left: 0;
+  display: inline-flex;
+  align-items: baseline;
+  gap: 6px;
+}
+
+.cobros__bloque {
+  padding: 12px 14px;
+  border-radius: var(--radio-md, 14px);
+}
+
+.tabla-comp__monto-col {
+  text-align: right;
+}
+
+.tabla-comp__monto-col .monto-eq {
+  align-items: flex-end;
 }

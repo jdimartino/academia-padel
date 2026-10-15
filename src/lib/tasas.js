@@ -165,7 +165,7 @@ export function etiquetaFuente(fuente) {
 }
 
 /** Momento de referencia (ms) de una tasa: obtenidoEn/guardadoEn/actualizadoEn/fecha. */
-function referenciaMs(tasas) {
+export function momentoDeTasa(tasas) {
   if (!tasas) return null
   for (const clave of ['obtenidoEn', 'guardadoEn', 'actualizadoEn']) {
     const valor = tasas[clave]
@@ -187,7 +187,7 @@ function referenciaMs(tasas) {
 
 /** ¿La tasa está desactualizada? Sin tasa o sin referencia → true. */
 export function esTasaVencida(tasas, ahora = Date.now(), vencidaMs = TASA_VENCIDA_MS) {
-  const ref = referenciaMs(tasas)
+  const ref = momentoDeTasa(tasas)
   if (ref == null) return true
   return ahora - ref > vencidaMs
 }

@@ -25,6 +25,18 @@ const METODOS_LABEL = {
   otro: 'Otro',
 }
 
+const CONCEPTOS_LABEL = {
+  clase: 'Clase',
+  falta_sin_aviso: 'Falta sin aviso',
+  mensualidad: 'Mensualidad',
+  otro: 'Otro',
+}
+
+const ESTADOS_COBRO = [
+  { valor: 'pendiente', label: 'Pendientes' },
+  { valor: 'pagado', label: 'Pagados' },
+]
+
 /** Selector de método de pago + confirmación, en línea. */
 function AccionPagado({ onConfirmar, ocupado }) {
   const [abierto, setAbierto] = useState(false)
@@ -32,7 +44,12 @@ function AccionPagado({ onConfirmar, ocupado }) {
 
   if (!abierto) {
     return (
-      <button type="button" className="btn btn--secondary" disabled={ocupado} onClick={() => setAbierto(true)}>
+      <button
+        type="button"
+        className="btn-icono"
+        disabled={ocupado}
+        onClick={() => setAbierto(true)}
+      >
         Marcar pagado
       </button>
     )
@@ -53,13 +70,13 @@ function AccionPagado({ onConfirmar, ocupado }) {
       </select>
       <button
         type="button"
-        className="btn-cta"
+        className="btn-icono"
         disabled={ocupado}
         onClick={() => onConfirmar(metodoPago)}
       >
         Confirmar
       </button>
-      <button type="button" className="btn btn--secondary" disabled={ocupado} onClick={() => setAbierto(false)}>
+      <button type="button" className="btn-icono" disabled={ocupado} onClick={() => setAbierto(false)}>
         Cancelar
       </button>
     </div>
@@ -67,9 +84,10 @@ function AccionPagado({ onConfirmar, ocupado }) {
 }
 
 /**
- * Cobros pendientes (Phase 4): cargos de alumnos y pagos al profesor que
- * todavía no se cobraron. Se filtran por sede y rango de fechas y cada fila
- * permite marcar pagado (pago completo) eligiendo el método.
+ * Cobros (Phase 4, rediseño compacto): cargos de alumnos y pagos al profesor,
+ * con una única barra de filtros (sede, estado, rango de fechas) y tablas densas
+ * de columnas alineadas con totales por sección. En los pendientes cada fila
+ * permite marcar pagado eligiendo el método.
  */
 export default function Cobros() {
   const { academia } = useParams()
@@ -80,6 +98,7 @@ export default function Cobros() {
 
   const [sedes, setSedes] = useState([])
   const [sedeId, setSedeId] = useState('')
+  const [estado, setEstado] = useState('pendiente')
   const [desde, setDesde] = useState(sumarDias(hoyISO(), -30))
   const [hasta, setHasta] = useState(hoyISO())
 
@@ -94,8 +113,13 @@ export default function Cobros() {
       .catch(() => setSedes([]))
   }, [academia])
 
+  const nombreSede = useMemo(
+    () => Object.fromEntries(sedes.map((sede) => [sede.id, sede.nombre])),
+    [sedes],
+  )
+
   const recargar = useCallback(() => {
-    const filtros = { sedeId: sedeId || null, desde, hasta }
+    const filtros = { sedeId: sedeId || null, estado, desde, hasta }
     return Promise.all([
       listarCargosPendientes(db, academia, filtros),
       listarPagosProfesorPendientes(db, academia, filtros),
@@ -106,7 +130,7 @@ export default function Cobros() {
         setError('')
       })
       .catch((err) => setError(err.message))
-  }, [academia, sedeId, desde, hasta])
+  }, [academia, sedeId, estado, desde, hasta])
 
   useEffect(() => {
     recargar()
@@ -148,14 +172,16 @@ export default function Cobros() {
   )
 
   const cargando = cargos === null && pagos === null
+  const esPendiente = estado === 'pendiente'
 
   return (
-    <PageChrome titulo="Cobros pendientes">
+    <PageChrome titulo="Cobros">
       <TasasPanel />
-      <div className="config glass">
-        <div className="cobros__filtros">
-          <label className="parametros__campo">
-            <span className="form__label">Sede</span>
+
+      <div className="cobros">
+        <div className="cobros__toolbar glass">
+          <label className="cobros__campo">
+            <span className="cobros__campo-label">Sede</span>
             <select className="form__input" value={sedeId} onChange={(e) => setSedeId(e.target.value)}>
               <option value="">Todas</option>
               {sedes.map((sede) => (
@@ -165,13 +191,33 @@ export default function Cobros() {
               ))}
             </select>
           </label>
-          <label className="parametros__campo">
-            <span className="form__label">Desde</span>
-            <input className="form__input" type="date" value={desde} onChange={(e) => setDesde(e.target.value)} />
+          <label className="cobros__campo">
+            <span className="cobros__campo-label">Estado</span>
+            <select className="form__input" value={estado} onChange={(e) => setEstado(e.target.value)}>
+              {ESTADOS_COBRO.map((opcion) => (
+                <option key={opcion.valor} value={opcion.valor}>
+                  {opcion.label}
+                </option>
+              ))}
+            </select>
           </label>
-          <label className="parametros__campo">
-            <span className="form__label">Hasta</span>
-            <input className="form__input" type="date" value={hasta} onChange={(e) => setHasta(e.target.value)} />
+          <label className="cobros__campo">
+            <span className="cobros__campo-label">Desde</span>
+            <input
+              className="form__input"
+              type="date"
+              value={desde}
+              onChange={(e) => setDesde(e.target.value)}
+            />
+          </label>
+          <label className="cobros__campo">
+            <span className="cobros__campo-label">Hasta</span>
+            <input
+              className="form__input"
+              type="date"
+              value={hasta}
+              onChange={(e) => setHasta(e.target.value)}
+            />
           </label>
         </div>
 
@@ -185,63 +231,125 @@ export default function Cobros() {
           <p className="aviso">Cargando cobros…</p>
         ) : (
           <div className="cobros-pendientes">
-            <section className="cobros__bloque">
-              <h2 className="lista-sedes__titulo">
-                Cargos de alumnos{' '}
-                <MontoEquivalente cents={totalCargos} tasas={tasas} className="cobros__total" />
-              </h2>
+            <section className="cobros__bloque glass">
+              <header className="cobros__cab">
+                <h2 className="cobros__titulo">Cargos de alumnos</h2>
+                <span className="cobros__total">
+                  Total <MontoEquivalente cents={totalCargos} tasas={tasas} />
+                </span>
+              </header>
               {cargos.length === 0 ? (
-                <p className="parametros__hint">No hay cargos pendientes en el rango.</p>
+                <p className="parametros__hint">No hay cargos en el rango.</p>
               ) : (
-                <ul className="cobros__lista">
-                  {cargos.map((cargo) => (
-                    <li key={cargo.id} className="cobros__fila">
-                      <span className="cobros__nombre">
-                        {cargo.alumnoNombre}
-                        <span className="cobros__meta">
-                          {cargo.concepto === 'falta_sin_aviso'
-                            ? 'Falta sin aviso'
-                            : cargo.concepto === 'mensualidad'
-                              ? (cargo.planNombre ?? 'Mensualidad')
-                              : 'Clase'}{' '}
-                          · {formatearFechaLarga(cargo.fecha)}
-                        </span>
-                      </span>
-                      <span className="cobros__monto">
-                        <MontoEquivalente cents={cargo.montoCents} tasas={tasas} />
-                      </span>
-                      <AccionPagado ocupado={ocupado} onConfirmar={(metodo) => pagarCargo(cargo, metodo)} />
-                    </li>
-                  ))}
-                </ul>
+                <table className="tabla-comp">
+                  <thead>
+                    <tr>
+                      <th scope="col">Concepto</th>
+                      <th scope="col">Fecha</th>
+                      <th scope="col">Sede</th>
+                      <th scope="col">Alumno</th>
+                      <th scope="col" className="tabla-comp__monto-col">
+                        Monto
+                      </th>
+                      <th scope="col">Estado</th>
+                      <th scope="col" className="tabla-comp__acciones">
+                        Acción
+                      </th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {cargos.map((cargo) => (
+                      <tr key={cargo.id}>
+                        <td data-label="Concepto">
+                          {CONCEPTOS_LABEL[cargo.concepto] ?? cargo.planNombre ?? cargo.concepto}
+                        </td>
+                        <td data-label="Fecha">{formatearFechaLarga(cargo.fecha)}</td>
+                        <td data-label="Sede">{nombreSede[cargo.sedeId] ?? 'Sede'}</td>
+                        <td data-label="Alumno">{cargo.alumnoNombre}</td>
+                        <td data-label="Monto" className="tabla-comp__monto-col">
+                          <MontoEquivalente cents={cargo.montoCents} tasas={tasas} />
+                        </td>
+                        <td data-label="Estado">
+                          <span className={`badge badge--${cargo.estado}`}>
+                            {cargo.estado === 'pagado' ? 'Pagado' : 'Pendiente'}
+                          </span>
+                        </td>
+                        <td data-label="Acción" className="tabla-comp__acciones">
+                          {esPendiente ? (
+                            <AccionPagado
+                              ocupado={ocupado}
+                              onConfirmar={(metodo) => pagarCargo(cargo, metodo)}
+                            />
+                          ) : (
+                            <span className="cobros__meta">
+                              {cargo.metodoPago ? (METODOS_LABEL[cargo.metodoPago] ?? cargo.metodoPago) : '—'}
+                            </span>
+                          )}
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
               )}
             </section>
 
-            <section className="cobros__bloque">
-              <h2 className="lista-sedes__titulo">
-                Pagos al profesor{' '}
-                <MontoEquivalente cents={totalPagos} tasas={tasas} className="cobros__total" />
-              </h2>
+            <section className="cobros__bloque glass">
+              <header className="cobros__cab">
+                <h2 className="cobros__titulo">Pagos al profesor</h2>
+                <span className="cobros__total">
+                  Total <MontoEquivalente cents={totalPagos} tasas={tasas} />
+                </span>
+              </header>
               {pagos.length === 0 ? (
-                <p className="parametros__hint">No hay pagos pendientes en el rango.</p>
+                <p className="parametros__hint">No hay pagos en el rango.</p>
               ) : (
-                <ul className="cobros__lista">
-                  {pagos.map((pago) => (
-                    <li key={pago.id} className="cobros__fila">
-                      <span className="cobros__nombre">
-                        {pago.profesorNombre}
-                        <span className="cobros__meta">{formatearFechaLarga(pago.fecha)}</span>
-                      </span>
-                      <span className="cobros__monto">
-                        <MontoEquivalente cents={pago.montoCents} tasas={tasas} />
-                      </span>
-                      <AccionPagado
-                        ocupado={ocupado}
-                        onConfirmar={(metodo) => pagarProfesor(pago, metodo)}
-                      />
-                    </li>
-                  ))}
-                </ul>
+                <table className="tabla-comp">
+                  <thead>
+                    <tr>
+                      <th scope="col">Concepto</th>
+                      <th scope="col">Fecha</th>
+                      <th scope="col">Sede</th>
+                      <th scope="col">Profesor</th>
+                      <th scope="col" className="tabla-comp__monto-col">
+                        Monto
+                      </th>
+                      <th scope="col">Estado</th>
+                      <th scope="col" className="tabla-comp__acciones">
+                        Acción
+                      </th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {pagos.map((pago) => (
+                      <tr key={pago.id}>
+                        <td data-label="Concepto">Pago al profesor</td>
+                        <td data-label="Fecha">{formatearFechaLarga(pago.fecha)}</td>
+                        <td data-label="Sede">{nombreSede[pago.sedeId] ?? 'Sede'}</td>
+                        <td data-label="Profesor">{pago.profesorNombre}</td>
+                        <td data-label="Monto" className="tabla-comp__monto-col">
+                          <MontoEquivalente cents={pago.montoCents} tasas={tasas} />
+                        </td>
+                        <td data-label="Estado">
+                          <span className={`badge badge--${pago.estado}`}>
+                            {pago.estado === 'pagado' ? 'Pagado' : 'Pendiente'}
+                          </span>
+                        </td>
+                        <td data-label="Acción" className="tabla-comp__acciones">
+                          {esPendiente ? (
+                            <AccionPagado
+                              ocupado={ocupado}
+                              onConfirmar={(metodo) => pagarProfesor(pago, metodo)}
+                            />
+                          ) : (
+                            <span className="cobros__meta">
+                              {pago.metodoPago ? (METODOS_LABEL[pago.metodoPago] ?? pago.metodoPago) : '—'}
+                            </span>
+                          )}
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
               )}
             </section>
           </div>

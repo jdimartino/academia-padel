@@ -331,6 +331,7 @@ export default function Agenda() {
           onCambiarMes={cambiarMes}
           puedeReservar={esAdmin}
           onNuevaReserva={abrirFormulario}
+          rol={rol}
         />
 
         <main className="main">
