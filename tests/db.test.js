@@ -3412,6 +3412,13 @@ describe('[F5] mensualidades: planes, créditos y consumo al cerrar', () => {
     return snap.data()
   }
 
+  beforeEach(async () => {
+    // Estos tests ejercitan el consumo de crédito en sí; fijan de forma explícita
+    // que el crédito NO requiere pago. El default de la academia ahora es `true`
+    // y tiene su propio test ("creditoRequierePago: bloquea...").
+    await setParametros(adminDb, T1, { creditoRequierePago: false }, { uid: ADMIN })
+  })
+
   it('crea un plan activo y rechaza un segundo activo del mismo alumno', async () => {
     const { planId } = await crearPlan('a1')
     assert.equal((await getPlanActivo(adminDb, T1, 'a1')).id, planId)
@@ -3524,26 +3531,27 @@ describe('[F5] mensualidades: planes, créditos y consumo al cerrar', () => {
     assert.deepEqual(res.advertencias, [{ alumnoId: 'a1', motivo: 'credito_insuficiente' }])
   })
 
-  it('falta sin aviso: descuenta_proporcional (default)', async () => {
+  it('falta sin aviso: descuenta_completo (default)', async () => {
     await crearPlan('a1')
     const { creditoId } = await comprar('a1')
     const { claseId } = await reservar({ alumnos: ['a1'], cobro: cobroUno })
     await cerrar(claseId, sinAviso())
     const { cargos, movimientos } = await getCierreDeClase(adminDb, T1, claseId)
     assert.equal(cargos.length, 0)
-    assert.equal(movimientos[0].minutos, 30)
+    assert.equal(movimientos[0].minutos, 60)
     assert.equal(movimientos[0].motivo, 'falta_sin_aviso')
-    assert.equal((await datoCredito(creditoId)).minutosUsados, 30)
+    assert.equal((await datoCredito(creditoId)).minutosUsados, 60)
   })
 
-  it('falta sin aviso: descuenta_completo', async () => {
-    await setParametros(adminDb, T1, { faltaSinAvisoConCredito: 'descuenta_completo' }, { uid: ADMIN })
+  it('falta sin aviso: descuenta_proporcional', async () => {
+    await setParametros(adminDb, T1, { faltaSinAvisoConCredito: 'descuenta_proporcional' }, { uid: ADMIN })
     await crearPlan('a1')
-    await comprar('a1')
+    const { creditoId } = await comprar('a1')
     const { claseId } = await reservar({ alumnos: ['a1'], cobro: cobroUno })
     await cerrar(claseId, sinAviso())
     const { movimientos } = await getCierreDeClase(adminDb, T1, claseId)
-    assert.equal(movimientos[0].minutos, 60)
+    assert.equal(movimientos[0].minutos, 30)
+    assert.equal((await datoCredito(creditoId)).minutosUsados, 30)
   })
 
   it('falta sin aviso: cobra_aparte genera el cargo normal', async () => {

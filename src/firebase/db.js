@@ -3323,7 +3323,9 @@ export async function getCreditoAlumno(db, tenantId, alumnoId, fecha = fechaHoyL
     ? await getParametros(db, tenantId)
     : null
   const creditoRequierePago =
-    opciones.creditoRequierePago ?? parametros?.creditoRequierePago ?? false
+    opciones.creditoRequierePago ??
+    parametros?.creditoRequierePago ??
+    PARAMETROS_DEFAULT.creditoRequierePago
 
   const lotes = await leerLotesDeAlumno(db, tenantId, alumnoId)
   const cargoIds = [...new Set(lotes.map((lote) => lote.cargoId).filter(Boolean))]

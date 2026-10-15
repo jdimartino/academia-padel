@@ -1078,7 +1078,21 @@ async function main() {
   }
 
   const CARGOS_MENSUALIDAD = [
-    { id: 'men_cred-a1', alumnoId: 'a1', creditoId: 'cred-a1', planId: 'plan-a1', planNombre: 'Mensual 8 horas', montoCents: 8000, fecha: ayerAbierto },
+    {
+      id: 'men_cred-a1',
+      alumnoId: 'a1',
+      creditoId: 'cred-a1',
+      planId: 'plan-a1',
+      planNombre: 'Mensual 8 horas',
+      montoCents: 8000,
+      fecha: ayerAbierto,
+      // Pagado replica la forma de `marcarCargoPagado` (Fase 4): el cargo queda
+      // `pagado` con `pagadoEn` (Timestamp) y `metodoPago`. Así el crédito
+      // `cred-a1` es usable con `creditoRequierePago: true` (default).
+      estado: 'pagado',
+      pagadoEn: creadoEn,
+      metodoPago: 'efectivo',
+    },
     { id: 'men_cred-a16', alumnoId: 'a16', creditoId: 'cred-a16', planId: 'plan-a16', planNombre: 'Mensual 8 horas (hermanos)', montoCents: 7200, fecha: diaRelativo(0) },
     { id: 'men_cred-a14', alumnoId: 'a14', creditoId: 'cred-a14', planId: 'plan-a14', planNombre: 'Mensual 4 horas', montoCents: 4500, fecha: diaRelativo(-30) },
   ]

@@ -1161,8 +1161,8 @@ describe('parámetros de la academia', () => {
       restringirCategoriaPorFranja: false,
       repartoAusenciaAvisada: 'absorbe_academia',
       pagoProfesorSiTodosFaltanSinAviso: 'completo',
-      faltaSinAvisoConCredito: 'descuenta_proporcional',
-      creditoRequierePago: false,
+      faltaSinAvisoConCredito: 'descuenta_completo',
+      creditoRequierePago: true,
     })
   })
 
@@ -1428,8 +1428,8 @@ describe('constantes de cierre (Phase 4)', () => {
 
 describe('parámetros de mensualidades', () => {
   it('los defaults y validadores nuevos', () => {
-    assert.equal(PARAMETROS_DEFAULT.faltaSinAvisoConCredito, 'descuenta_proporcional')
-    assert.equal(PARAMETROS_DEFAULT.creditoRequierePago, false)
+    assert.equal(PARAMETROS_DEFAULT.faltaSinAvisoConCredito, 'descuenta_completo')
+    assert.equal(PARAMETROS_DEFAULT.creditoRequierePago, true)
     assert.equal(faltaConCreditoValida('descuenta_proporcional'), true)
     assert.equal(faltaConCreditoValida('descuenta_completo'), true)
     assert.equal(faltaConCreditoValida('cobra_aparte'), true)
@@ -1447,17 +1447,17 @@ describe('parámetros de mensualidades', () => {
 
   it('leerParametros rellena los nuevos y corrige los corruptos', () => {
     const def = leerParametros(null)
-    assert.equal(def.faltaSinAvisoConCredito, 'descuenta_proporcional')
-    assert.equal(def.creditoRequierePago, false)
+    assert.equal(def.faltaSinAvisoConCredito, 'descuenta_completo')
+    assert.equal(def.creditoRequierePago, true)
     const leidos = leerParametros({
       faltaSinAvisoConCredito: 'cobra_aparte',
-      creditoRequierePago: true,
+      creditoRequierePago: false,
     })
     assert.equal(leidos.faltaSinAvisoConCredito, 'cobra_aparte')
-    assert.equal(leidos.creditoRequierePago, true)
+    assert.equal(leidos.creditoRequierePago, false)
     const corruptos = leerParametros({ faltaSinAvisoConCredito: 'x', creditoRequierePago: 'si' })
-    assert.equal(corruptos.faltaSinAvisoConCredito, 'descuenta_proporcional')
-    assert.equal(corruptos.creditoRequierePago, false)
+    assert.equal(corruptos.faltaSinAvisoConCredito, 'descuenta_completo')
+    assert.equal(corruptos.creditoRequierePago, true)
   })
 })
 
@@ -1571,11 +1571,25 @@ describe('créditos: lotes, FIFO, vencimiento y consumo', () => {
     assert.equal(insuficiente.requiereCargo, true)
     assert.equal(insuficiente.insuficiente, true)
 
+    const porDefecto = previsualizarCreditoAlumno({
+      estado: 'ausente_sin_aviso',
+      minutosClase: 60,
+      minutosDisponibles: 60,
+      porcentajeFaltaSinAviso: 50,
+    })
+    assert.deepEqual(porDefecto, {
+      usaCredito: true,
+      minutos: 60,
+      motivo: 'falta_sin_aviso',
+      requiereCargo: false,
+    })
+
     const proporcional = previsualizarCreditoAlumno({
       estado: 'ausente_sin_aviso',
       minutosClase: 60,
       minutosDisponibles: 30,
       porcentajeFaltaSinAviso: 50,
+      faltaSinAvisoConCredito: 'descuenta_proporcional',
     })
     assert.deepEqual(proporcional, {
       usaCredito: true,

@@ -698,8 +698,8 @@ incompleto, `leerParametros` rellena campo por campo con `PARAMETROS_DEFAULT`.
 | `restringirCategoriaPorFranja` | bool | `false` | *Sin implementar todavía* |
 | `repartoAusenciaAvisada` | string | `absorbe_academia` | **Fase 4.** `absorbe_academia` \| `reparte_entre_presentes`. Solo importa en modo `total`: si un alumno avisó su ausencia, su parte se la queda la academia o se reparte entre los presentes |
 | `pagoProfesorSiTodosFaltanSinAviso` | string | `completo` | **Fase 4.** `completo` \| `proporcional_cobrado` \| `nada`. Qué se le paga al profesor cuando NADIE asistió y hubo al menos una falta sin aviso |
-| `faltaSinAvisoConCredito` | string | `descuenta_proporcional` | **Fase 5.** `descuenta_proporcional` \| `descuenta_completo` \| `cobra_aparte`. Qué hace una falta sin aviso cuando el alumno tiene crédito: descuenta el `porcentajeFaltaSinAviso` % de los minutos de la clase (half-up), descuenta la clase completa o genera el cargo normal |
-| `creditoRequierePago` | bool | `false` | **Fase 5.** `false` = el crédito sirve apenas se crea el lote; `true` = solo cuando la `mensualidad` de ese lote está `pagado` |
+| `faltaSinAvisoConCredito` | string | `descuenta_completo` | **Fase 5.** `descuenta_proporcional` \| `descuenta_completo` \| `cobra_aparte`. Qué hace una falta sin aviso cuando el alumno tiene crédito: descuenta el `porcentajeFaltaSinAviso` % de los minutos de la clase (half-up), descuenta la clase completa o genera el cargo normal |
+| `creditoRequierePago` | bool | `true` | **Fase 5.** `true` = el crédito solo sirve cuando la `mensualidad` de ese lote está `pagado`; `false` = sirve apenas se crea el lote. Por defecto el crédito es usable **solo después** de pagar el cargo de mensualidad |
 
 Funciones: `getParametros` (1 lectura, tolerante), `validarParametros`
 (obligatoria antes de escribir; completa con defaults y rechaza campos/rangos
@@ -873,6 +873,9 @@ sola transacción. `anularCredito(creditoId)` solo se permite si
 `anulado`. `getCreditoAlumno(alumnoId, fecha)` devuelve los lotes usables en
 orden **FIFO** (por `venceEn` ascendente, los que no vencen al final, y después
 `inicio`), el total disponible y los vencidos; respeta `creditoRequierePago`.
+Por defecto (`creditoRequierePago: true`) el crédito es usable **solo después**
+de pagar el cargo de `mensualidad` del lote: hasta entonces el lote queda
+`bloqueado`.
 
 ### `academias/{tenantId}/movimientosCredito/{${claseId}_${alumnoId}}`
 

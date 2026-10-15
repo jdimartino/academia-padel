@@ -152,8 +152,8 @@ export const PARAMETROS_DEFAULT = Object.freeze({
   restringirCategoriaPorFranja: false,
   repartoAusenciaAvisada: 'absorbe_academia',
   pagoProfesorSiTodosFaltanSinAviso: 'completo',
-  faltaSinAvisoConCredito: 'descuenta_proporcional',
-  creditoRequierePago: false,
+  faltaSinAvisoConCredito: 'descuenta_completo',
+  creditoRequierePago: true,
 })
 
 /** Entero dentro de [min, max] inclusive. */
@@ -542,7 +542,7 @@ export function consumirCreditos(lotes, minutos) {
  * `porcentajeFaltaSinAviso` % de la duración (half-up a minutos enteros);
  * `cobra_aparte` = 0 (no hay descuento: se cobra el cargo normal de Phase 4).
  */
-export function minutosFaltaSinAviso(duracionMin, porcentaje, modo = 'descuenta_proporcional') {
+export function minutosFaltaSinAviso(duracionMin, porcentaje, modo = PARAMETROS_DEFAULT.faltaSinAvisoConCredito) {
   const dur = Number.isFinite(duracionMin) ? Math.max(0, duracionMin) : 0
   if (modo === 'descuenta_completo') return dur
   if (modo === 'cobra_aparte') return 0
@@ -583,7 +583,7 @@ export function previsualizarCreditoAlumno({
   minutosClase = 0,
   minutosDisponibles: disponibles = 0,
   porcentajeFaltaSinAviso = 0,
-  faltaSinAvisoConCredito = 'descuenta_proporcional',
+  faltaSinAvisoConCredito = PARAMETROS_DEFAULT.faltaSinAvisoConCredito,
 } = {}) {
   const clase = Number.isFinite(minutosClase) ? Math.max(0, minutosClase) : 0
   const credito = Number.isFinite(disponibles) ? Math.max(0, disponibles) : 0
