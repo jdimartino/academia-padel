@@ -17,7 +17,7 @@ export default function BotonAccion({
   children,
   onClick,
   control,
-  tipo = 'button',
+  type = 'button',
   accion = 'accion',
   exito: mensajeExito = null,
   sinExito = false,
@@ -52,7 +52,7 @@ export default function BotonAccion({
   return (
     <button
       {...rest}
-      type={tipo}
+      type={type}
       className={`${className} btn-accion`}
       disabled={disabled || ocupado}
       aria-busy={ocupado}
