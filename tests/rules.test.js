@@ -1732,3 +1732,29 @@ describe('[F7] administradores: el admin nunca toca su propia membresía', () =>
     )
   })
 })
+
+describe('[B] Reportes: el profesor no puede leer los datos de los informes', () => {
+  it('profesor de t1 LISTA cargos → DENY', async () => {
+    await assertFails(getDocs(collection(as(UID.profT1), 'academias', T1, 'cargos')))
+  })
+
+  it('profesor de t1 LISTA pagosProfesor → DENY', async () => {
+    await assertFails(getDocs(collection(as(UID.profT1), 'academias', T1, 'pagosProfesor')))
+  })
+
+  it('profesor de t1 LISTA planesAlumno → DENY', async () => {
+    await assertFails(getDocs(collection(as(UID.profT1), 'academias', T1, 'planesAlumno')))
+  })
+
+  it('profesor de t1 LISTA creditos → DENY', async () => {
+    await assertFails(getDocs(collection(as(UID.profT1), 'academias', T1, 'creditos')))
+  })
+
+  it('profesor con ACCESO LISTA clases → DENY (no amplió las reglas)', async () => {
+    await assertFails(getDocs(collection(as(UID.profeAcceso), 'academias', T1, 'clases')))
+  })
+
+  it('profesor con ACCESO LISTA cargos → DENY', async () => {
+    await assertFails(getDocs(collection(as(UID.profeAcceso), 'academias', T1, 'cargos')))
+  })
+})

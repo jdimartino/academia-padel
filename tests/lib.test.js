@@ -1821,3 +1821,329 @@ describe('acceso de profesores (Fase 7)', () => {
     )
   })
 })
+
+/*
+ * Reportes (Parte B): agregaciones puras y utilidades de exportación.
+ * Sin Firestore: entran listas ya cargadas y salen tablas listas para mostrar.
+ */
+import {
+  aCSV,
+  agruparPor,
+  alumnosInactivos,
+  clasesAgendadas,
+  clasesRealizadas,
+  cobrosRecibidos,
+  cuentasPorCobrar,
+  diasEntre,
+  duracionMinutos,
+  enRango,
+  escaparCSV,
+  estadoCuenta,
+  formatearCelda,
+  horasPagoProfesor,
+  informePorId,
+  listadoAlumnos,
+  listadoProfesores,
+  normalizarTelefonoVE,
+  ocupacionCanchas,
+  pagosProfesores,
+  planesCredito,
+  rangoMesActual,
+  resumenMes,
+  sumarCents,
+  textoImporte,
+  textoResumen,
+  urlWhatsApp,
+  INFORMES,
+} from '../src/lib/reportes.js'
+
+describe('reportes: utilidades de agregación', () => {
+  it('sumaCents suma solo la clave pedida', () => {
+    assert.equal(sumarCents([{ montoCents: 100 }, { montoCents: 250 }]), 350)
+    assert.equal(sumarCents([], 'montoCents'), 0)
+  })
+
+  it('enRango respeta los bordes y los extremos abiertos', () => {
+    assert.equal(enRango('2026-11-10', '2026-11-01', '2026-11-30'), true)
+    assert.equal(enRango('2026-11-01', '2026-11-01', '2026-11-30'), true)
+    assert.equal(enRango('2026-11-30', '2026-11-01', '2026-11-30'), true)
+    assert.equal(enRango('2026-10-31', '2026-11-01', null), false)
+    assert.equal(enRango('2026-11-15', null, null), true)
+    assert.equal(enRango(null, null, null), false)
+  })
+
+  it('agruparPor agrupa por la clave derivada', () => {
+    const mapa = agruparPor([{ t: 'a', v: 1 }, { t: 'b', v: 2 }, { t: 'a', v: 3 }], (x) => x.t)
+    assert.equal(mapa.get('a').length, 2)
+    assert.equal(mapa.get('b').length, 1)
+  })
+
+  it('diasEntre y duracionMinutos calculan bien', () => {
+    assert.equal(diasEntre('2026-11-01', '2026-11-08'), 7)
+    assert.equal(duracionMinutos({ horaInicio: '10:00', horaFin: '11:30' }), 90)
+    assert.equal(duracionMinutos({ horaInicio: null, horaFin: '11:30' }), 0)
+  })
+})
+
+describe('reportes: WhatsApp y CSV', () => {
+  it('normaliza teléfonos venezolanos al formato 58...', () => {
+    assert.equal(normalizarTelefonoVE('+58 412-1234567'), '584121234567')
+    assert.equal(normalizarTelefonoVE('0412-1234567'), '584121234567')
+    assert.equal(normalizarTelefonoVE('4121234567'), '584121234567')
+    assert.equal(normalizarTelefonoVE('00584121234567'), '584121234567')
+    assert.equal(normalizarTelefonoVE('123'), null)
+    assert.equal(normalizarTelefonoVE(''), null)
+    assert.equal(normalizarTelefonoVE(null), null)
+  })
+
+  it('construye la URL de WhatsApp con y sin destinatario', () => {
+    assert.match(urlWhatsApp('hola'), /^https:\/\/wa\.me\/\?text=hola$/)
+    assert.match(urlWhatsApp('hola', '04121234567'), /^https:\/\/wa\.me\/584121234567\?text=hola$/)
+  })
+
+  it('escaparCSV escapa comillas, separador y saltos', () => {
+    assert.equal(escaparCSV('simple'), 'simple')
+    assert.equal(escaparCSV('a;b'), '"a;b"')
+    assert.equal(escaparCSV('di "hola"'), '"di ""hola"""')
+    assert.equal(escaparCSV(null), '')
+  })
+
+  it('aCSV lleva BOM, encabezado, separador ; y acentos', () => {
+    const csv = aCSV(
+      [{ clave: 'nombre', label: 'Nombre' }, { clave: 'monto', label: 'Monto' }],
+      [{ nombre: 'José;Muñoz', monto: '10.00' }],
+    )
+    assert.equal(csv.charCodeAt(0), 0xfeff)
+    assert.ok(csv.includes('Nombre;Monto'))
+    assert.ok(csv.includes('"José;Muñoz";10.00'))
+  })
+
+  it('formatearCelda formatea dinero en USD y fechas', () => {
+    assert.equal(formatearCelda(4500, 'money'), '45.00')
+    assert.equal(formatearCelda('', 'money'), '')
+    assert.equal(formatearCelda(null, 'fecha'), '')
+  })
+
+  it('textoResumen arma un texto corto con academia, título y líneas', () => {
+    const texto = textoResumen({
+      titulo: 'Cuentas por cobrar',
+      rango: 'noviembre',
+      lineas: ['Total: $100.00'],
+      academia: 'Academia Pádel',
+    })
+    assert.ok(texto.includes('*Academia Pádel*'))
+    assert.ok(texto.includes('*Cuentas por cobrar*'))
+    assert.ok(texto.includes('noviembre'))
+    assert.ok(texto.includes('Total: $100.00'))
+  })
+
+  it('textoImporte formatea centavos como USD', () => {
+    assert.equal(textoImporte(1250), '$12.50')
+  })
+})
+
+describe('reportes: constructores', () => {
+  const claseBase = {
+    id: 'k1',
+    sedeId: 's1',
+    sedeNombre: 'Traki',
+    canchaId: 'c1',
+    canchaNombre: 'Cancha 1',
+    profesorId: 'p1',
+    profesorNombre: 'Pablo Profesor',
+    fecha: '2026-11-16',
+    horaInicio: '10:00',
+    horaFin: '11:00',
+    estado: 'reservada',
+    alumnos: ['a1', 'a2'],
+    alumnoNombres: ['Ana', 'Beto'],
+    cobro: null,
+  }
+
+  it('clasesAgendadas solo muestra próximas y abiertas', () => {
+    const r = clasesAgendadas({
+      clases: [
+        claseBase,
+        { ...claseBase, id: 'k2', fecha: '2026-11-10' },
+        { ...claseBase, id: 'k3', estado: 'cerrada' },
+      ],
+      filtros: { ahora: '2026-11-15', desde: '2026-11-01', hasta: '2026-11-30' },
+    })
+    assert.equal(r.filas.length, 1)
+    assert.equal(r.filas[0].horario, '10:00–11:00')
+  })
+
+  it('clasesRealizadas cuenta presentes, avisados y sin aviso', () => {
+    const r = clasesRealizadas({
+      clases: [
+        {
+          ...claseBase,
+          estado: 'pendiente_cobro',
+          asistencias: [
+            { alumnoId: 'a1', estado: 'presente' },
+            { alumnoId: 'a2', estado: 'ausente_sin_aviso' },
+          ],
+        },
+      ],
+      filtros: { desde: '2026-11-01', hasta: '2026-11-30' },
+    })
+    assert.equal(r.filas.length, 1)
+    assert.equal(r.filas[0].presentes, 1)
+    assert.equal(r.filas[0].sinAviso, 1)
+  })
+
+  it('ocupacionCanchas calcula el porcentaje sobre minutos abiertos', () => {
+    const horario = Object.fromEntries(
+      [0, 1, 2, 3, 4, 5, 6].map((d) => [d, { apertura: 600, cierre: 660 }]),
+    )
+    const r = ocupacionCanchas({
+      sedes: [{ id: 's1', nombre: 'Traki', horario }],
+      canchasPorSede: { s1: [{ id: 'c1', nombre: 'Cancha 1' }] },
+      clases: [{ ...claseBase, horaInicio: '10:00', horaFin: '10:30' }],
+      filtros: { desde: '2026-11-16', hasta: '2026-11-16' },
+    })
+    assert.equal(r.filas.length, 1)
+    assert.equal(r.filas[0].reservados, 30)
+    assert.equal(r.filas[0].abiertos, 60)
+    assert.equal(r.filas[0].ocupacion, 50)
+  })
+
+  it('listadoAlumnos y listadoProfesores listan y cuentan', () => {
+    const alumnos = listadoAlumnos({
+      alumnos: [
+        { id: 'a1', nombre: 'Ana', apellidos: 'Ávila', telefono: '0412', nivel: '4a', tipo: 'adulto', activo: true },
+        { id: 'a2', nombre: 'Beto', apellidos: 'Bravo', activo: false },
+      ],
+    })
+    assert.equal(alumnos.filas.length, 2)
+    assert.equal(alumnos.filas[1].estado, 'Inactivo')
+    const profesores = listadoProfesores({ profesores: [{ id: 'p1', nombre: 'P', apellidos: 'Q', sedes: ['s1'] }] })
+    assert.equal(profesores.totales.valor, 1)
+  })
+
+  it('cuentasPorCobrar arma los buckets de antigüedad', () => {
+    const r = cuentasPorCobrar({
+      cargos: [
+        { id: '1', estado: 'pendiente', fecha: '2026-11-14', montoCents: 1000, alumnoNombre: 'Ana', concepto: 'clase' },
+        { id: '2', estado: 'pendiente', fecha: '2026-10-20', montoCents: 2000, alumnoNombre: 'Beto', concepto: 'clase' },
+        { id: '3', estado: 'pendiente', fecha: '2026-09-01', montoCents: 3000, alumnoNombre: 'Ce', concepto: 'clase' },
+      ],
+      filtros: { ahora: '2026-11-15' },
+    })
+    assert.equal(r.totales.valor, 6000)
+    const buckets = Object.fromEntries(r.resumen.map((x) => [x.label, x.valor]))
+    assert.equal(buckets['0-7 días'], 1000)
+    assert.equal(buckets['8-30 días'], 2000)
+    assert.equal(buckets['Más de 30'], 3000)
+  })
+
+  it('horasPagoProfesor suma horas y estados del pago', () => {
+    const r = horasPagoProfesor({
+      clases: [{ ...claseBase, estado: 'cobrada' }],
+      pagos: [
+        { id: 'x', fecha: '2026-11-16', estado: 'pendiente', montoCents: 1500, profesorId: 'p1', profesorNombre: 'Pablo Profesor' },
+        { id: 'y', fecha: '2026-11-16', estado: 'pagado', montoCents: 500, profesorId: 'p1', profesorNombre: 'Pablo Profesor' },
+      ],
+      filtros: { desde: '2026-11-01', hasta: '2026-11-30' },
+    })
+    assert.equal(r.filas[0].horas, 1)
+    assert.equal(r.filas[0].pendiente, 1500)
+    assert.equal(r.filas[0].pagado, 500)
+  })
+
+  it('estadoCuenta suma pendientes y pagados de un alumno', () => {
+    const r = estadoCuenta({
+      alumno: { id: 'a1' },
+      cargos: [
+        { id: '1', alumnoId: 'a1', estado: 'pendiente', fecha: '2026-11-10', montoCents: 2500, concepto: 'clase' },
+        { id: '2', alumnoId: 'a1', estado: 'pagado', fecha: '2026-11-01', montoCents: 1000, concepto: 'clase' },
+        { id: '3', alumnoId: 'a2', estado: 'pendiente', fecha: '2026-11-01', montoCents: 999, concepto: 'clase' },
+      ],
+    })
+    assert.equal(r.filas.length, 2)
+    assert.equal(r.totales.valor, 2500)
+  })
+
+  it('planesCredito calcula minutos restantes por plan', () => {
+    const r = planesCredito({
+      planes: [{ id: 'plan1', alumnoId: 'a1', nombre: 'Mensual', frecuencia: 'mensual', minutosIncluidos: 480, activo: true }],
+      creditos: [{ id: 'cred1', alumnoId: 'a1', planId: 'plan1', minutosComprados: 480, minutosUsados: 60 }],
+      alumnos: [{ id: 'a1', nombre: 'Ana', apellidos: 'Ávila' }],
+    })
+    assert.equal(r.filas[0].restantes, 420)
+  })
+
+  it('cobrosRecibidos agrupa por sede y perfil de cobro', () => {
+    const r = cobrosRecibidos(
+      {
+        cargos: [
+          { id: '1', estado: 'pagado', fecha: '2026-11-10', sedeId: 's1', claseId: 'k1', montoCents: 5000 },
+          { id: '2', estado: 'pagado', fecha: '2026-11-11', sedeId: 's1', claseId: 'k1', montoCents: 3000 },
+        ],
+        clases: [{ id: 'k1', cobro: { perfilCobroId: 'pareja' } }],
+      },
+      { desde: '2026-11-01', hasta: '2026-11-30' },
+    )
+    assert.equal(r.filas.length, 1)
+    assert.equal(r.filas[0].perfil, 'pareja')
+    assert.equal(r.filas[0].monto, 8000)
+  })
+
+  it('pagosProfesores lista y totaliza pendientes', () => {
+    const r = pagosProfesores({
+      pagos: [
+        { id: 'x', fecha: '2026-11-16', estado: 'pendiente', montoCents: 1500, profesorNombre: 'P' },
+        { id: 'y', fecha: '2026-11-16', estado: 'pagado', montoCents: 500, profesorNombre: 'P' },
+      ],
+      filtros: { desde: '2026-11-01', hasta: '2026-11-30' },
+    })
+    assert.equal(r.filas.length, 2)
+    assert.equal(r.totales.valor, 1500)
+  })
+
+  it('resumenMes agrega ingresos, por cobrar y horas', () => {
+    const r = resumenMes({
+      clases: [{ ...claseBase, estado: 'cobrada' }, { ...claseBase, id: 'k2', estado: 'reservada' }],
+      cargos: [
+        { id: '1', estado: 'pagado', fecha: '2026-11-10', montoCents: 5000 },
+        { id: '2', estado: 'pendiente', fecha: '2026-11-10', montoCents: 2000 },
+      ],
+      pagos: [],
+      filtros: { desde: '2026-11-01', hasta: '2026-11-30' },
+    })
+    const valores = Object.fromEntries(r.resumen.map((x) => [x.label, x.valor]))
+    assert.equal(valores['Clases realizadas'], 1)
+    assert.equal(valores['Ingresos cobrados'], 5000)
+    assert.equal(valores['Por cobrar'], 2000)
+  })
+
+  it('alumnosInactivos excluye a quien tiene clase reciente', () => {
+    const r = alumnosInactivos({
+      alumnos: [
+        { id: 'a1', nombre: 'Ana', apellidos: 'A', activo: true },
+        { id: 'a2', nombre: 'Beto', apellidos: 'B', activo: true },
+      ],
+      clases: [{ id: 'k1', fecha: '2026-11-14', estado: 'cobrada', alumnos: ['a2'] }],
+      filtros: { dias: 30, ahora: '2026-11-15' },
+    })
+    assert.deepEqual(r.filas.map((f) => f.nombre), ['Ana A'])
+  })
+})
+
+describe('reportes: registro y rango por defecto', () => {
+  it('INFORMES trae los 15 informes ordenados por prioridad', () => {
+    assert.equal(INFORMES.length, 15)
+    const prioridades = INFORMES.map((i) => i.prioridad)
+    assert.deepEqual(prioridades, [...prioridades].sort((a, b) => a - b))
+  })
+
+  it('informePorId encuentra por id y devuelve null si no existe', () => {
+    assert.equal(informePorId('cuentas-por-cobrar').titulo, 'Cuentas por cobrar')
+    assert.equal(informePorId('nope'), null)
+  })
+
+  it('rangoMesActual devuelve el primer y último día del mes', () => {
+    assert.deepEqual(rangoMesActual('2026-02-10'), { desde: '2026-02-01', hasta: '2026-02-28' })
+    assert.deepEqual(rangoMesActual('2026-11-15'), { desde: '2026-11-01', hasta: '2026-11-30' })
+  })
+})
