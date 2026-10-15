@@ -98,6 +98,13 @@ import {
   crearAccesoAdmin,
   getMiembro,
   listarMiembros,
+  listarAlumnosReporte,
+  listarCargosDeAlumno,
+  listarCargosPorRango,
+  listarClasesPorRango,
+  listarCreditos,
+  listarPagosProfesorPorRango,
+  listarPlanes,
 } from '../src/firebase/db.js'
 import { PARAMETROS_DEFAULT } from '../src/lib/cobros.js'
 
@@ -3262,6 +3269,50 @@ describe('[F4] cerrarClase: cargos y pago al profesor', () => {
     assert.equal(clase.cobro.montoCents, 3000)
     assert.equal(clase.cobro.ajustado, true)
   })
+
+  it('ausente sin aviso y sin crédito: paga el 50% de su parte', async () => {
+    const { claseId } = await reservar({ alumnos: ['a1', 'a2'], cobro: cobroPareja })
+    await cerrarClase(
+      adminDb,
+      T1,
+      claseId,
+      {
+        asistencias: [
+          { alumnoId: 'a1', estado: 'presente' },
+          { alumnoId: 'a2', estado: 'ausente_sin_aviso', motivo: 'no avisó' },
+        ],
+      },
+      { uid: ADMIN, ahora: DESPUES_DEL_FIN },
+    )
+    const { cargos } = await getCierreDeClase(adminDb, T1, claseId)
+    const porAlumno = Object.fromEntries(cargos.map((c) => [c.alumnoId, c]))
+    assert.equal(porAlumno.a1.concepto, 'clase')
+    assert.equal(porAlumno.a1.montoCents, 2500)
+    assert.equal(porAlumno.a2.concepto, 'falta_sin_aviso')
+    assert.equal(porAlumno.a2.montoCents, 1250)
+  })
+
+  it('todos avisaron su ausencia: sin cargos ni pago y la clase nace cobrada', async () => {
+    const { claseId } = await reservar({ alumnos: ['a1', 'a2'], cobro: cobroPareja })
+    await cerrarClase(
+      adminDb,
+      T1,
+      claseId,
+      {
+        asistencias: [
+          { alumnoId: 'a1', estado: 'ausente_avisada', motivo: 'viaje' },
+          { alumnoId: 'a2', estado: 'ausente_avisada', motivo: 'estudios' },
+        ],
+      },
+      { uid: ADMIN, ahora: DESPUES_DEL_FIN },
+    )
+    const clase = await getClase(adminDb, T1, claseId)
+    assert.equal(clase.estado, 'cobrada')
+    assert.equal(clase.facturada, true)
+    const { cargos, pagoProfesor } = await getCierreDeClase(adminDb, T1, claseId)
+    assert.equal(cargos.length, 0)
+    assert.equal(pagoProfesor, null)
+  })
 })
 
 describe('[F4] marcar pagado y anular cierre', () => {
@@ -4192,5 +4243,70 @@ describe('[F7] flujo integrado de cierre de clase', () => {
     })
     assert.equal(pagos.length, 1)
     assert.equal(pagos[0].estado, 'pendiente')
+  })
+})
+
+describe('[B] reportes: consultas acotadas', () => {
+  const seedDoc = (path, data) =>
+    env.withSecurityRulesDisabled(async (context) => {
+      await context.firestore().doc(path).set(data)
+    })
+
+  it('listarClasesPorRango acota por sede, profesor y fecha', async () => {
+    await seedDoc(`academias/${T1}/clases/k1`, {
+      sedeId: 'traki', profesorId: 'p1', fecha: '2026-11-10', horaInicio: '10:00', horaFin: '11:00', estado: 'reservada',
+    })
+    await seedDoc(`academias/${T1}/clases/k2`, {
+      sedeId: 'traki', profesorId: 'p2', fecha: '2026-11-20', horaInicio: '10:00', horaFin: '11:00', estado: 'reservada',
+    })
+    await seedDoc(`academias/${T1}/clases/k3`, {
+      sedeId: 'boleita', profesorId: 'p1', fecha: '2026-11-15', horaInicio: '10:00', horaFin: '11:00', estado: 'reservada',
+    })
+    const porSede = await listarClasesPorRango(adminDb, T1, { sedeId: 'traki', desde: '2026-11-01', hasta: '2026-11-30' })
+    assert.deepEqual(porSede.map((c) => c.id).sort(), ['k1', 'k2'])
+    const porProfesor = await listarClasesPorRango(adminDb, T1, { profesorId: 'p1', desde: '2026-11-01', hasta: '2026-11-30' })
+    assert.deepEqual(porProfesor.map((c) => c.id).sort(), ['k1', 'k3'])
+    const porFecha = await listarClasesPorRango(adminDb, T1, { desde: '2026-11-12', hasta: '2026-11-16' })
+    assert.deepEqual(porFecha.map((c) => c.id), ['k3'])
+  })
+
+  it('listarCargosPorRango une pendientes y pagados; con estado filtra', async () => {
+    await seedDoc(`academias/${T1}/cargos/cc1`, { estado: 'pendiente', sedeId: 'traki', fecha: '2026-11-10', montoCents: 1000, alumnoId: 'a1' })
+    await seedDoc(`academias/${T1}/cargos/cc2`, { estado: 'pagado', sedeId: 'traki', fecha: '2026-11-11', montoCents: 2000, alumnoId: 'a1' })
+    const todos = await listarCargosPorRango(adminDb, T1, { sedeId: 'traki', desde: '2026-11-01', hasta: '2026-11-30', estado: 'todos' })
+    assert.deepEqual(todos.map((c) => c.id).sort(), ['cc1', 'cc2'])
+    const pend = await listarCargosPorRango(adminDb, T1, { desde: '2026-11-01', hasta: '2026-11-30', estado: 'pendiente' })
+    assert.deepEqual(pend.map((c) => c.id), ['cc1'])
+  })
+
+  it('listarCargosDeAlumno devuelve solo los del alumno', async () => {
+    await seedDoc(`academias/${T1}/cargos/ca1`, { estado: 'pendiente', sedeId: 'traki', fecha: '2026-11-10', montoCents: 1000, alumnoId: 'a1' })
+    await seedDoc(`academias/${T1}/cargos/ca2`, { estado: 'pendiente', sedeId: 'traki', fecha: '2026-11-11', montoCents: 2000, alumnoId: 'a2' })
+    const cargos = await listarCargosDeAlumno(adminDb, T1, 'a1')
+    assert.deepEqual(cargos.map((c) => c.id), ['ca1'])
+  })
+
+  it('listarPagosProfesorPorRango une estados y acota por sede', async () => {
+    await seedDoc(`academias/${T1}/pagosProfesor/pp1`, { estado: 'pendiente', sedeId: 'traki', fecha: '2026-11-10', montoCents: 1500, profesorId: 'p1' })
+    await seedDoc(`academias/${T1}/pagosProfesor/pp2`, { estado: 'pagado', sedeId: 'boleita', fecha: '2026-11-11', montoCents: 500, profesorId: 'p1' })
+    const todos = await listarPagosProfesorPorRango(adminDb, T1, { desde: '2026-11-01', hasta: '2026-11-30', estado: 'todos' })
+    assert.deepEqual(todos.map((p) => p.id).sort(), ['pp1', 'pp2'])
+    const porSede = await listarPagosProfesorPorRango(adminDb, T1, { sedeId: 'traki', desde: '2026-11-01', hasta: '2026-11-30', estado: 'todos' })
+    assert.deepEqual(porSede.map((p) => p.id), ['pp1'])
+  })
+
+  it('listarPlanes y listarCreditos leen por tope', async () => {
+    await seedDoc(`academias/${T1}/planesAlumno/plan1`, { alumnoId: 'a1', nombre: 'Mensual', activo: true, minutosIncluidos: 480 })
+    await seedDoc(`academias/${T1}/planesAlumno/plan2`, { alumnoId: 'a2', nombre: 'Viejo', activo: false, minutosIncluidos: 240 })
+    await seedDoc(`academias/${T1}/creditos/cred1`, { alumnoId: 'a1', planId: 'plan1', estado: 'activo', minutosComprados: 480, minutosUsados: 60 })
+    const planes = await listarPlanes(adminDb, T1, {})
+    assert.deepEqual(planes.map((p) => p.id).sort(), ['plan1', 'plan2'])
+    const creditos = await listarCreditos(adminDb, T1, {})
+    assert.deepEqual(creditos.map((c) => c.id), ['cred1'])
+  })
+
+  it('listarAlumnosReporte lista activos e inactivos ordenados por apellido', async () => {
+    const alumnos = await listarAlumnosReporte(adminDb, T1, { limite: 10 })
+    assert.deepEqual(alumnos.map((a) => a.id).sort(), ['a1', 'a2', 'a3'])
   })
 })

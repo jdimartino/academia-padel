@@ -167,6 +167,9 @@ async function crearClaseEnSeed(datos) {
     bloques: bloques.map((b) => b.id),
     // Snapshot de cobro (opcional): mismo modelo que guarda `crearClase`.
     cobro: datos.cobro ?? null,
+    // Asistencia YA cargada por el profesor (opcional): mismo modelo que guarda
+    // `guardarAsistenciaProfesor` en la app (Fase 7).
+    ...(datos.asistenciaProfesor ? { asistenciaProfesor: datos.asistenciaProfesor } : {}),
     creadoPor: 'seed',
     creadoEn,
   }
@@ -224,12 +227,12 @@ const SEDES = [
     canchas: 5,
     // Tarifa por hora en CENTAVOS de USD, por perfil. Traki tiene todas.
     tarifas: {
-      individual: 4000,
-      pareja: 4500,
-      tres: 5000,
-      cuatro: 5500,
-      corporativo: 6000,
-      especial: 6500,
+      individual: 4500,
+      pareja: 5000,
+      tres: 6000,
+      cuatro: 7000,
+      corporativo: 7500,
+      especial: 8000,
     },
     horario: {
       0: franja(7.5, 15.5),
@@ -245,7 +248,7 @@ const SEDES = [
     id: 'une',
     nombre: 'UNE',
     canchas: 2,
-    tarifas: { individual: 4500, pareja: 5000, tres: 5500, cuatro: 6000 },
+    tarifas: { individual: 4500, pareja: 5000, tres: 6000, cuatro: 7000 },
     horario: {
       0: franja(7, 23),
       1: franja(7, 23),
@@ -847,9 +850,9 @@ async function main() {
     cobro: {
       perfilCobroId: 'cuatro',
       modo: 'total',
-      tarifaHoraCents: 5500,
-      montoEstandarCents: 5500,
-      montoCents: 5500,
+      tarifaHoraCents: 7000,
+      montoEstandarCents: 7000,
+      montoCents: 7000,
       ajustado: false,
       motivoAjuste: null,
     },
@@ -880,9 +883,9 @@ async function main() {
     cobro: {
       perfilCobroId: 'pareja',
       modo: 'total',
-      tarifaHoraCents: 4500,
-      montoEstandarCents: 4500,
-      montoCents: 4500,
+      tarifaHoraCents: 5000,
+      montoEstandarCents: 5000,
+      montoCents: 5000,
       ajustado: false,
       motivoAjuste: null,
     },
@@ -907,9 +910,9 @@ async function main() {
     cobro: {
       perfilCobroId: 'pareja',
       modo: 'total',
-      tarifaHoraCents: 4500,
-      montoEstandarCents: 6750,
-      montoCents: 6750,
+      tarifaHoraCents: 5000,
+      montoEstandarCents: 7500,
+      montoCents: 7500,
       ajustado: false,
       motivoAjuste: null,
     },
@@ -936,9 +939,9 @@ async function main() {
     cobro: {
       perfilCobroId: 'cuatro',
       modo: 'total',
-      tarifaHoraCents: 5500,
-      montoEstandarCents: 5500,
-      montoCents: 5500,
+      tarifaHoraCents: 7000,
+      montoEstandarCents: 7000,
+      montoCents: 7000,
       ajustado: false,
       motivoAjuste: null,
     },
@@ -970,8 +973,8 @@ async function main() {
     cobro: {
       perfilCobroId: 'cuatro',
       modo: 'total',
-      tarifaHoraCents: 5500,
-      montoEstandarCents: 5500,
+      tarifaHoraCents: 7000,
+      montoEstandarCents: 7000,
       montoCents: 4000,
       ajustado: true,
       motivoAjuste: 'descuento',
@@ -998,13 +1001,13 @@ async function main() {
     categoriaGrupo: 'junior',
     alumnosIds: ['a1', 'a2'],
     estado: 'reservada',
-    // Pareja, 90 min a $45.00/h → 4500 × 90/60 = 6750 centavos.
+    // Pareja, 90 min a $50.00/h → 5000 × 90/60 = 7500 centavos.
     cobro: {
       perfilCobroId: 'pareja',
       modo: 'total',
-      tarifaHoraCents: 4500,
-      montoEstandarCents: 6750,
-      montoCents: 6750,
+      tarifaHoraCents: 5000,
+      montoEstandarCents: 7500,
+      montoCents: 7500,
       ajustado: false,
       motivoAjuste: null,
     },
@@ -1203,9 +1206,9 @@ async function main() {
     cobro: {
       perfilCobroId: 'cuatro',
       modo: 'total',
-      tarifaHoraCents: 5500,
-      montoEstandarCents: 5500,
-      montoCents: 5500,
+      tarifaHoraCents: 7000,
+      montoEstandarCents: 7000,
+      montoCents: 7000,
       ajustado: false,
       motivoAjuste: null,
     },
@@ -1258,6 +1261,142 @@ async function main() {
     }
   }
   console.log(`· ${USUARIOS.length} usuarios (membresías de admin/alumno/representante + acceso de profesor)`)
+
+  /*
+   * Clases de demo del FLUJO DE CIERRE: días PASADOS que quedaron ABIERTAS
+   * (`reservada`) para ejercitar cada caso del cierre al cerrarlas desde la app.
+   * - ca: el profesor YA cargó la asistencia (asistenciaProfesor) → el admin
+   *   prellena desde ahí y verá "confirmado por el profesor".
+   * - cb: un alumno PRESENTE y otro FALTA SIN AVISO sin crédito → el ausente
+   *   paga el 50% de su parte.
+   * - cc: TODOS avisaron su ausencia → sin cargos ni pago al profesor.
+   * - cd: a1 PRESENTE con crédito suficiente → consume el lote, sin cargo.
+   * Van en días y horas distintas (y usan canchas distintas de las otras clases)
+   * para no chocar con c0/c2/c4/c5/c6 aunque `diaRelativoAbierto` corra la fecha.
+   */
+  const profesorUid = ids['profe@ensayo.test']
+  const presente = (alumnoId) => ({
+    alumnoId,
+    estado: 'presente',
+    motivo: null,
+    registradoPor: 'seed',
+    registradoEn: creadoEn,
+  })
+  const ausente = (alumnoId, estado, motivo) => ({
+    alumnoId,
+    estado,
+    motivo,
+    registradoPor: 'seed',
+    registradoEn: creadoEn,
+  })
+  const cobroPareja = {
+    perfilCobroId: 'pareja',
+    modo: 'total',
+    tarifaHoraCents: 5000,
+    montoEstandarCents: 5000,
+    montoCents: 5000,
+    ajustado: false,
+    motivoAjuste: null,
+  }
+
+  await crearClaseEnSeed({
+    id: 'ca',
+    sedeId: 'traki',
+    sedeNombre: 'Traki',
+    canchaId: 'c1',
+    canchaNombre: 'Cancha 1',
+    profesorId: 'p1',
+    profesorNombre: nombreCompleto(PROFESORES_POR_ID.p1),
+    fecha: diaRelativoAbierto(-4, horarioTraki),
+    horaInicio: '09:00',
+    horaFin: '10:00',
+    cupo: 2,
+    categoria: '4a',
+    categoriaGrupo: 'adulto',
+    alumnosIds: ['a5', 'a7'],
+    estado: 'reservada',
+    cobro: cobroPareja,
+    asistenciaProfesor: {
+      porAlumno: { a5: 'presente', a7: 'presente' },
+      registradoPor: profesorUid,
+      registradoEn: creadoEn,
+    },
+  })
+
+  await crearClaseEnSeed({
+    id: 'cb',
+    sedeId: 'traki',
+    sedeNombre: 'Traki',
+    canchaId: 'c1',
+    canchaNombre: 'Cancha 1',
+    profesorId: 'p1',
+    profesorNombre: nombreCompleto(PROFESORES_POR_ID.p1),
+    fecha: diaRelativoAbierto(-5, horarioTraki),
+    horaInicio: '10:30',
+    horaFin: '11:30',
+    cupo: 2,
+    categoria: '5a',
+    categoriaGrupo: 'junior',
+    alumnosIds: ['a5', 'a7'],
+    asistencias: [
+      ausente('a5', 'presente', null),
+      ausente('a7', 'ausente_sin_aviso', 'no avisó'),
+    ],
+    estado: 'reservada',
+    cobro: cobroPareja,
+  })
+
+  await crearClaseEnSeed({
+    id: 'cc',
+    sedeId: 'traki',
+    sedeNombre: 'Traki',
+    canchaId: 'c1',
+    canchaNombre: 'Cancha 1',
+    profesorId: 'p1',
+    profesorNombre: nombreCompleto(PROFESORES_POR_ID.p1),
+    fecha: diaRelativoAbierto(-6, horarioTraki),
+    horaInicio: '13:00',
+    horaFin: '14:00',
+    cupo: 2,
+    categoria: '6a',
+    categoriaGrupo: 'junior',
+    alumnosIds: ['a5', 'a7'],
+    asistencias: [
+      ausente('a5', 'ausente_avisada', 'viaje'),
+      ausente('a7', 'ausente_avisada', 'estudios'),
+    ],
+    estado: 'reservada',
+    cobro: cobroPareja,
+  })
+
+  await crearClaseEnSeed({
+    id: 'cd',
+    sedeId: 'traki',
+    sedeNombre: 'Traki',
+    canchaId: 'c1',
+    canchaNombre: 'Cancha 1',
+    profesorId: 'p1',
+    profesorNombre: nombreCompleto(PROFESORES_POR_ID.p1),
+    fecha: diaRelativoAbierto(-7, horarioTraki),
+    horaInicio: '14:30',
+    horaFin: '15:30',
+    cupo: 2,
+    categoria: '4a',
+    categoriaGrupo: 'adulto',
+    alumnosIds: ['a1'],
+    asistencias: [presente('a1')],
+    estado: 'reservada',
+    cobro: {
+      perfilCobroId: 'cuatro',
+      modo: 'total',
+      tarifaHoraCents: 7000,
+      montoEstandarCents: 7000,
+      montoCents: 7000,
+      ajustado: false,
+      motivoAjuste: null,
+    },
+  })
+  console.log('· 4 clases de demo del cierre (ca, cb, cc, cd)')
 
   console.log('\nListo. Usuarios de ensayo (contraseña "ensayo1234"):')
   for (const usuario of USUARIOS) {

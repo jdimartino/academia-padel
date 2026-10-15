@@ -3079,7 +3079,7 @@ export async function cerrarClase(db, tenantId, claseId, datos = {}, opciones = 
     // Decisión por alumno + consumo FIFO.
     const nombrePorId = {}
     ;(d.alumnos ?? []).forEach((id, i) => {
-      nombrePorId[id] = (d.alumnoNombres ?? [])[i] ?? id
+      nombrePorId[id] = (d.alumnoNombres ?? [])[i] ?? 'Alumno'
     })
 
     const cubiertos = new Set()
@@ -3154,7 +3154,7 @@ export async function cerrarClase(db, tenantId, claseId, datos = {}, opciones = 
         doc: {
           claseId,
           alumnoId: cargo.alumnoId,
-          alumnoNombre: nombrePorId[cargo.alumnoId] ?? cargo.alumnoId,
+          alumnoNombre: nombrePorId[cargo.alumnoId] ?? 'Alumno',
           sedeId: d.sedeId,
           fecha: d.fecha,
           concepto: cargo.concepto,
@@ -3402,15 +3402,17 @@ function rangoFechas(desde, hasta) {
 }
 
 /**
- * Cargos PENDIENTES, acotados por tenant y opcionalmente por sede y rango de
- * fechas. Página chica: 50 por defecto, tope 100. Requiere los índices de
- * `firestore.indexes.json`.
+ * Cargos acotados por tenant y opcionalmente por sede, rango de fechas y
+ * `estado` (`"pendiente"` por defecto, `"pagado"` o `"anulado"`; cualquier otro
+ * valor cae a pendiente). Página chica: 50 por defecto, tope 100. Requiere los
+ * índices de `firestore.indexes.json` (estado + sede + fecha).
  */
 export async function listarCargosPendientes(db, tenantId, opciones = {}) {
   const { sedeId = null, limite } = opciones
+  const estado = ['pagado', 'anulado'].includes(opciones.estado) ? opciones.estado : 'pendiente'
   const { desde, hasta } = rangoFechas(opciones.desde, opciones.hasta)
   const tope = Math.min(Math.max(1, Number(limite) || LIMITE_COBROS_PAGINA), LIMITE_COBROS_MAX)
-  const filtros = [where('estado', '==', 'pendiente')]
+  const filtros = [where('estado', '==', estado)]
   if (sedeId) filtros.push(where('sedeId', '==', sedeId))
   if (desde) filtros.push(where('fecha', '>=', desde))
   if (hasta) filtros.push(where('fecha', '<=', hasta))
@@ -3425,14 +3427,15 @@ export async function listarCargosPendientes(db, tenantId, opciones = {}) {
 }
 
 /**
- * Pagos PENDIENTES al profesor, con los mismos filtros y topes que
- * `listarCargosPendientes` (colección `pagosProfesor`).
+ * Pagos al profesor con los mismos filtros y topes que `listarCargosPendientes`
+ * (colección `pagosProfesor`).
  */
 export async function listarPagosProfesorPendientes(db, tenantId, opciones = {}) {
   const { sedeId = null, limite } = opciones
+  const estado = ['pagado', 'anulado'].includes(opciones.estado) ? opciones.estado : 'pendiente'
   const { desde, hasta } = rangoFechas(opciones.desde, opciones.hasta)
   const tope = Math.min(Math.max(1, Number(limite) || LIMITE_COBROS_PAGINA), LIMITE_COBROS_MAX)
-  const filtros = [where('estado', '==', 'pendiente')]
+  const filtros = [where('estado', '==', estado)]
   if (sedeId) filtros.push(where('sedeId', '==', sedeId))
   if (desde) filtros.push(where('fecha', '>=', desde))
   if (hasta) filtros.push(where('fecha', '<=', hasta))
@@ -3444,6 +3447,129 @@ export async function listarPagosProfesorPendientes(db, tenantId, opciones = {})
   )
   const snap = await getDocs(q)
   return snap.docs.map((d) => ({ id: d.id, ...d.data() }))
+}
+
+/* --------------------------------------------------------------------- */
+/* Reportes (Parte B): lecturas acotadas por rango para los informes       */
+/* --------------------------------------------------------------------- */
+
+/** Tope de clases que un informe carga de una vez. */
+export const LIMITE_REPORTE_CLASES = 500
+/** Tope de cargos/pagos/movimientos que un informe carga de una vez. */
+export const LIMITE_REPORTE_MOVIMIENTOS = 500
+
+/**
+ * Clases acotadas por tenant, opcionalmente por sede y/o profesor, dentro de un
+ * rango de fechas y con tope. `desde`/`hasta` son "YYYY-MM-DD".
+ */
+export async function listarClasesPorRango(db, tenantId, opciones = {}) {
+  const { sedeId = null, profesorId = null, desde = null, hasta = null } = opciones
+  const tope = Math.min(Math.max(1, Number(opciones.limite) || LIMITE_REPORTE_CLASES), LIMITE_REPORTE_CLASES)
+  const filtros = []
+  if (sedeId) filtros.push(where('sedeId', '==', sedeId))
+  if (profesorId) filtros.push(where('profesorId', '==', profesorId))
+  if (desde) filtros.push(where('fecha', '>=', desde))
+  if (hasta) filtros.push(where('fecha', '<=', hasta))
+  const q = query(
+    collection(db, 'academias', tenantId, 'clases'),
+    ...filtros,
+    orderBy('fecha'),
+    limit(tope),
+  )
+  const snap = await getDocs(q)
+  return snap.docs.map((d) => ({ id: d.id, ...d.data() }))
+}
+
+/**
+ * Cargos acotados por tenant, sede, rango de fechas y estado. Con
+ * `estado: 'todos'` (o null) une pendientes y pagados con dos consultas que
+ * reusan los índices existentes. Página con tope.
+ */
+export async function listarCargosPorRango(db, tenantId, opciones = {}) {
+  const estados = opciones.estado && opciones.estado !== 'todos' ? [opciones.estado] : ['pendiente', 'pagado']
+  const partes = await Promise.all(
+    estados.map((estado) => listarCargosPendientes(db, tenantId, {
+      sedeId: opciones.sedeId ?? null,
+      estado,
+      desde: opciones.desde ?? null,
+      hasta: opciones.hasta ?? null,
+      limite: opciones.limite,
+    })),
+  )
+  return partes.flat()
+}
+
+/** Cargos de UN alumno (todos los estados), acotados por alumno + tope. */
+export async function listarCargosDeAlumno(db, tenantId, alumnoId, opciones = {}) {
+  const tope = Math.min(Math.max(1, Number(opciones.limite) || LIMITE_REPORTE_MOVIMIENTOS), LIMITE_REPORTE_MOVIMIENTOS)
+  const q = query(
+    coleccionCargos(db, tenantId),
+    where('alumnoId', '==', alumnoId),
+    orderBy('fecha'),
+    limit(tope),
+  )
+  const snap = await getDocs(q)
+  return snap.docs.map((d) => ({ id: d.id, ...d.data() }))
+}
+
+/**
+ * Pagos al profesor acotados por tenant, sede, rango y estado. Con
+ * `estado: 'todos'` une pendientes y pagados (reusa los índices existentes).
+ */
+export async function listarPagosProfesorPorRango(db, tenantId, opciones = {}) {
+  const estados = opciones.estado && opciones.estado !== 'todos' ? [opciones.estado] : ['pendiente', 'pagado']
+  const partes = await Promise.all(
+    estados.map((estado) => listarPagosProfesorPendientes(db, tenantId, {
+      sedeId: opciones.sedeId ?? null,
+      estado,
+      desde: opciones.desde ?? null,
+      hasta: opciones.hasta ?? null,
+      limite: opciones.limite,
+    })),
+  )
+  return partes.flat()
+}
+
+/** Planes de mensualidad del tenant, acotados por tope (activos e inactivos). */
+export async function listarPlanes(db, tenantId, opciones = {}) {
+  const tope = Math.min(Math.max(1, Number(opciones.limite) || LIMITE_REPORTE_MOVIMIENTOS), LIMITE_REPORTE_MOVIMIENTOS)
+  const q = query(
+    coleccionPlanesAlumno(db, tenantId),
+    where('activo', 'in', [true, false]),
+    limit(tope),
+  )
+  const snap = await getDocs(q)
+  return snap.docs.map((d) => ({ id: d.id, ...d.data() }))
+}
+
+/** Lotes de crédito del tenant, acotados por tope (todos los estados). */
+export async function listarCreditos(db, tenantId, opciones = {}) {
+  const tope = Math.min(Math.max(1, Number(opciones.limite) || LIMITE_REPORTE_MOVIMIENTOS), LIMITE_REPORTE_MOVIMIENTOS)
+  const q = query(
+    coleccionCreditos(db, tenantId),
+    where('estado', 'in', ['activo', 'agotado', 'vencido', 'anulado']),
+    limit(tope),
+  )
+  const snap = await getDocs(q)
+  return snap.docs.map((d) => ({ id: d.id, ...d.data() }))
+}
+
+/** Alumnos del tenant para los informes, acotados por tope (activos e inactivos). */
+export async function listarAlumnosReporte(db, tenantId, opciones = {}) {
+  const tope = Math.min(Math.max(1, Number(opciones.limite) || 200), 300)
+  const q = query(
+    collection(db, 'academias', tenantId, 'alumnos'),
+    where('activo', 'in', [true, false]),
+    limit(tope),
+  )
+  const snap = await getDocs(q)
+  return snap.docs
+    .map((d) => ({ id: d.id, ...d.data() }))
+    .sort(
+      (a, b) =>
+        String(a.apellidos ?? '').localeCompare(String(b.apellidos ?? ''), 'es') ||
+        String(a.nombre ?? '').localeCompare(String(b.nombre ?? ''), 'es'),
+    )
 }
 
 /**
