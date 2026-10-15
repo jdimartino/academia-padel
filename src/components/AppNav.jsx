@@ -1,7 +1,7 @@
 import { NavLink, useParams } from 'react-router-dom'
 
 /*
- * Links de navegación (Agenda / Alumnos / Profesores / Configuración)
+ * Links de navegación (Agenda / Alumnos / Profesores / Cobros / Configuración)
  * compartidos por el sidebar de desktop y el menú bottom-sheet de mobile. El
  * tenant sale de la ruta (`/:academia/...`).
  */

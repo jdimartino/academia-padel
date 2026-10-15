@@ -4,6 +4,7 @@ import AppNav from './AppNav'
 import Background from './Background'
 import EstadoMensaje from './EstadoMensaje'
 import MenuMovil from './MenuMovil'
+import MenuUsuario from './MenuUsuario'
 import { LogoMark, MenuIcon } from './Icons'
 import { useAuth } from '../context/AuthContext'
 import { db } from '../firebase/config'
@@ -54,6 +55,7 @@ export default function PageChrome({ titulo, children }) {
               <span className="sidebar__titulo">Academia Pádel</span>
             </div>
             <AppNav />
+            <MenuUsuario />
           </aside>
           <main className="main">
             <header className="main__header">

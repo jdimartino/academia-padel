@@ -1,4 +1,5 @@
 import AppNav from './AppNav'
+import MenuUsuario from './MenuUsuario'
 import useCierreSeguro from '../hooks/useCierreSeguro'
 import { CloseIcon } from './Icons'
 
@@ -26,6 +27,7 @@ export default function MenuMovil({ onClose }) {
           </button>
         </div>
         <AppNav onNavigate={onClose} />
+        <MenuUsuario />
       </nav>
     </div>
   )

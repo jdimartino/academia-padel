@@ -1,4 +1,5 @@
 import AppNav from './AppNav'
+import MenuUsuario from './MenuUsuario'
 import MiniCalendar from './MiniCalendar'
 import { LogoMark } from './Icons'
 
@@ -74,6 +75,8 @@ export default function Sidebar({
           ))}
         </ul>
       </div>
+
+      <MenuUsuario />
     </aside>
   )
 }
