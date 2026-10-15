@@ -1,8 +1,11 @@
 import { useCallback, useEffect, useMemo, useState } from 'react'
 import { useParams } from 'react-router-dom'
+import MontoEquivalente from '../components/MontoEquivalente'
 import PageChrome from '../components/PageChrome'
+import TasasPanel from '../components/TasasPanel'
 import { useAuth } from '../context/AuthContext'
 import { useAvisos } from '../context/AvisosContext'
+import { useTasas } from '../context/TasasContext'
 import { db } from '../firebase/config'
 import {
   listarCargosPendientes,
@@ -12,7 +15,6 @@ import {
   marcarPagoProfesorPagado,
 } from '../firebase/db'
 import { METODOS_PAGO } from '../lib/cobros'
-import { formatearUSD } from '../lib/dinero'
 import { formatearFechaLarga, hoyISO, sumarDias } from '../lib/fechas'
 
 const METODOS_LABEL = {
@@ -73,6 +75,7 @@ export default function Cobros() {
   const { academia } = useParams()
   const { user } = useAuth()
   const { mostrarExito, mostrarErrorTecnico } = useAvisos()
+  const { tasas } = useTasas()
   const uid = user?.uid ?? null
 
   const [sedes, setSedes] = useState([])
@@ -148,6 +151,7 @@ export default function Cobros() {
 
   return (
     <PageChrome titulo="Cobros pendientes">
+      <TasasPanel />
       <div className="config glass">
         <div className="cobros__filtros">
           <label className="parametros__campo">
@@ -183,7 +187,8 @@ export default function Cobros() {
           <>
             <section className="cobros__bloque">
               <h2 className="lista-sedes__titulo">
-                Cargos de alumnos <span className="cobros__total">{formatearUSD(totalCargos)}</span>
+                Cargos de alumnos{' '}
+                <MontoEquivalente cents={totalCargos} tasas={tasas} className="cobros__total" />
               </h2>
               {cargos.length === 0 ? (
                 <p className="parametros__hint">No hay cargos pendientes en el rango.</p>
@@ -202,7 +207,9 @@ export default function Cobros() {
                           · {formatearFechaLarga(cargo.fecha)}
                         </span>
                       </span>
-                      <span className="cobros__monto">{formatearUSD(cargo.montoCents)}</span>
+                      <span className="cobros__monto">
+                        <MontoEquivalente cents={cargo.montoCents} tasas={tasas} />
+                      </span>
                       <AccionPagado ocupado={ocupado} onConfirmar={(metodo) => pagarCargo(cargo, metodo)} />
                     </li>
                   ))}
@@ -212,7 +219,8 @@ export default function Cobros() {
 
             <section className="cobros__bloque">
               <h2 className="lista-sedes__titulo">
-                Pagos al profesor <span className="cobros__total">{formatearUSD(totalPagos)}</span>
+                Pagos al profesor{' '}
+                <MontoEquivalente cents={totalPagos} tasas={tasas} className="cobros__total" />
               </h2>
               {pagos.length === 0 ? (
                 <p className="parametros__hint">No hay pagos pendientes en el rango.</p>
@@ -224,7 +232,9 @@ export default function Cobros() {
                         {pago.profesorNombre}
                         <span className="cobros__meta">{formatearFechaLarga(pago.fecha)}</span>
                       </span>
-                      <span className="cobros__monto">{formatearUSD(pago.montoCents)}</span>
+                      <span className="cobros__monto">
+                        <MontoEquivalente cents={pago.montoCents} tasas={tasas} />
+                      </span>
                       <AccionPagado
                         ocupado={ocupado}
                         onConfirmar={(metodo) => pagarProfesor(pago, metodo)}

@@ -706,6 +706,26 @@ Funciones: `getParametros` (1 lectura, tolerante), `validarParametros`
 inválidos) y `setParametros` (cambios parciales que se mezclan sobre los
 actuales). Solo el administrador escribe.
 
+### `academias/{tenantId}/config/tasas` (documento único, Fase 6)
+
+Tasa de referencia **BCV** para mostrar equivalencias: **Bs por USD** y **Bs por
+EUR**. Es informativa — **no mueve dinero**: todos los montos siguen en centavos
+de USD. La app la actualiza sola desde una API pública (con caché y respaldo) y
+el admin puede fijarla a mano.
+
+| Campo | Tipo | Nota |
+| --- | --- | --- |
+| `bsPorUsd` | number | Bs por 1 USD. > 0 y <= 100000000 |
+| `bsPorEur` | number | Bs por 1 EUR. > 0 y <= 100000000 |
+| `fecha` | string \| null | `"YYYY-MM-DD"` de la tasa BCV, o `null` en una tasa manual |
+| `fuente` | string | `api` \| `manual` |
+| `actualizadoPor` | string \| null | uid del admin (o `null` si la guardó la app) |
+| `actualizadoEn` | Timestamp | Sello de la última escritura |
+
+Funciones: `getTasas` (1 lectura, `null` si falta o está corrupto),
+`validarTasas`/`leerTasasDoc` y `setTasas`. Solo el administrador lee y escribe;
+el documento no se borra. La conversión pura vive en `src/lib/tasas.js`.
+
 ### Precio de una clase (`clase.cobro`)
 
 Al reservar o reprogramar, el formulario **sugiere** el monto:

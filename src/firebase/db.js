@@ -87,6 +87,7 @@ import {
 } from '../lib/cobros.js'
 import { LIMITE_MONTO_CENTS, LIMITE_TARIFA_CENTS, centsValidos } from '../lib/dinero.js'
 import { sumarDias } from '../lib/fechas.js'
+import { FUENTES_TASA, LIMITE_BS_POR_UNIDAD } from '../lib/tasas.js'
 
 /**
  * Granularidad de la ocupación: 30 minutos. La definición vive en
@@ -321,6 +322,14 @@ export class CobroInvalidoError extends Error {
   constructor(mensaje) {
     super(mensaje)
     this.name = 'CobroInvalidoError'
+  }
+}
+
+/** Error de negocio: la tasa BCV guardada es inválida (Bs fuera de rango, etc.). */
+export class TasaInvalidaError extends Error {
+  constructor(mensaje) {
+    super(mensaje)
+    this.name = 'TasaInvalidaError'
   }
 }
 
@@ -745,6 +754,7 @@ const refCancha = (db, tenantId, sedeId, canchaId) =>
 const refPerfilCobro = (db, tenantId, perfilId) =>
   doc(db, 'academias', tenantId, 'perfilesCobro', perfilId)
 const refParametros = (db, tenantId) => doc(db, 'academias', tenantId, 'config', 'parametros')
+const refTasas = (db, tenantId) => doc(db, 'academias', tenantId, 'config', 'tasas')
 const refCargo = (db, tenantId, cargoId) => doc(db, 'academias', tenantId, 'cargos', cargoId)
 const refPagoProfesor = (db, tenantId, pagoId) =>
   doc(db, 'academias', tenantId, 'pagosProfesor', pagoId)
@@ -1483,6 +1493,89 @@ export async function setParametros(db, tenantId, cambios = {}, opciones = {}) {
   const actuales = leerParametros(snapparam.exists() ? snapparam.data() : null)
   const normalizado = validarParametros({ ...actuales, ...cambios })
   await setDoc(refParametros(db, tenantId), {
+    ...normalizado,
+    actualizadoPor: uid,
+    actualizadoEn: Timestamp.fromDate(now),
+  })
+  return normalizado
+}
+
+/**
+ * Valida y normaliza las tasas BCV de una academia: `bsPorUsd` y `bsPorEur`
+ * finitos, mayores a 0 y dentro del tope; `fuente` ∈ `api` | `manual`; `fecha`
+ * "YYYY-MM-DD" o null. Lanza `TasaInvalidaError`.
+ */
+export function validarTasas(entrada) {
+  const d = entrada ?? {}
+  for (const clave of ['bsPorUsd', 'bsPorEur']) {
+    const valor = d[clave]
+    if (
+      typeof valor !== 'number' ||
+      !Number.isFinite(valor) ||
+      valor <= 0 ||
+      valor > LIMITE_BS_POR_UNIDAD
+    ) {
+      throw new TasaInvalidaError(
+        `${clave} debe ser un número mayor a 0 y hasta ${LIMITE_BS_POR_UNIDAD}`,
+      )
+    }
+  }
+  const fuente = d.fuente
+  if (!FUENTES_TASA.includes(fuente)) {
+    throw new TasaInvalidaError(`fuente debe ser ${FUENTES_TASA.join(' | ')}`)
+  }
+  const fecha = d.fecha ?? null
+  if (fecha !== null && (typeof fecha !== 'string' || !RE_FECHA.test(fecha))) {
+    throw new TasaInvalidaError('fecha debe ser "YYYY-MM-DD" o null')
+  }
+  return { bsPorUsd: d.bsPorUsd, bsPorEur: d.bsPorEur, fecha, fuente }
+}
+
+/**
+ * Normaliza el documento `config/tasas` a la forma que usa la UI. Devuelve null
+ * si el documento no existe o viene corrupto. `actualizadoEn` queda en ms.
+ */
+export function leerTasasDoc(datos) {
+  if (!datos) return null
+  try {
+    const { bsPorUsd, bsPorEur, fecha, fuente } = validarTasas(datos)
+    const sello = datos.actualizadoEn
+    const ms =
+      sello == null
+        ? null
+        : typeof sello?.toMillis === 'function'
+          ? sello.toMillis()
+          : Date.parse(sello)
+    return {
+      bsPorUsd,
+      bsPorEur,
+      fecha,
+      fuente,
+      actualizadoEn: Number.isFinite(ms) ? ms : null,
+    }
+  } catch {
+    return null
+  }
+}
+
+/**
+ * Última tasa conocida de la academia (1 lectura). Devuelve `null` si no hay
+ * documento o si está corrupto.
+ */
+export async function getTasas(db, tenantId) {
+  const snap = await getDoc(refTasas(db, tenantId))
+  return snap.exists() ? leerTasasDoc(snap.data()) : null
+}
+
+/**
+ * Escribe la tasa BCV de la academia (`config/tasas`): la usa tanto el guardado
+ * automático desde la API (`fuente: 'api'`) como el override manual del admin
+ * (`fuente: 'manual'`). Solo el admin puede escribir (firestore.rules).
+ */
+export async function setTasas(db, tenantId, datos = {}, opciones = {}) {
+  const { uid = null, now = new Date() } = opciones
+  const normalizado = validarTasas(datos)
+  await setDoc(refTasas(db, tenantId), {
     ...normalizado,
     actualizadoPor: uid,
     actualizadoEn: Timestamp.fromDate(now),

@@ -806,6 +806,45 @@ describe('[F3] config/parametros: solo admin, con campos válidos', () => {
   })
 })
 
+describe('[F6] config/tasas: solo admin, con tasas válidas', () => {
+  const tasas = { bsPorUsd: 879.1225, bsPorEur: 977.68092347, fecha: '2026-10-15', fuente: 'api' }
+
+  it('administrador de t1 escribe tasas válidas → ALLOW', async () => {
+    await assertSucceeds(setDoc(doc(as(UID.adminT1), 'academias', T1, 'config', 'tasas'), tasas))
+  })
+
+  it('acepta la tasa manual sin fecha → ALLOW', async () => {
+    await assertSucceeds(
+      setDoc(doc(as(UID.adminT1), 'academias', T1, 'config', 'tasas'), {
+        bsPorUsd: 900,
+        bsPorEur: 1000,
+        fecha: null,
+        fuente: 'manual',
+      }),
+    )
+  })
+
+  it('un no-admin escribe tasas → DENY', async () => {
+    await assertFails(setDoc(doc(as(UID.profT1), 'academias', T1, 'config', 'tasas'), tasas))
+  })
+
+  it('tasas con valores inválidos → DENY', async () => {
+    const base = doc(as(UID.adminT1), 'academias', T1, 'config', 'tasas')
+    await assertFails(setDoc(base, { ...tasas, bsPorUsd: 0 }))
+    await assertFails(setDoc(base, { ...tasas, bsPorEur: -1 }))
+    await assertFails(setDoc(base, { ...tasas, bsPorUsd: 200000000 }))
+    await assertFails(setDoc(base, { ...tasas, fuente: 'otra' }))
+    await assertFails(setDoc(base, { ...tasas, fecha: 20261015 }))
+    await assertFails(setDoc(base, { ...tasas, campoRaro: 1 }))
+  })
+
+  it('administrador de t1 LEE tasas → ALLOW; otro tenant → DENY; borrar → DENY', async () => {
+    await assertSucceeds(getDoc(doc(as(UID.adminT1), 'academias', T1, 'config', 'tasas')))
+    await assertFails(getDoc(doc(as(UID.adminT2), 'academias', T1, 'config', 'tasas')))
+    await assertFails(deleteDoc(doc(as(UID.adminT1), 'academias', T1, 'config', 'tasas')))
+  })
+})
+
 describe('[F3] tarifas en la sede', () => {
   it('administrador de t1 CREA una sede con tarifas → ALLOW', async () => {
     await assertSucceeds(

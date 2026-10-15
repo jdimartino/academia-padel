@@ -996,3 +996,111 @@
 .cobros__accion .form__input {
   max-width: 160px;
 }
+
+/* ------------------------------------------------------------------ */
+/* Tasas BCV (USD → Bs, USD → EUR)                                     */
+/* ------------------------------------------------------------------ */
+
+.tasas {
+  margin-bottom: 18px;
+}
+
+.tasas__badge {
+  display: inline-flex;
+  align-items: center;
+  min-height: 24px;
+  padding: 2px 10px;
+  border-radius: 999px;
+  font-size: 12px;
+  font-weight: 600;
+  color: #ffd9a3;
+  background: rgba(255, 176, 32, 0.16);
+  border: 1px solid rgba(255, 176, 32, 0.4);
+}
+
+.tasas__valores {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 12px;
+  margin-top: 10px;
+}
+
+.tasas__valor {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  flex: 1 1 130px;
+  padding: 12px 14px;
+  border-radius: var(--radio-md, 14px);
+  background: rgba(255, 255, 255, 0.05);
+  border: 1px solid rgba(255, 255, 255, 0.12);
+}
+
+.tasas__label {
+  font-size: 12px;
+  font-weight: 500;
+  color: var(--texto-muted, rgba(255, 255, 255, 0.65));
+}
+
+.tasas__monto {
+  font-size: 18px;
+  font-weight: 700;
+}
+
+.tasas__meta {
+  flex-basis: 100%;
+  margin: 0;
+  font-size: 12px;
+  color: var(--texto-muted, rgba(255, 255, 255, 0.65));
+}
+
+.tasas__form {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 12px;
+  margin-top: 16px;
+  padding-top: 14px;
+  border-top: 1px solid rgba(255, 255, 255, 0.12);
+}
+
+.tasas__form .parametros__campo {
+  flex: 1 1 140px;
+}
+
+.tasas__acciones {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  flex-basis: 100%;
+}
+
+.tasas__form .parametros__hint {
+  flex-basis: 100%;
+}
+
+/* Monto en USD con sus equivalentes en Bs y EUR (solo para mostrar). */
+.monto-eq {
+  display: inline-flex;
+  flex-direction: column;
+  gap: 1px;
+  align-items: flex-end;
+}
+
+.monto-eq__usd {
+  font-weight: 700;
+}
+
+.monto-eq__alt {
+  font-size: 11px;
+  font-weight: 500;
+  color: var(--texto-muted, rgba(255, 255, 255, 0.65));
+  white-space: nowrap;
+}
+
+@media (min-width: 640px) {
+  .tasas__meta {
+    flex-basis: auto;
+    align-self: center;
+    margin-left: auto;
+  }
+}

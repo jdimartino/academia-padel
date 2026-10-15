@@ -83,6 +83,22 @@ import {
   sugerirPrecioCents,
   vencimientoValido,
 } from '../src/lib/cobros.js'
+import {
+  TASA_TTL_MS,
+  construirTasasApi,
+  consultarTasasApi,
+  esTasaVencida,
+  etiquetaFuente,
+  formatearBs,
+  formatearEur,
+  guardarTasasCache,
+  leerTasasCache,
+  normalizarFechaTasa,
+  normalizarTasaRespuesta,
+  tasasValidas,
+  usdCentsABS,
+  usdCentsAEur,
+} from '../src/lib/tasas.js'
 
 /** Franja de un día en minutos, como la guarda una sede. */
 const dia = (aperturaHoras, cierreHoras) => ({
@@ -1638,5 +1654,110 @@ describe('hermanos: clave del representante y sugerencia', () => {
     assert.equal(sugerirDescuentoHermanos(adulto, [menor]), false)
     assert.equal(sugerirDescuentoHermanos(menor, [menor, { ...hermano, activo: false }]), false)
     assert.equal(sugerirDescuentoHermanos(menor, [menor]), false)
+  })
+})
+
+/* ------------------------------------------------------------------ */
+/* Fase 6: tasas BCV (dólar y euro)                                    */
+/* ------------------------------------------------------------------ */
+
+describe('tasas BCV: parseo, conversión, formato, vencimiento y caché', () => {
+  const USD = { moneda: 'USD', fuente: 'oficial', promedio: 879.1225, fechaActualizacion: '2026-10-15T00:00:00-04:00' }
+  const EUR = { moneda: 'EUR', fuente: 'oficial', promedio: 977.68092347, fechaActualizacion: '2026-10-15T00:00:00-04:00' }
+
+  it('normaliza fechas y el valor de la respuesta (promedio/venta/compra)', () => {
+    assert.equal(normalizarFechaTasa('2026-10-15T00:00:00-04:00'), '2026-10-15')
+    assert.equal(normalizarFechaTasa('2026-10-15'), '2026-10-15')
+    assert.equal(normalizarFechaTasa(new Date('2026-10-15T12:00:00Z')), '2026-10-15')
+    assert.equal(normalizarFechaTasa('no-es-fecha'), null)
+    assert.equal(normalizarFechaTasa(null), null)
+
+    assert.equal(normalizarTasaRespuesta(USD), 879.1225)
+    assert.equal(normalizarTasaRespuesta({ venta: 10.5, promedio: null }), 10.5)
+    assert.equal(normalizarTasaRespuesta({ compra: 9 }), 9)
+    assert.equal(normalizarTasaRespuesta({ promedio: -1 }), null)
+    assert.equal(normalizarTasaRespuesta({}), null)
+    assert.equal(normalizarTasaRespuesta(null), null)
+  })
+
+  it('construye las tasas de la API y exige las dos monedas', () => {
+    const ahora = new Date('2026-10-15T13:00:00Z')
+    const tasas = construirTasasApi(USD, EUR, ahora)
+    assert.equal(tasas.bsPorUsd, 879.1225)
+    assert.equal(tasas.bsPorEur, 977.68092347)
+    assert.equal(tasas.fecha, '2026-10-15')
+    assert.equal(tasas.fuente, 'api')
+    assert.equal(tasas.obtenidoEn, ahora.getTime())
+    assert.equal(construirTasasApi(USD, { moneda: 'EUR' }, ahora), null)
+    assert.equal(construirTasasApi(null, EUR, ahora), null)
+    assert.equal(tasasValidas(tasas), true)
+    assert.equal(tasasValidas({ bsPorUsd: 0, bsPorEur: 1 }), false)
+    assert.equal(tasasValidas(null), false)
+  })
+
+  it('consulta la API con un fetch INYECTADO (sin red) y tolera fallas', async () => {
+    const ok = (cuerpo) => async () => ({ ok: true, json: async () => cuerpo })
+    const tasas = await consultarTasasApi((url) => ok(url.includes('euros') ? EUR : USD)())
+    assert.equal(tasas.bsPorUsd, 879.1225)
+    assert.equal(tasas.bsPorEur, 977.68092347)
+
+    const falla = await consultarTasasApi(async () => {
+      throw new Error('sin red')
+    })
+    assert.equal(falla, null)
+    const noOk = await consultarTasasApi(async () => ({ ok: false, json: async () => ({}) }))
+    assert.equal(noOk, null)
+    assert.equal(await consultarTasasApi(undefined), null)
+  })
+
+  it('convierte centavos de USD a Bs y EUR', () => {
+    assert.ok(Math.abs(usdCentsABS(1000, 879.1225) - 8791.225) < 1e-9)
+    assert.equal(usdCentsABS(0, 879), 0)
+    assert.equal(usdCentsABS(1000, 0), null)
+    assert.equal(usdCentsABS(-1, 879), null)
+    // 10 USD = 8.791,225 Bs; EUR = Bs / 977.68.
+    const eur = usdCentsAEur(1000, 879.1225, 977.68092347)
+    assert.ok(Math.abs(eur - 8.9918) < 0.001)
+    assert.equal(usdCentsAEur(1000, 879, 0), null)
+  })
+
+  it('formatea en es-VE y etiqueta la fuente', () => {
+    assert.equal(formatearBs(8791.225), 'Bs 8.791,23')
+    assert.equal(formatearEur(8.9918), '€ 8,99')
+    assert.equal(formatearBs(Number.NaN), '')
+    assert.equal(etiquetaFuente('api'), 'API BCV')
+    assert.equal(etiquetaFuente('manual'), 'Manual')
+    assert.equal(etiquetaFuente(null), 'Sin tasa')
+  })
+
+  it('detecta la tasa desactualizada', () => {
+    const base = Date.parse('2026-10-15T12:00:00')
+    const fresca = { bsPorUsd: 1, bsPorEur: 1, fuente: 'api', obtenidoEn: base }
+    assert.equal(esTasaVencida(fresca, base + 60 * 60 * 1000), false)
+    assert.equal(esTasaVencida(fresca, base + 25 * 60 * 60 * 1000), true)
+    assert.equal(esTasaVencida(null, base), true)
+    const manual = { bsPorUsd: 1, bsPorEur: 1, fuente: 'manual', fecha: '2026-10-10' }
+    assert.equal(esTasaVencida(manual, Date.parse('2026-10-11T00:00:00')), false)
+  })
+
+  it('lee y escribe el caché con storage inyectado y TTL', () => {
+    const mapa = new Map()
+    const storage = {
+      getItem: (clave) => (mapa.has(clave) ? mapa.get(clave) : null),
+      setItem: (clave, valor) => mapa.set(clave, valor),
+    }
+    const ahora = Date.parse('2026-10-15T12:00:00')
+    const tasas = { bsPorUsd: 879.12, bsPorEur: 977.68, fecha: '2026-10-15', fuente: 'api' }
+    assert.equal(guardarTasasCache(storage, tasas, ahora), true)
+    const leidas = leerTasasCache(storage, ahora + 30 * 60 * 1000, TASA_TTL_MS)
+    assert.equal(leidas.bsPorUsd, 879.12)
+    assert.equal(leidas.guardadoEn, ahora)
+    // Pasado el TTL devuelve null, salvo que se pida con TTL infinito.
+    assert.equal(leerTasasCache(storage, ahora + 2 * TASA_TTL_MS, TASA_TTL_MS), null)
+    assert.equal(leerTasasCache(storage, ahora + 2 * TASA_TTL_MS, Number.POSITIVE_INFINITY).bsPorEur, 977.68)
+    // Storage roto o vacío nunca rompe.
+    assert.equal(leerTasasCache(null, ahora), null)
+    assert.equal(guardarTasasCache(null, tasas), false)
+    assert.equal(leerTasasCache({ getItem: () => '{{' }), null)
   })
 })

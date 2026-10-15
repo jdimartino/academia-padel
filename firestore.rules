@@ -206,6 +206,34 @@ service cloud.firestore {
             || data.creditoRequierePago is bool);
     }
 
+    // Tasas BCV (`config/tasas`): Bs por USD y Bs por EUR finitos y > 0,
+    // fuente del enum y fecha "YYYY-MM-DD" o null. Mismos campos que valida
+    // db.js, más los sellos de auditoría.
+    function tasasValidas(data) {
+      return data.keys().hasOnly([
+            'bsPorUsd',
+            'bsPorEur',
+            'fecha',
+            'fuente',
+            'actualizadoPor',
+            'actualizadoEn'
+          ])
+        && data.bsPorUsd is number
+        && data.bsPorUsd > 0
+        && data.bsPorUsd <= 100000000
+        && data.bsPorEur is number
+        && data.bsPorEur > 0
+        && data.bsPorEur <= 100000000
+        && (!data.keys().hasAny(['fecha']) || data.fecha == null || data.fecha is string)
+        && data.fuente in ['api', 'manual']
+        && (!data.keys().hasAny(['actualizadoPor'])
+            || data.actualizadoPor == null
+            || data.actualizadoPor is string)
+        && (!data.keys().hasAny(['actualizadoEn'])
+            || data.actualizadoEn == null
+            || data.actualizadoEn is timestamp);
+    }
+
     // --- Cobros generados al cerrar la clase (Phase 4) -------------------
 
     // Cargo de un alumno: campos exactos del modelo, enums y centavos enteros
@@ -475,6 +503,14 @@ service cloud.firestore {
       match /config/parametros {
         allow read: if esAdmin(tenantId);
         allow create, update: if esAdmin(tenantId) && parametrosValidos(request.resource.data);
+      }
+
+      // Tasas BCV de la academia: un único documento `tasas`. Solo el admin lo
+      // lee/escribe (la app lo actualiza automáticamente desde la API y admite
+      // un override manual del admin). No se borra.
+      match /config/tasas {
+        allow read: if esAdmin(tenantId);
+        allow create, update: if esAdmin(tenantId) && tasasValidas(request.resource.data);
       }
 
       // Ocupación de 30 minutos de cancha o de profesor, con ID determinista

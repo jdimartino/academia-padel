@@ -23,6 +23,7 @@ import { MINUTOS_BLOQUE } from '../lib/agenda'
 import { formatearUSD, parsearUSD } from '../lib/dinero'
 import { esErrorDeNegocio, hayCambios } from '../lib/avisos'
 import MenuAcciones from './MenuAcciones'
+import TasasPanel from './TasasPanel'
 import { PlusIcon } from './Icons'
 
 const MENSAJE_TECNICO_INLINE = 'No se pudo guardar. Inténtalo de nuevo.'
@@ -254,6 +255,8 @@ export default function ConfigCobros({ tenantId, onSucio }) {
 
         <AltaPerfil tenantId={tenantId} uid={uid} onCreated={recargarPerfiles} />
       </section>
+
+      <TasasPanel permiteEditar />
 
       <section className="detalle glass" aria-label="Parámetros de la academia">
         <h2 className="lista-sedes__titulo">Parámetros</h2>

@@ -20,6 +20,7 @@ import {
   CobroInvalidoError,
   FichaInvalidaError,
   SedeInvalidaError,
+  TasaInvalidaError,
   actualizarAlumno,
   actualizarPerfilCobro,
   actualizarPlanAlumno,
@@ -55,8 +56,10 @@ import {
   getProfesores,
   getSede,
   getSedes,
+  getTasas,
   horarioDeSede,
   horarioDelDia,
+  leerTasasDoc,
   listarAlumnos,
   listarCanchas,
   listarCargosPendientes,
@@ -76,11 +79,13 @@ import {
   setParametros,
   setSedeHorario,
   setTarifasSede,
+  setTasas,
   sugerirDescuentoHermanos,
   validarCobro,
   validarHorario,
   validarParametros,
   validarTarifas,
+  validarTasas,
 } from '../src/firebase/db.js'
 import { PARAMETROS_DEFAULT } from '../src/lib/cobros.js'
 
@@ -3687,5 +3692,75 @@ describe('[F5] mensualidades: planes, créditos y consumo al cerrar', () => {
     )
     const a12 = await getAlumno(adminDb, T1, 'a12')
     assert.equal(sugerirDescuentoHermanos(a2, [a2, a12]), true)
+  })
+})
+
+describe('[F6] tasas BCV (config/tasas)', () => {
+  const TASAS = { bsPorUsd: 879.1225, bsPorEur: 977.68092347, fecha: '2026-10-15', fuente: 'api' }
+
+  it('getTasas devuelve null cuando todavía no hay documento (el alumno no puede leer)', async () => {
+    assert.equal(await getTasas(adminDb, T1), null)
+    await assert.rejects(() => getTasas(alumnoDb, T1))
+  })
+
+  it('validarTasas normaliza y rechaza valores fuera de rango', () => {
+    assert.deepEqual(validarTasas(TASAS), TASAS)
+    assert.deepEqual(validarTasas({ bsPorUsd: 1, bsPorEur: 2, fuente: 'manual' }), {
+      bsPorUsd: 1,
+      bsPorEur: 2,
+      fecha: null,
+      fuente: 'manual',
+    })
+    assert.throws(() => validarTasas({ bsPorEur: 2, fuente: 'api' }), TasaInvalidaError)
+    assert.throws(() => validarTasas({ bsPorUsd: 0, bsPorEur: 2, fuente: 'api' }), TasaInvalidaError)
+    assert.throws(() => validarTasas({ bsPorUsd: 2, bsPorEur: 200000000, fuente: 'api' }), TasaInvalidaError)
+    assert.throws(() => validarTasas({ bsPorUsd: 2, bsPorEur: 3, fuente: 'otra' }), TasaInvalidaError)
+    assert.throws(
+      () => validarTasas({ bsPorUsd: 2, bsPorEur: 3, fuente: 'api', fecha: '15/10/2026' }),
+      TasaInvalidaError,
+    )
+  })
+
+  it('leerTasasDoc normaliza el sello de auditoría y descarta documentos corruptos', () => {
+    assert.equal(leerTasasDoc(null), null)
+    assert.equal(leerTasasDoc({ ...TASAS, actualizadoEn: null }).actualizadoEn, null)
+    assert.equal(
+      leerTasasDoc({ ...TASAS, actualizadoEn: { toMillis: () => 1729000000000 } }).actualizadoEn,
+      1729000000000,
+    )
+    assert.equal(leerTasasDoc({ ...TASAS, bsPorUsd: '879' }), null)
+  })
+
+  it('setTasas escribe y getTasas lo lee de vuelta con la auditoría', async () => {
+    const ahora = new Date('2026-10-15T13:30:00')
+    const normalizado = await setTasas(adminDb, T1, TASAS, { uid: ADMIN, now: ahora })
+    assert.deepEqual(normalizado, TASAS)
+
+    const leidas = await getTasas(adminDb, T1)
+    assert.equal(leidas.bsPorUsd, 879.1225)
+    assert.equal(leidas.bsPorEur, 977.68092347)
+    assert.equal(leidas.fecha, '2026-10-15')
+    assert.equal(leidas.fuente, 'api')
+    assert.equal(leidas.actualizadoEn, ahora.getTime())
+  })
+
+  it('setTasas permite el override manual sin fecha', async () => {
+    await setTasas(adminDb, T1, { bsPorUsd: 900, bsPorEur: 1000, fuente: 'manual' }, { uid: ADMIN })
+    const leidas = await getTasas(adminDb, T1)
+    assert.equal(leidas.fuente, 'manual')
+    assert.equal(leidas.fecha, null)
+  })
+
+  it('setTasas rechaza valores inválidos y no escribe', async () => {
+    await assert.rejects(
+      () => setTasas(adminDb, T1, { bsPorUsd: -1, bsPorEur: 3, fuente: 'api' }, { uid: ADMIN }),
+      TasaInvalidaError,
+    )
+    assert.equal(await getTasas(adminDb, T1), null)
+  })
+
+  it('solo el admin puede escribir la tasa (las reglas bloquean al alumno)', async () => {
+    await assert.rejects(() => setTasas(alumnoDb, T1, TASAS, { uid: ALUMNO }))
+    await assert.rejects(() => getTasas(alumnoDb, T1))
   })
 })
