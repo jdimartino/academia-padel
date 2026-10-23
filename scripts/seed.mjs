@@ -9,10 +9,10 @@
  * Uso:  npm run seed        (o  node scripts/seed.mjs)
  */
 
-import { bloquesDeClase, camposBusqueda, nombreCompleto, resolverAsignacion } from '../src/firebase/db.js'
-import { horarioDelDia } from '../src/lib/agenda.js'
-import { PARAMETROS_DEFAULT, PERFILES_COBRO_DEFAULT } from '../src/lib/cobros.js'
-import { sumarDias } from '../src/lib/fechas.js'
+import { bloquesDeClase, camposBusqueda, nombreCompleto, resolverAsignacion } from '../packages/academia-core/src/firebase/db.js'
+import { horarioDelDia } from '../packages/academia-core/src/lib/agenda.js'
+import { PARAMETROS_DEFAULT, PERFILES_COBRO_DEFAULT } from '../packages/academia-core/src/lib/cobros.js'
+import { PLAN_POR_ID, fechaRelativa, planificarClases } from './seed-plan.mjs'
 
 const PROJECT_ID = process.env.FIREBASE_PROJECT_ID ?? 'academia-padel-jdm'
 const EMULATOR_HOST = process.env.EMULATOR_HOST ?? '127.0.0.1'
@@ -91,27 +91,7 @@ async function limpiar() {
 
 /** "YYYY-MM-DD" relativo a hoy, con partes LOCALES (no toISOString: Caracas es UTC-4). */
 function diaRelativo(dias) {
-  const d = new Date()
-  d.setDate(d.getDate() + dias)
-  const y = d.getFullYear()
-  const m = String(d.getMonth() + 1).padStart(2, '0')
-  const day = String(d.getDate()).padStart(2, '0')
-  return `${y}-${m}-${day}`
-}
-
-/**
- * Fecha "YYYY-MM-DD" a `dias` de hoy, corrida hasta el día MÁS CERCANO en que la
- * sede abre: hacia adelante si la fecha es futura y hacia atrás si es pasada.
- * Así ninguna clase del seed cae en un día cerrado (Traki cierra los domingos).
- */
-function diaRelativoAbierto(dias, horarioSemana) {
-  const paso = dias < 0 ? -1 : 1
-  let fecha = diaRelativo(dias)
-  for (let intento = 0; intento < 7; intento += 1) {
-    if (horarioDelDia(fecha, horarioSemana)) return fecha
-    fecha = sumarDias(fecha, paso)
-  }
-  throw new Error('Ninguna sede del seed abre en toda la semana')
+  return fechaRelativa(dias)
 }
 
 /**
@@ -129,6 +109,12 @@ async function crearClaseEnSeed(datos) {
   // falla y el seed no escribe datos inconsistentes.
   const sede = SEDES_POR_ID[datos.sedeId]
   if (!sede) throw new Error(`La clase ${datos.id} del seed usa una sede desconocida: ${datos.sedeId}`)
+  // Las clases de Traki salen de PLAN_CLASES (scripts/seed-plan.mjs), que fija su
+  // fecha dentro del horario de su día. Aquí solo se verifica que no se desvíen.
+  const plan = PLAN_POR_ID[datos.id]
+  if (plan && ['canchaId', 'profesorId', 'horaInicio', 'horaFin'].some((k) => plan[k] !== datos[k])) {
+    throw new Error(`La clase ${datos.id} del seed no coincide con PLAN_CLASES`)
+  }
   const bloques = bloquesDeClase(datos, horarioDelDia(datos.fecha, sede.horario))
   const creadoEn = new Date()
   const cupo = datos.cupo ?? 4
@@ -209,7 +195,7 @@ const USUARIOS = [
  *
  * Traki es la sede que ilustra las medias horas: abre 7:30 y cierra 15:30 de
  * lunes a viernes, el sábado 8:00-13:00 y el domingo está CERRADA. Sus clases de
- * ejemplo caen siempre dentro de ese horario (ver `diaRelativoAbierto`).
+ * ejemplo caen siempre dentro de ese horario (ver `planificarClases` en scripts/seed-plan.mjs).
  * UNE usa el default 07:00-23:00 todos los días; Santa Rosa y Capital muestran
  * otros horarios, con Capital cerrada los domingos.
  */
@@ -824,12 +810,14 @@ async function main() {
    * día pasado. Sirve para ejercitar el rechazo sin fabricar fechas a mano en
    * los tests de la app. Todas las clases del seed van en Traki, arrancan en
    * punto o a y media, duran 60, 90 o 120 min, tienen al menos un alumno y caen
-   * SIEMPRE dentro del horario de su día (Traki abre 7:30-15:30 y cierra los
-   * domingos: `diaRelativoAbierto` corre la fecha al día abierto más cercano).
+   * SIEMPRE dentro del horario de su día (Traki abre 7:30-15:30 entre semana,
+   * el sábado 8:00-13:00 y cierra los domingos: `planificarClases` elige el día
+   * más cercano donde la clase cabe y no se solapa).
    */
   const horarioTraki = SEDES_POR_ID.traki.horario
-  const ayerAbierto = diaRelativoAbierto(-1, horarioTraki)
-  const mananaAbierto = diaRelativoAbierto(1, horarioTraki)
+  const FECHAS = planificarClases(horarioTraki)
+  const ayerAbierto = FECHAS.c0 // c0, c2 y c4 caen el mismo día
+  const mananaAbierto = FECHAS.c1
 
   await crearClaseEnSeed({
     id: 'c0',
@@ -872,7 +860,7 @@ async function main() {
     canchaNombre: 'Cancha 4',
     profesorId: 'p1',
     profesorNombre: nombreCompleto(PROFESORES_POR_ID.p1),
-    fecha: diaRelativoAbierto(-2, horarioTraki),
+    fecha: FECHAS.c5,
     horaInicio: '09:00',
     horaFin: '10:00',
     cupo: 4,
@@ -899,7 +887,7 @@ async function main() {
     canchaNombre: 'Cancha 5',
     profesorId: 'p1',
     profesorNombre: nombreCompleto(PROFESORES_POR_ID.p1),
-    fecha: diaRelativoAbierto(-3, horarioTraki),
+    fecha: FECHAS.c6,
     horaInicio: '10:30',
     horaFin: '12:00',
     cupo: 4,
@@ -957,7 +945,7 @@ async function main() {
     canchaNombre: 'Cancha 1',
     profesorId: 'p1',
     profesorNombre: nombreCompleto(PROFESORES_POR_ID.p1),
-    fecha: ayerAbierto,
+    fecha: FECHAS.c2,
     horaInicio: '11:00',
     horaFin: '12:00',
     cupo: 4,
@@ -993,7 +981,7 @@ async function main() {
     canchaNombre: 'Cancha 2',
     profesorId: 'p1',
     profesorNombre: nombreCompleto(PROFESORES_POR_ID.p1),
-    fecha: mananaAbierto,
+    fecha: FECHAS.c3,
     horaInicio: '11:30',
     horaFin: '13:00',
     cupo: 2,
@@ -1192,7 +1180,7 @@ async function main() {
     canchaNombre: 'Cancha 3',
     profesorId: 'p1',
     profesorNombre: nombreCompleto(PROFESORES_POR_ID.p1),
-    fecha: ayerAbierto,
+    fecha: FECHAS.c4,
     horaInicio: '12:00',
     horaFin: '13:00',
     cupo: 4,
@@ -1272,7 +1260,7 @@ async function main() {
    * - cc: TODOS avisaron su ausencia → sin cargos ni pago al profesor.
    * - cd: a1 PRESENTE con crédito suficiente → consume el lote, sin cargo.
    * Van en días y horas distintas (y usan canchas distintas de las otras clases)
-   * para no chocar con c0/c2/c4/c5/c6 aunque `diaRelativoAbierto` corra la fecha.
+   * para no chocar con c0/c2/c4/c5/c6 aunque `planificarClases` corra la fecha.
    */
   const profesorUid = ids['profe@ensayo.test']
   const presente = (alumnoId) => ({
@@ -1307,7 +1295,7 @@ async function main() {
     canchaNombre: 'Cancha 1',
     profesorId: 'p1',
     profesorNombre: nombreCompleto(PROFESORES_POR_ID.p1),
-    fecha: diaRelativoAbierto(-4, horarioTraki),
+    fecha: FECHAS.ca,
     horaInicio: '09:00',
     horaFin: '10:00',
     cupo: 2,
@@ -1331,7 +1319,7 @@ async function main() {
     canchaNombre: 'Cancha 1',
     profesorId: 'p1',
     profesorNombre: nombreCompleto(PROFESORES_POR_ID.p1),
-    fecha: diaRelativoAbierto(-5, horarioTraki),
+    fecha: FECHAS.cb,
     horaInicio: '10:30',
     horaFin: '11:30',
     cupo: 2,
@@ -1354,7 +1342,7 @@ async function main() {
     canchaNombre: 'Cancha 1',
     profesorId: 'p1',
     profesorNombre: nombreCompleto(PROFESORES_POR_ID.p1),
-    fecha: diaRelativoAbierto(-6, horarioTraki),
+    fecha: FECHAS.cc,
     horaInicio: '13:00',
     horaFin: '14:00',
     cupo: 2,
@@ -1377,7 +1365,7 @@ async function main() {
     canchaNombre: 'Cancha 1',
     profesorId: 'p1',
     profesorNombre: nombreCompleto(PROFESORES_POR_ID.p1),
-    fecha: diaRelativoAbierto(-7, horarioTraki),
+    fecha: FECHAS.cd,
     horaInicio: '14:30',
     horaFin: '15:30',
     cupo: 2,

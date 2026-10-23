@@ -1,0 +1,15 @@
+{
+  "projects": {
+    "default": "academia-padel-jdm"
+  },
+  "targets": {
+    "academia-padel-jdm": {
+      "hosting": {
+        "demo": [
+          "academia-padel-demo"
+        ]
+      }
+    }
+  },
+  "etags": {}
+}

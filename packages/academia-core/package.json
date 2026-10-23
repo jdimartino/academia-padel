@@ -1,0 +1,22 @@
+{
+  "name": "@academia/core",
+  "version": "0.0.1",
+  "private": true,
+  "type": "module",
+  "main": "./src/index.js",
+  "exports": {
+    ".": "./src/index.js",
+    "./*": "./*"
+  },
+  "scripts": {
+    "test:lib": "node --test tests/lib.test.js tests/avisos.test.js tests/accion.test.js tests/seed.test.js",
+    "test:rules": "node --test tests/rules.test.js",
+    "test:db": "node --test tests/db.test.js"
+  },
+  "dependencies": {
+    "firebase": "^12.19.0",
+    "react": "^19.2.8",
+    "react-dom": "^19.2.8",
+    "react-router-dom": "^7.18.4"
+  }
+}

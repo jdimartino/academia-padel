@@ -1,0 +1,21 @@
+{
+  "name": "@academia/site-demo",
+  "private": true,
+  "version": "0.0.0",
+  "type": "module",
+  "scripts": {
+    "dev": "vite --mode emulator",
+    "build": "vite build",
+    "build:emulator": "vite build --mode emulator",
+    "preview": "vite preview"
+  },
+  "dependencies": {
+    "@academia/core": "*",
+    "react": "^19.2.8",
+    "react-dom": "^19.2.8"
+  },
+  "devDependencies": {
+    "@vitejs/plugin-react": "^6.1.1",
+    "vite": "^8.3.0"
+  }
+}

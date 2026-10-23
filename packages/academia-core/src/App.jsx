@@ -2,6 +2,7 @@ import { BrowserRouter, Route, Routes } from 'react-router-dom'
 import GuardAdmin from './components/GuardAdmin'
 import GuardRol from './components/GuardRol'
 import ProtectedRoute from './components/ProtectedRoute'
+import { AcademyProvider } from './context/AcademyContext'
 import { AuthProvider } from './context/AuthContext'
 import { AvisosProvider } from './context/AvisosContext'
 import { CargandoProvider } from './context/CargandoContext'
@@ -16,7 +17,7 @@ import Login from './pages/Login'
 import Profesores from './pages/Profesores'
 import Reportes from './pages/Reportes'
 
-export default function App() {
+function AppRutas() {
   return (
     <BrowserRouter>
       <AuthProvider>
@@ -99,5 +100,13 @@ export default function App() {
         </CargandoProvider>
       </AuthProvider>
     </BrowserRouter>
+  )
+}
+
+export default function App({ config, toggles }) {
+  return (
+    <AcademyProvider config={config} toggles={toggles}>
+      <AppRutas />
+    </AcademyProvider>
   )
 }
