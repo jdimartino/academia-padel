@@ -9,7 +9,8 @@
   ],
   "scripts": {
     "dev": "npm run dev --workspace=@academia/site-demo",
-    "build": "npm run build --workspace=@academia/site-demo",
+    "build": "npm run build:emulator --workspace=@academia/site-demo",
+    "build:prod": "npm run build --workspace=@academia/site-demo",
     "lint": "oxlint",
     "preview": "npm run preview --workspace=@academia/site-demo",
     "emulators": "firebase emulators:start --only auth,firestore,hosting",

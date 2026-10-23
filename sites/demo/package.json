@@ -4,8 +4,9 @@
   "version": "0.0.0",
   "type": "module",
   "scripts": {
-    "dev": "vite",
+    "dev": "vite --mode emulator",
     "build": "vite build",
+    "build:emulator": "vite build --mode emulator",
     "preview": "vite preview"
   },
   "dependencies": {
