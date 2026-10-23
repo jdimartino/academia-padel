@@ -68,6 +68,10 @@ Every screen, now and in the future, must be responsive for mobile and desktop.
   it at another project.
 - Deploys go through the workspace tooling (`jdm`), never a bare
   `firebase deploy` from this folder.
+- Backups: use the `jdm` flow (`npm run backup` in the jdm folder: firebase-admin
+  export to a private GitHub repo). It uses no Cloud Storage, so it fits the cost
+  rule. Do not enable Firestore managed backups/PITR or `gcloud firestore export`
+  (they need paid storage). See `docs/nueva-academia.md`.
 
 ## Monorepo layout
 

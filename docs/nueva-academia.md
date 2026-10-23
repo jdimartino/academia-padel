@@ -83,13 +83,36 @@ npm run deploy academia-padel:tienda-ejemplo
 
 Nunca `firebase deploy` directo desde la carpeta (AGENTS.md).
 
-## 6. Copia de seguridad antes de tocar producción (pendiente: decisión del dueño)
+## 6. Copia de seguridad antes de tocar producción (pendiente: cloud project not created yet)
 
-Antes de cualquier cambio en una academia real (reglas, despliegue, migración) hace falta
-una exportación de Firestore. **Conflicto a resolver:** AGENTS.md prohíbe backups por costo
-(Cloud Storage), y el `gcloud firestore export` de POS necesita un bucket. Hasta que el
-dueño decida, no ejecutes ninguna exportación en la nube. Si se aprueba, anota la fecha y el
-resultado en la carpeta de backups del workspace.
+Antes de cualquier cambio en una academia real (reglas, despliegue, migración) corre el
+respaldo del workspace `jdm`. **No uses `gcloud firestore export`**: necesita un bucket de
+Cloud Storage y AGENTS.md lo prohíbe (regla de costo). El flujo de `jdm` no usa Storage:
+lee Firestore con `firebase-admin` y sube JSON a un repo privado de GitHub.
+
+Cómo funciona (leído de `jdm/package.json`, `jdm/scripts/BackupGlobal.sh` y
+`jdm/.github/workflows/backup.yml`, sin modificarlos):
+
+- Respaldo automático semanal con GitHub Actions (lunes 13:00 UTC), a `jdimartino/jdm-backups`.
+- Respaldo manual o de emergencia, desde la carpeta de `jdm`:
+
+    cd ~/Desktop/Antigravity/jdm
+    npm run backup
+
+  Recorre los proyectos de `config/projects.json` con `hasFirestore` y sin `inactive`,
+  exporta cada uno, sube una carpeta con fecha al repo de respaldos, conserva los últimos
+  10 y avisa por Telegram. Necesita `config/backup.env` (`GH_TOKEN`, Telegram) y credenciales
+  de `firebase-admin`; nunca los pegues en este repo.
+- Modo de respaldo: la entrada `academia-padel` de `projects.json` no define `backupMode`,
+  así que usa el modo por defecto `project` (`firestore-export.js`, exporta todo el
+  proyecto `academia-padel-jdm`). **No pongas `backupMode: "tenants"`**: ese exportador
+  solo descubre tenants bajo la colección raíz `tenants/` (pos-monorepo) y esta app guarda
+  los datos bajo `academias/{tenantId}`; fallaría por "ningún tenant".
+- Antes de reglas, deploy o migración: corre `npm run backup`, revisa que termine con
+  "RESPALDO COMPLETADO" y que la academia aparezca en "Respaldados", y recién entonces sigue.
+  Anota la fecha del respaldo en tu bitácora.
+- Las exportaciones del emulador (`firebase-export-*`, `.emulator-data`) son datos de
+  desarrollo: no son respaldos y no se commitean.
 
 ## Lista de comprobación
 
@@ -100,4 +123,4 @@ resultado en la carpeta de backups del workspace.
 - [ ] `npm run build` pasa en emulador y el guard rechaza valores incorrectos.
 - [ ] Sitio y target creados (pendiente: cloud project not created yet).
 - [ ] Entrada en `../jdm/config/projects.json` agregada (pendiente).
-- [ ] Copia de seguridad aprobada por el dueño antes de producción (pendiente).
+- [ ] `npm run backup` (en `jdm`) terminado con éxito antes de tocar producción (pendiente).
