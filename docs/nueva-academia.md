@@ -117,6 +117,37 @@ Cómo funciona (leído de `jdm/package.json`, `jdm/scripts/BackupGlobal.sh` y
 - Las exportaciones del emulador (`firebase-export-*`, `.emulator-data`) son datos de
   desarrollo: no son respaldos y no se commitean.
 
+## 7. Demo en la nube
+
+La academia de vitrina vive en el tenant `demo` del proyecto `academia-padel-jdm`
+(https://academia-padel-demo.web.app). Sus datos son los MISMOS del seed del
+emulador: los arma el constructor puro `scripts/seed-data.mjs` y los escribe el
+script del workspace `jdm/scripts/academia-seed-demo.js` (firebase-admin). Solo
+escribe bajo `academias/demo/**` y solo crea/borra sus propios usuarios de Auth
+(uids `demo-admin` y `demo-profe`); el projectId de la clave debe ser
+`academia-padel-jdm` o aborta.
+
+Refrescar la demo, desde la carpeta de `jdm`:
+
+    cd ~/Desktop/Antigravity/jdm
+    node scripts/academia-seed-demo.js                     # DRY-RUN: conteos por colección y usuarios, no escribe
+    node scripts/academia-seed-demo.js --confirm           # escribe (upsert de docs y usuarios del seed)
+    node scripts/academia-seed-demo.js --confirm --reset   # borra academias/demo/** y los usuarios del seed, y siembra de nuevo
+
+Usá `--reset` cuando la demo quedó "sucia" (clases o fichas creadas por quien la
+probó); sin `--reset` solo se reescriben los documentos del seed. Las fechas son
+relativas al día en que se corre, así que conviene refrescarla antes de mostrarla.
+
+- Clave de servicio: `jdm/config/academia-padel-jdm-serviceAccount.json`
+  (gitignored, `chmod 600`). Nunca se copia a este repo ni se imprime.
+- Logins de la demo (credenciales públicas de vitrina, la contraseña la tiene el
+  dueño del proyecto y sale en el reporte del seed):
+  - `admin@demo.academia-padel.app`: administrador ("Admin Demo")
+  - `profe@demo.academia-padel.app`: profesor (solo su asistencia)
+
+Para una academia real NO se usa este script: es solo para el tenant `demo`
+(el tenant está fijo en el código).
+
 ## Lista de comprobación
 
 - [ ] Tenant id en minúsculas, solo `a-z`, `0-9` y `-`.
