@@ -1,11 +1,6 @@
 {
   "indexes": [
     {
-      "collectionGroup": "miembros",
-      "queryScope": "COLLECTION_GROUP",
-      "fields": [{ "fieldPath": "uid", "order": "ASCENDING" }]
-    },
-    {
       "collectionGroup": "usuarios",
       "queryScope": "COLLECTION_GROUP",
       "fields": [
@@ -139,5 +134,16 @@
       ]
     }
   ],
-  "fieldOverrides": []
+  "fieldOverrides": [
+    {
+      "collectionGroup": "miembros",
+      "fieldPath": "uid",
+      "indexes": [
+        { "order": "ASCENDING", "queryScope": "COLLECTION" },
+        { "order": "DESCENDING", "queryScope": "COLLECTION" },
+        { "arrayConfig": "CONTAINS", "queryScope": "COLLECTION" },
+        { "order": "ASCENDING", "queryScope": "COLLECTION_GROUP" }
+      ]
+    }
+  ]
 }
