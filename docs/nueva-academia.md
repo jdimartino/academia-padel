@@ -30,8 +30,8 @@ Cambia en `sites/tienda-ejemplo/`:
 - `src/main.jsx` → `config` (`academyName`, `tagline`, `logoUrl`) y `toggles` propios de la
   academia. Los toggles activan funciones solo para esta academia.
 - `index.html` → título. `public/` → favicon propio si lo tiene.
-- `.env.example` → `VITE_TENANT_ID=tienda-ejemplo`.
-- No copies `.env.local` del demo. Crea el tuyo desde `.env.example`.
+- `.env.example` y `.env.emulator` → `VITE_TENANT_ID=tienda-ejemplo`.
+- No copies `.env.local` ni `.env.production.local` del demo. Crea los tuyos desde `.env.example`.
 
 Si la academia necesita una función que el núcleo todavía no tiene, agrégala en
 `packages/academia-core` detrás de un toggle que solo esta academia active. No dupliques
@@ -62,19 +62,22 @@ Despliega reglas solo cuando el dueño lo apruebe (pendiente: cloud project not 
 
 ```bash
 cd ~/Desktop/Antigravity/academia-padel
-npm run build --workspace=@academia/site-tienda-ejemplo
+npm run build:emulator --workspace=@academia/site-tienda-ejemplo   # local, contra emuladores
+npm run build --workspace=@academia/site-tienda-ejemplo            # producción (guard)
 ```
 
-Con `VITE_USE_EMULATORS=true` el build guard no se activa y el build pasa. Para un build
-real, `VITE_USE_EMULATORS=false` activa el guard: exige `VITE_FIREBASE_PROJECT_ID` igual a
-`academia-padel-jdm`, `VITE_TENANT_ID` igual al de la academia y una API key no vacía. El
-guard no imprime valores; solo dice qué variable falla.
+`build:emulator` usa `--mode emulator` (lee `.env.emulator`, `VITE_USE_EMULATORS=true`).
+Cualquier otro build es de producción y el guard lo revisa SIEMPRE: exige
+`VITE_USE_EMULATORS=false`, `VITE_FIREBASE_PROJECT_ID` igual a `academia-padel-jdm`,
+`VITE_TENANT_ID` igual al de la academia y una API key no vacía. Es el mismo `npm run build`
+que corre `jdm` dentro de la carpeta del sitio al deployar. Los valores de producción van en
+`.env.production.local` (gitignorado). El guard no imprime valores; solo dice qué falla.
 
 ## 5. Orden del primer despliegue (pendiente: cloud project not created yet)
 
 1. Crear el sitio y aplicar el target (paso 2).
 2. Revisar reglas (paso 3).
-3. Build real (paso 4) con `.env.local` completo.
+3. Build de producción (paso 4) con `.env.production.local` completo y `VITE_USE_EMULATORS=false`.
 4. Deploy solo de hosting del sitio, a través del workspace `jdm`:
 
 ```bash
@@ -120,7 +123,7 @@ Cómo funciona (leído de `jdm/package.json`, `jdm/scripts/BackupGlobal.sh` y
 - [ ] Carpeta creada desde `sites/demo` y `package.json` renombrado.
 - [ ] `vite.config.js` con `EXPECTED_TENANT_ID` de la academia.
 - [ ] `.env.local` propio, sin copiar el del demo. Nunca se commitea.
-- [ ] `npm run build` pasa en emulador y el guard rechaza valores incorrectos.
+- [ ] `build:emulator` pasa y el `build` de producción rechaza valores incorrectos (incluido `VITE_USE_EMULATORS=true`).
 - [ ] Sitio y target creados (pendiente: cloud project not created yet).
 - [ ] Entrada en `../jdm/config/projects.json` agregada (pendiente).
 - [ ] `npm run backup` (en `jdm`) terminado con éxito antes de tocar producción (pendiente).

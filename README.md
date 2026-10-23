@@ -125,16 +125,22 @@ npm run test:lib     # packages/academia-core/tests/lib, avisos y accion
 Sin emulador: helpers puros de `packages/academia-core/src/lib/*` (agenda, fechas, dinero y cobros) y de
 `db.js` que no tocan Firestore.
 
-### Build de producción
+### Builds
 
 ```bash
-npm run build
+npm run build        # build LOCAL contra emuladores (vite build --mode emulator)
+npm run build:prod   # build de PRODUCCIÓN del sitio demo (lo que corre jdm al deployar)
 ```
 
-Antes de un build real, poner `VITE_USE_EMULATORS=false` en `sites/demo/.env.local`
-(o definir las variables en el entorno de deploy). Con `VITE_USE_EMULATORS` distinto
-de `true`, el build guard de `sites/demo/vite.config.js` exige el proyecto
-`academia-padel-jdm`, `VITE_TENANT_ID=demo` y una API key no vacía. No imprime valores.
+`npm run dev` y `npm run build` usan el modo `emulator`: leen `sites/demo/.env.emulator`
+(commiteado, sin secretos, `VITE_USE_EMULATORS=true`), que pisa a `.env.local`.
+
+Todo build que no sea `--mode emulator` es de producción y el build guard de
+`sites/demo/vite.config.js` SIEMPRE lo revisa: exige `VITE_USE_EMULATORS=false`, el
+proyecto `academia-padel-jdm`, `VITE_TENANT_ID=demo` y una API key no vacía. No imprime
+valores. Si `.env.local` quedó con `VITE_USE_EMULATORS=true`, el build de producción falla
+en vez de publicar un bundle conectado a los emuladores. Los valores de producción van en
+`sites/demo/.env.production.local` (gitignorado), que pisa a `.env.local` solo en producción.
 
 ## Estructura (monorepo npm workspaces)
 

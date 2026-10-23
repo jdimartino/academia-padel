@@ -98,4 +98,7 @@ Every screen, now and in the future, must be responsive for mobile and desktop.
 - Do not commit `node_modules`, `dist` or `.firebase/`.
 - Do not use `--force` flags, and do not bypass
   `/Users/jdimartino/Desktop/Antigravity/jdm/scripts/firebase-guard.sh`.
-- Run `npm run build` (and `npm run lint`) before proposing a commit.
+- Run `npm run build` (and `npm run lint`) before proposing a commit. At the root
+  this is the emulator build (`--mode emulator`). A site's own `npm run build` is the
+  production build that jdm deploys; its build guard always runs and requires
+  `VITE_USE_EMULATORS=false`. Never weaken or bypass that guard.
