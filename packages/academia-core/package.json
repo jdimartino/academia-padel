@@ -9,7 +9,7 @@
     "./*": "./*"
   },
   "scripts": {
-    "test:lib": "node --test tests/lib.test.js tests/avisos.test.js tests/accion.test.js",
+    "test:lib": "node --test tests/lib.test.js tests/avisos.test.js tests/accion.test.js tests/seed.test.js",
     "test:rules": "node --test tests/rules.test.js",
     "test:db": "node --test tests/db.test.js"
   },
