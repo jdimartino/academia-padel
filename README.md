@@ -25,7 +25,7 @@ No hay proyecto de Firebase en la nube todavía. Todo corre contra el
 
 ```bash
 npm install
-cp .env.example .env.local
+cp sites/demo/.env.example sites/demo/.env.local
 ```
 
 En **una terminal** levantá los emuladores (Auth + Firestore + Hosting + UI):
@@ -102,7 +102,7 @@ npm run test:rules
 ```
 
 Levanta **solo** el emulador de Firestore, carga `firestore.rules` y corre
-`tests/rules.test.js` (runner nativo de Node, sin dependencias extra). Cada test
+`packages/academia-core/tests/rules.test.js` (runner nativo de Node, sin dependencias extra). Cada test
 declara el rol que actúa y si espera ALLOW o DENY. No toca la nube.
 
 ### Tests de la reserva
@@ -111,7 +111,7 @@ declara el rol que actúa y si espera ALLOW o DENY. No toca la nube.
 npm run test:db      # o: npm test (corre los dos)
 ```
 
-`tests/db.test.js` corre el mismo `src/firebase/db.js` que usa la app contra el
+`packages/academia-core/tests/db.test.js` corre el mismo `src/firebase/db.js` del núcleo que usa la app contra el
 emulador: horario libre, solapamiento exacto y parcial, horarios adyacentes,
 cancelación que libera los bloques y dos reservas simultáneas del mismo slot
 (gana una sola).
@@ -119,10 +119,10 @@ cancelación que libera los bloques y dos reservas simultáneas del mismo slot
 ### Tests de librerías puras
 
 ```bash
-npm run test:lib     # tests/lib.test.js + tests/avisos.test.js
+npm run test:lib     # packages/academia-core/tests/lib, avisos y accion
 ```
 
-Sin emulador: helpers puros de `src/lib/*` (agenda, fechas, dinero y cobros) y de
+Sin emulador: helpers puros de `packages/academia-core/src/lib/*` (agenda, fechas, dinero y cobros) y de
 `db.js` que no tocan Firestore.
 
 ### Build de producción
@@ -131,25 +131,39 @@ Sin emulador: helpers puros de `src/lib/*` (agenda, fechas, dinero y cobros) y d
 npm run build
 ```
 
-Antes de un build real, poner `VITE_USE_EMULATORS=false` en `.env.local` (o
-definir las variables en el entorno de deploy).
+Antes de un build real, poner `VITE_USE_EMULATORS=false` en `sites/demo/.env.local`
+(o definir las variables en el entorno de deploy). Con `VITE_USE_EMULATORS` distinto
+de `true`, el build guard de `sites/demo/vite.config.js` exige el proyecto
+`academia-padel-jdm`, `VITE_TENANT_ID=demo` y una API key no vacía. No imprime valores.
 
-## Estructura
+## Estructura (monorepo npm workspaces)
 
 ```
-src/
-  firebase/     config.js (init + emuladores) y db.js (ÚNICA capa de datos)
-  context/      AuthContext.jsx
-  pages/        Login, Home, Agenda
-  components/   ProtectedRoute
+packages/
+  academia-core/        @academia/core: TODA la app (compartida por todas las academias)
+    src/                App (acepta config y toggles), firebase/db.js (ÚNICA capa de datos)
+    tests/              rules, db, lib, avisos, accion
+sites/
+  demo/                 @academia/site-demo: sitio de la academia "demo" (beta)
+    src/main.jsx        renderiza <App config toggles />
+    vite.config.js      build guard + config de Vite
+    firebase.json       hosting target "demo" (sitio academia-padel-demo)
+    .firebaserc         proyecto academia-padel-jdm
+    .env.example        variables (copiar a .env.local, nunca commitear)
 scripts/
-  seed.mjs      tenant de ensayo por REST contra el emulador
+  local.mjs             npm run local (emuladores + seed + Vite)
+  seed.mjs              tenant de ensayo "ensayo" por REST contra el emulador
 docs/
-  fase-0.md         investigación de límites y decisiones
-  modelo-datos.md   modelo de Firestore propuesto
-firestore.rules       reglas por tenant + rol
-firestore.indexes.json
+  nueva-academia.md     cómo crear un sitio para una academia nueva
+  fase-0.md             investigación de límites y decisiones
+  modelo-datos.md       modelo de Firestore propuesto
+firestore.rules         reglas por tenant + rol (raíz)
+firestore.indexes.json  (raíz)
+firebase.json           firestore + emuladores + hosting del emulador (sites/demo/dist)
 ```
+
+Regla de diseño: una característica de una sola academia vive en su carpeta
+`sites/<academia>/` o detrás de un toggle en el núcleo que solo esa academia activa.
 
 ## Arquitectura multi-tenant
 
@@ -219,7 +233,8 @@ en un tamaño.
 ## Firebase
 
 - Project ID: `academia-padel-jdm` (todavía **no creado** en la nube)
-- Hosting: `academia-padel-jdm.web.app`
+- Hosting: un sitio por academia. La academia demo usa el target `demo` →
+  `academia-padel-demo` (pendiente de crear en la nube). Ver `docs/nueva-academia.md`.
 - Firestore: base `(default)`, región `us-east1`
 - Deploys: a través del tooling del workspace (`jdm`), nunca `firebase deploy`
   desde esta carpeta.

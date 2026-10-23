@@ -15,7 +15,7 @@ This project runs on the Firebase **Blaze** plan, but everything must stay
 inside the free quota.
 
 - Only the **default** Firestore database qualifies for the free quota.
-  **Never create a named database.** `src/firebase/config.js` uses
+  **Never create a named database.** `packages/academia-core/src/firebase/config.js` uses
   `getFirestore(app)` (default) and nothing else.
 - Never enable anything that costs money without explicit instruction from the
   owner. That currently means: **no Cloud Functions, no Cloud Storage, no
@@ -39,7 +39,7 @@ Every screen, now and in the future, must be responsive for mobile and desktop.
 
 ## Firestore access
 
-- **All** Firestore access goes through `src/firebase/db.js`. It is the single
+- **All** Firestore access goes through `packages/academia-core/src/firebase/db.js`. It is the single
   data access layer. No page, component, hook or service may import
   `firebase/firestore` directly — add the function to `db.js` instead.
 - All data is rooted at `academias/{tenantId}/...`. Every read and write must be
@@ -61,10 +61,26 @@ Every screen, now and in the future, must be responsive for mobile and desktop.
 
 - Project ID: `academia-padel-jdm` (permanent)
 - Firestore location: `us-east1` (permanent)
-- Hosting site: `academia-padel-jdm`
-- `.firebaserc` pins this project. Do not point it at another project.
+- Hosting: one Hosting site per academy. The demo academy uses the hosting
+  target `demo` → site `academia-padel-demo` (not created yet). Each academy
+  has its own `sites/<academia>/firebase.json` and `.firebaserc`.
+- `.firebaserc` pins this project in every site and in the root. Do not point
+  it at another project.
 - Deploys go through the workspace tooling (`jdm`), never a bare
   `firebase deploy` from this folder.
+
+## Monorepo layout
+
+- `packages/academia-core` (`@academia/core`): all app code and tests. Shared
+  by every academy. A feature for one academy either lives in that academy's
+  folder or sits behind a toggle in core that only that academy enables.
+- `sites/<academia>` (`@academia/site-*`): one thin folder per academy
+  (`sites/demo` today). It renders `<App config toggles />` from core and
+  holds its own Vite config (with the build guard), `firebase.json`,
+  `.firebaserc` and `.env.example`.
+- Root: `firestore.rules`, `firestore.indexes.json`, root `firebase.json`
+  (emulators), `scripts/`, `docs/`.
+- New academy: follow `docs/nueva-academia.md`.
 
 ## Secrets
 
