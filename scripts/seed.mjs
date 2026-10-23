@@ -9,10 +9,10 @@
  * Uso:  npm run seed        (o  node scripts/seed.mjs)
  */
 
-import { bloquesDeClase, camposBusqueda, nombreCompleto, resolverAsignacion } from '../src/firebase/db.js'
-import { horarioDelDia } from '../src/lib/agenda.js'
-import { PARAMETROS_DEFAULT, PERFILES_COBRO_DEFAULT } from '../src/lib/cobros.js'
-import { sumarDias } from '../src/lib/fechas.js'
+import { bloquesDeClase, camposBusqueda, nombreCompleto, resolverAsignacion } from '../packages/academia-core/src/firebase/db.js'
+import { horarioDelDia } from '../packages/academia-core/src/lib/agenda.js'
+import { PARAMETROS_DEFAULT, PERFILES_COBRO_DEFAULT } from '../packages/academia-core/src/lib/cobros.js'
+import { sumarDias } from '../packages/academia-core/src/lib/fechas.js'
 
 const PROJECT_ID = process.env.FIREBASE_PROJECT_ID ?? 'academia-padel-jdm'
 const EMULATOR_HOST = process.env.EMULATOR_HOST ?? '127.0.0.1'

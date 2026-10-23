@@ -28,7 +28,7 @@ firestore-export/
 firebase-export-*/
 
 # Arnés de tests (generado localmente)
-tests/.harness/
+**/tests/.harness/
 
 # Variables de entorno (nunca commitear)
 .env
